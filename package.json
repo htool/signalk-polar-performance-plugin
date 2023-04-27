@@ -1,0 +1,24 @@
+{
+  "name": "signalk-polar-performance-plugin",
+  "version": "0.0.1",
+  "description": "A plugin that calculates performance information based on a (CSV) polar diagram.",
+  "main": "plugin/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/htool/signalk-polar-performance-plugin.git"
+  },
+  "author": "hans@defect.org",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/htool/signalk-polar-performance-plugin/issues"
+  },
+  "homepage": "https://github.com/htool/signalk-polar-performance-plugin#readme",
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-instruments",
+    "signalk-category-chart-plotters"
+  ]
+}
