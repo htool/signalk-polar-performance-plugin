@@ -2,7 +2,7 @@
 Generate performance information based on a polar diagram.
 
 ## Data correctness
-It's assumed data is already corrected when it's read by this plugin. This can be sometimes be done by the sensor, sometimes upon entry into SignalK using the (calibration plugin)[https://www.npmjs.com/package/@signalk/calibration].
+It's assumed data is already corrected when it's read by this plugin. This can be sometimes be done by the sensor, sometimes upon entry into SignalK using the [calibration plugin](https://www.npmjs.com/package/@signalk/calibration).
 
 ## Data sources
 The following paths are read
@@ -13,7 +13,7 @@ The following paths are read
 ## Polar diagram
 For starters, use the plugin config to set one polar diagram.
 Simple interpolation will be used to get the corresponding values from the polar diagram info.
-For polar diagrams you can check (ORC sailboat data)[https://jieter.github.io/orc-data/site/].
+For polar diagrams you can check [ORC sailboat data](https://jieter.github.io/orc-data/site/).
 
 ## Calculated performance data
 The following data is calculated
@@ -21,7 +21,7 @@ The following data is calculated
  - Downwind / run / gybe angle (performance.gybeAngle) 
  - Upwind / beat VMG (performance.beatAngleVelocityMadeGood) 
  - Downwind / run / gybe VMG (performance.gybeAngleVelocityMadeGood) 
- - Target TWA (performance.targetAngle)
+ - Target TWA (performance.targetAngle) (equals upwind or downwind angle)
  - Optimal Wind Angle (diff between TWA and environment.wind.directionTrue)
  - Polar Boat Speed (performance.polarSpeed)
  - Polar Speed Ratio (performance.polarSpeedRatio)
