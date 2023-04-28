@@ -9,6 +9,7 @@ The following paths are read
  - navigation.speedThroughWater
  - environment.wind.speedTrue
  - environment.wind.angleTrueWater
+ - navigation.speedOverGround (optional)
 
 ## Plugin configuration
 ### Polar diagram
@@ -30,10 +31,10 @@ In the plugin configuration you can toggle the following options:
  - Optimal Wind Angle (diff between TWA and environment.wind.directionTrue)
  - Polar Boat Speed (performance.polarSpeed)
  - Polar Speed Ratio (performance.polarSpeedRatio)
+ - Plugin option to use SOG as boat speed
 
 ### To-do list
  - Fill up the ends of the polar diagram
- - A switch to use SOG as boat speed
  - Wind angle for maximum speed at this wind speed
  - Improved interpolation
  - Make moment to do calculation smarter/configurable

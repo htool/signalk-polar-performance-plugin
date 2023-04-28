@@ -28,6 +28,10 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Enable calculation of Optimal Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)'
       },
+      useSOG: {
+        type: 'boolean',
+        title: 'Use speed over ground (SOG) as boat speed.'
+      },
       csvTable: {
         type: "string",
         title: "Enter csv with polar in http://jieter.github.io/orc-data/site/ style."
@@ -75,6 +79,14 @@ module.exports = function (app) {
       ]
     }
 
+    // Additional subscribes based on options
+    if (options.useSOG == true) {
+      localSubscription.subscribe.push({
+        path: 'navigation.speedOverGround',
+        policy: 'instant'
+      })
+    }
+
     app.subscriptionmanager.subscribe(
       localSubscription,
       unsubscribes,
@@ -96,6 +108,10 @@ module.exports = function (app) {
 	      if (delta.path == 'navigation.speedThroughWater') {
 	        STW = delta.value
           BSP = STW
+	        // app.debug('speedThroughWater (STW): %d', STW)
+	      } else if (delta.path == 'navigation.speedOverGround') {
+	        SOG = delta.value
+          BSP = SOG
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'environment.wind.speedTrue') {
 	        TWS = delta.value
