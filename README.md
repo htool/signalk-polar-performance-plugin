@@ -10,13 +10,18 @@ The following paths are read
  - environment.wind.speedTrue
  - environment.wind.angleTrueWater
 
-## Polar diagram
-Use the plugin config to configure the polar diagram.
-Simple interpolation will be used to get the corresponding values from the polar diagram info.
-For polar diagrams you can check [ORC sailboat data](https://jieter.github.io/orc-data/site/).
+## Plugin configuration
+### Polar diagram
+The polar diagram can be configured through CSV notation as used on [ORC sailboat data](https://jieter.github.io/orc-data/site/).
+
+### Plugin options
+In the plugin configuration you can toggle the following options:
+ - Enable calculation of beat/upwind and run/gybe/downwind angle
+ - Enable calculation of beat/upwind and run/gybe/downwind VMG
+ - Enable calculation of Optimal Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)
 
 ## Calculated performance data
-### The following data is calculated
+### Currently supported
  - Upwind / beat angle (performance.beatAngle) 
  - Downwind / run / gybe angle (performance.gybeAngle) 
  - Upwind / beat VMG (performance.beatAngleVelocityMadeGood) 
