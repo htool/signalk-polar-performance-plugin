@@ -52,7 +52,7 @@ module.exports = function (app) {
     app.debug('polar: %s', JSON.stringify(polar))
    
     // Global variables
-    var STW, TWA, TWS, port // Angles in rad, speed in m/s
+    var BSP, STW, TWA, TWS, port // Angles in rad, speed in m/s
     var Pi = Math.PI
     var halfPi = Pi / 2
 
@@ -95,11 +95,13 @@ module.exports = function (app) {
 	      // app.debug('handleData: %s', JSON.stringify(delta))
 	      if (delta.path == 'navigation.speedThroughWater') {
 	        STW = delta.value
+          BSP = STW
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'environment.wind.speedTrue') {
 	        TWS = delta.value
 	        // app.debug('environment.wind.speedTrue (TWS): %d', TWS)
-          sendUpdates(getPerformanceData(TWS, TWA))
+	        app.debug('TWS: %d TWA: %d BSP: %d', TWS, TWA, BSP)
+          sendUpdates(getPerformanceData(TWS, TWA, BSP))
 	      } else if (delta.path == 'environment.wind.angleTrueWater') {
           if (delta.value < 0) {
             port = -1
@@ -117,12 +119,14 @@ module.exports = function (app) {
       let metas = []
       if (typeof perfObj.beatAngle != 'undefined') {
         values.push({path: 'performance.beatAngle', value: roundDec(perfObj.beatAngle)})
+        values.push({path: 'performance.targetAngle', value: roundDec(perfObj.beatAngle)})
       }
       if (typeof perfObj.beatVMG != 'undefined') {
         values.push({path: 'performance.beatAngleVelocityMadeGood', value: roundDec(perfObj.beatVMG)})
       }
       if (typeof perfObj.runAngle != 'undefined') {
         values.push({path: 'performance.gybeAngle', value: roundDec(perfObj.runAngle)})
+        values.push({path: 'performance.targetAngle', value: roundDec(perfObj.runAngle)})
       }
       if (typeof perfObj.runVMG != 'undefined') {
         values.push({path: 'performance.gybeAngleVelocityMadeGood', value: roundDec(perfObj.runVMG)})
@@ -130,6 +134,13 @@ module.exports = function (app) {
       if (typeof perfObj.optimalWindAngle != 'undefined') {
         values.push({path: 'performance.optimalWindAngle', value: roundDec(perfObj.optimalWindAngle)})
         metas.push({path: 'performance.optimalWindAngle', value: {"units": "rad"}})
+      }
+      if (typeof perfObj.targetSpeed != 'undefined') {
+        values.push({path: 'performance.targetSpeed', value: roundDec(perfObj.targetSpeed)})
+      }
+      if (typeof perfObj.polarSpeed != 'undefined') {
+        values.push({path: 'performance.polarSpeed', value: roundDec(perfObj.polarSpeed)})
+        values.push({path: 'performance.polarSpeedRatio', value: roundDec(perfObj.polarSpeedRatio)})
       }
 
       app.debug('sendUpdates: %s', JSON.stringify(values))
@@ -143,26 +154,26 @@ module.exports = function (app) {
       })
     }
 
-    function getPerformanceData (TWS, TWA) {
+    function getPerformanceData (TWS, TWA, BSP) {
       var performance = {}
       // Use windspeed to find nearest speeds
-      for (let index = 0 ; index < polar.length-1; index++) {
-        let lower = polar[index].tws
-        let upper = polar[index+1].tws
+      for (let indexTWS = 0 ; indexTWS < polar.length-1; indexTWS++) {
+        let lower = polar[indexTWS].tws
+        let upper = polar[indexTWS+1].tws
         if (TWS >= lower && TWS <= upper) {
           //app.debug('TWS between %d and %d', lower, upper)
           // Calculate gap ratio
           let gap = upper - lower
-          let gapRatio = (1 / gap) * (TWS - lower)
-          //app.debug('gapRatio: %d', gapRatio)
+          let twsGapRatio = (1 / gap) * (TWS - lower)
+          //app.debug('twsGapRatio: %d', twsGapRatio)
 	          // Calculate beat/run angle
 	        if (TWA < halfPi) {
             // app.debug('Upwind')
             if (options.beatAngle == true) {
 	            // Calculate beat angle
-	            let beatLower = polar[index]['Beat angle']
-	            let beatUpper = polar[index+1]['Beat angle']
-	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * gapRatio)
+	            let beatLower = polar[indexTWS]['Beat angle']
+	            let beatUpper = polar[indexTWS+1]['Beat angle']
+	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
             }
 	          // Calculate optimal wind angle
 	          if (options.optimalWindAngle == true) {
@@ -170,18 +181,18 @@ module.exports = function (app) {
 	          }
 	          // Calculate beat VMG
 	          if (options.beatVMG == true) {
-	            let VMGLower = polar[index]['Beat VMG']
-	            let VMGUpper = polar[index+1]['Beat VMG']
-	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * gapRatio)
+	            let VMGLower = polar[indexTWS]['Beat VMG']
+	            let VMGUpper = polar[indexTWS+1]['Beat VMG']
+	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
             }
 	        } else {
             // app.debug('Downwind')
             if (options.beatAngle == true) {
 	            // Calculate run angle
-	            let runLower = polar[index]['Run angle']
-	            let runUpper = polar[index+1]['Run angle']
+	            let runLower = polar[indexTWS]['Run angle']
+	            let runUpper = polar[indexTWS+1]['Run angle']
 	            //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
-	            performance.runAngle = runLower + ((runUpper - runLower) * gapRatio)
+	            performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
             }
 	          if (options.optimalWindAngle == true) {
 	            // Calculate optimal wind angle
@@ -189,12 +200,47 @@ module.exports = function (app) {
 	          }
 	          if (options.beatVMG == true) {
 	            // Calculate run VMG
-	            let VMGLower = polar[index]['Run VMG']
-	            let VMGUpper = polar[index+1]['Run VMG']
+	            let VMGLower = polar[indexTWS]['Run VMG']
+	            let VMGUpper = polar[indexTWS+1]['Run VMG']
 	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
-	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * gapRatio)
+	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
             }
           }
+          // Calculate polar target boat speed
+
+          // Define the 4 near data points
+          let lowerTWA = polar[indexTWS].twa
+          let upperTWA = polar[indexTWS+1].twa
+          // app.debug('TWAlower: %s', JSON.stringify(TWAlower))
+          for (let indexTWA = 0 ; indexTWA < lowerTWA.length-1; indexTWA++) {
+            let lowerTWAlower = lowerTWA[indexTWA]
+            let lowerTWAupper = lowerTWA[indexTWA+1]
+            let upperTWAlower = upperTWA[indexTWA]
+            let upperTWAupper = upperTWA[indexTWA+1]
+
+	          // app.debug('lowerTWAlower: %s lowerTWAupper: %s', lowerTWAlower, lowerTWAupper)
+            if (TWA >= lowerTWAlower.twa && TWA <= lowerTWAupper.twa) {
+	            // app.debug('lowerTWAlower: %d TWA: %d lowerTWAupper: %d', lowerTWAlower.twa, TWA, lowerTWAupper.twa)
+              // Calculate gap ratio
+              let gap = lowerTWAupper.twa - lowerTWAlower.twa
+              let twaGapRatio = (1 / gap) * (TWA - lowerTWAlower.twa)
+	            // app.debug('twaGapRatio: %d', twaGapRatio)
+              // Calculate lower tws boat speed
+	            let lowerTBS = lowerTWAlower.tbs + ((lowerTWAupper.tbs - lowerTWAlower.tbs) * twaGapRatio)
+              // Calculate upper tws boat speed
+	            let upperTBS = upperTWAlower.tbs + ((upperTWAupper.tbs - upperTWAlower.tbs) * twaGapRatio)
+
+              // Calculate target boat speed
+              performance.polarSpeed = lowerTBS + ((upperTBS - lowerTBS) * twsGapRatio)
+	            // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', lowerTBS, performance.polarSpeed, upperTBS)
+
+              // Calculate polar performance
+              performance.polarSpeedRatio = (1 / performance.polarSpeed) * BSP
+
+            } 
+          }
+
+          // Calculate polar performance ratio
         } else {
           // app.debug('%d not >= %d && <= %d', TWS, lower, upper)
         }

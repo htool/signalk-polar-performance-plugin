@@ -19,14 +19,14 @@ For polar diagrams you can check (ORC sailboat data)[https://jieter.github.io/or
 The following data is calculated
  - Upwind / beat angle (performance.beatAngle) 
  - Downwind / run / gybe angle (performance.gybeAngle) 
- - Optimal Wind Angle (diff between TWA and environment.wind.directionTrue)
  - Upwind / beat VMG (performance.beatAngleVelocityMadeGood) 
  - Downwind / run / gybe VMG (performance.gybeAngleVelocityMadeGood) 
+ - Target TWA (performance.targetAngle)
+ - Optimal Wind Angle (diff between TWA and environment.wind.directionTrue)
+ - Polar Boat Speed (performance.polarSpeed)
+ - Polar Speed Ratio (performance.polarSpeedRatio)
 
 ## To-do list
- - Polar Boat Speed (performance.targetSpeed)
- - Polar Performance (ratio polar boat speed and boat speed)
- - Target TWA (performance.targetAngle)
  - Fill up the ends of the polar diagram
  - A switch to use SOG as boat speed
  - Wind angle for maximum speed at this wind speed
