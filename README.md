@@ -11,12 +11,12 @@ The following paths are read
  - environment.wind.angleTrueWater
 
 ## Polar diagram
-For starters, use the plugin config to set one polar diagram.
+Use the plugin config to configure the polar diagram.
 Simple interpolation will be used to get the corresponding values from the polar diagram info.
 For polar diagrams you can check [ORC sailboat data](https://jieter.github.io/orc-data/site/).
 
 ## Calculated performance data
-The following data is calculated
+### The following data is calculated
  - Upwind / beat angle (performance.beatAngle) 
  - Downwind / run / gybe angle (performance.gybeAngle) 
  - Upwind / beat VMG (performance.beatAngleVelocityMadeGood) 
@@ -26,7 +26,7 @@ The following data is calculated
  - Polar Boat Speed (performance.polarSpeed)
  - Polar Speed Ratio (performance.polarSpeedRatio)
 
-## To-do list
+### To-do list
  - Fill up the ends of the polar diagram
  - A switch to use SOG as boat speed
  - Wind angle for maximum speed at this wind speed
@@ -38,5 +38,6 @@ The following data is calculated
  -- Determine if we're on a steady course to avoid fake records
  -- Dampening algoritms
  -- Configure the resolution of the polar diagram
+ - Support multiple polar diagrams
  - Capture heel in polar diagram
  - Visualisation of the polar diagram
