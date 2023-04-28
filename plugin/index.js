@@ -32,6 +32,10 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Use speed over ground (SOG) as boat speed.'
       },
+      maxSpeed: {
+        type: 'boolean',
+        title: 'Enable writing of maximum speed angle and boat speed for a given TWS'
+      },
       csvTable: {
         type: "string",
         title: "Enter csv with polar in http://jieter.github.io/orc-data/site/ style."
@@ -158,6 +162,12 @@ module.exports = function (app) {
         values.push({path: 'performance.polarSpeed', value: roundDec(perfObj.polarSpeed)})
         values.push({path: 'performance.polarSpeedRatio', value: roundDec(perfObj.polarSpeedRatio)})
       }
+      if (typeof perfObj.maxSpeed != 'undefined') {
+        values.push({path: 'performance.maxSpeed', value: roundDec(perfObj.maxSpeed)})
+        metas.push({path: 'performance.maxSpeed', value: {"units": "m/s"}})
+        values.push({path: 'performance.maxSpeedAngle', value: roundDec(perfObj.maxSpeedAngle)})
+        metas.push({path: 'performance.maxSpeedAngle', value: {"units": "rad"}})
+      }
 
       app.debug('sendUpdates: %s', JSON.stringify(values))
       app.handleMessage(plugin.id, {
@@ -246,17 +256,25 @@ module.exports = function (app) {
               // Calculate upper tws boat speed
 	            let upperTBS = upperTWAlower.tbs + ((upperTWAupper.tbs - upperTWAlower.tbs) * twaGapRatio)
 
-              // Calculate target boat speed
+              // Calculate polar performance
               performance.polarSpeed = lowerTBS + ((upperTBS - lowerTBS) * twsGapRatio)
 	            // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', lowerTBS, performance.polarSpeed, upperTBS)
 
-              // Calculate polar performance
+              // Calculate polar performance ratio
               performance.polarSpeedRatio = (1 / performance.polarSpeed) * BSP
-
+              break
             } 
           }
-
-          // Calculate polar performance ratio
+          if (options.maxSpeed == true) {
+            let lowerMax = polar[indexTWS]['Max speed']
+            let upperMax = polar[indexTWS+1]['Max speed']
+            let maxSpeed = lowerMax + ((upperMax - lowerMax) * twsGapRatio)
+            performance.maxSpeed = maxSpeed
+            let lowerMaxAngle = polar[indexTWS]['Max speed angle']
+            let upperMaxAngle = polar[indexTWS+1]['Max speed angle']
+            let maxSpeedAngle = lowerMaxAngle + ((upperMaxAngle - lowerMaxAngle) * twsGapRatio)
+            performance.maxSpeedAngle = maxSpeedAngle
+          }
         } else {
           // app.debug('%d not >= %d && <= %d', TWS, lower, upper)
         }
@@ -305,17 +323,16 @@ module.exports = function (app) {
             if (row[index] != 0) {
               polar[index-1][angleName] = degToRad(angle)
               polar[index-1][VMGName] = roundDec(Number((row[index]) * Math.abs(Math.cos(angle))))
-              app.debug('polar[index-1]: %s', polar[index-1])
               if (typeof polar[index-1]['twa'] == 'undefined') {
                 polar[index-1]['twa'] = []
               }
-              app.debug('polar[index-1]: %s', polar[index-1])
-              app.debug('Adding TargetBoatSpeed')
-              let Obj = {"twa": degToRad(angle), "tbs": ktsToMs(Number(row[index]))}
-              app.debug('Obj: %s', JSON.stringify(Obj))
+              let tbs = ktsToMs(Number(row[index]))
+              let Obj = {"twa": degToRad(angle), "tbs": tbs}
               polar[index-1]['twa'] = polar[index-1]['twa'].concat(Obj)
-              app.debug('polar[index-1]["twa"]: %s', polar[index-1]['twa'])
-              app.debug('polar: %s', JSON.stringify(polar))
+              if (typeof polar[index-1]['Max speed'] == 'undefined' || tbs > polar[index-1]['Max speed']) {
+                polar[index-1]['Max speed'] = tbs
+                polar[index-1]['Max speed angle'] = degToRad(angle)
+              }
             }
           }
         } else {
@@ -325,9 +342,13 @@ module.exports = function (app) {
             if (typeof polar[index-1].twa == 'undefined') {
               polar[index-1].twa = []
             }
-            let Obj = {"twa": angle, "tbs": ktsToMs(Number(row[index]))}
+            let tbs = ktsToMs(Number(row[index]))
+            let Obj = {"twa": angle, "tbs": tbs}
             polar[index-1]['twa'] = polar[index-1]['twa'].concat(Obj)
-            app.debug('polar: %s', JSON.stringify(polar))
+            if (tbs > polar[index-1]['Max speed']) {
+              polar[index-1]['Max speed'] = tbs
+              polar[index-1]['Max speed angle'] = angle
+            }
           }
         }
       })
