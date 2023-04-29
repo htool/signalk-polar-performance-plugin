@@ -24,9 +24,9 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Enable calculation of beat/upwind and run/gybe/downwind VMG'
       },
-      optimalWindAngle: {
+      optimumWindAngle: {
         type: 'boolean',
-        title: 'Enable calculation of Optimal Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)'
+        title: 'Enable calculation of Optimum Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)'
       },
       useSOG: {
         type: 'boolean',
@@ -143,6 +143,8 @@ module.exports = function (app) {
       }
       if (typeof perfObj.beatVMG != 'undefined') {
         values.push({path: 'performance.beatAngleVelocityMadeGood', value: roundDec(perfObj.beatVMG)})
+        values.push({path: 'performance.targetVelocityMadeGood', value: roundDec(perfObj.beatVMG)})
+        metas.push({path: 'performance.targetVelocityMadeGood', value: {"units": "rad"}})
       }
       if (typeof perfObj.runAngle != 'undefined') {
         values.push({path: 'performance.gybeAngle', value: roundDec(perfObj.runAngle)})
@@ -150,10 +152,12 @@ module.exports = function (app) {
       }
       if (typeof perfObj.runVMG != 'undefined') {
         values.push({path: 'performance.gybeAngleVelocityMadeGood', value: roundDec(perfObj.runVMG)})
+        values.push({path: 'performance.targetVelocityMadeGood', value: roundDec(perfObj.runVMG)})
+        metas.push({path: 'performance.targetVelocityMadeGood', value: {"units": "rad"}})
       }
-      if (typeof perfObj.optimalWindAngle != 'undefined') {
-        values.push({path: 'performance.optimalWindAngle', value: roundDec(perfObj.optimalWindAngle)})
-        metas.push({path: 'performance.optimalWindAngle', value: {"units": "rad"}})
+      if (typeof perfObj.optimumWindAngle != 'undefined') {
+        values.push({path: 'performance.optimumWindAngle', value: roundDec(perfObj.optimumWindAngle)})
+        metas.push({path: 'performance.optimumWindAngle', value: {"units": "rad"}})
       }
       if (typeof perfObj.targetSpeed != 'undefined') {
         values.push({path: 'performance.targetSpeed', value: roundDec(perfObj.targetSpeed)})
@@ -201,9 +205,9 @@ module.exports = function (app) {
 	            let beatUpper = polar[indexTWS+1]['Beat angle']
 	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
             }
-	          // Calculate optimal wind angle
-	          if (options.optimalWindAngle == true) {
-	            performance.optimalWindAngle = performance.beatAngle - TWA * port
+	          // Calculate optimum wind angle (B&G thing)
+	          if (options.optimumWindAngle == true) {
+	            performance.optimumWindAngle = performance.beatAngle - TWA * port
 	          }
 	          // Calculate beat VMG
 	          if (options.beatVMG == true) {
@@ -220,9 +224,9 @@ module.exports = function (app) {
 	            //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
 	            performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
             }
-	          if (options.optimalWindAngle == true) {
-	            // Calculate optimal wind angle
-	            performance.optimalWindAngle = performance.runAngle - TWA * port
+	          if (options.optimumWindAngle == true) {
+	            // Calculate optimum wind angle
+	            performance.optimumWindAngle = performance.runAngle - TWA * port
 	          }
 	          if (options.beatVMG == true) {
 	            // Calculate run VMG
