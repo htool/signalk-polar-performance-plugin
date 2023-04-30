@@ -120,7 +120,7 @@ module.exports = function (app) {
 	      } else if (delta.path == 'environment.wind.speedTrue') {
 	        TWS = delta.value
 	        // app.debug('environment.wind.speedTrue (TWS): %d', TWS)
-	        app.debug('TWS: %d TWA: %d BSP: %d', TWS, TWA, BSP)
+	        app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
           sendUpdates(getPerformanceData(TWS, TWA, BSP))
 	      } else if (delta.path == 'environment.wind.angleTrueWater') {
           if (delta.value < 0) {
@@ -129,7 +129,6 @@ module.exports = function (app) {
             port = 1
           }
 	        TWA = Math.abs(delta.value)
-	        // app.debug('environment.wind.angleTrueWater (TWA): %d', TWA)
 	      }
       })
     }
@@ -207,7 +206,7 @@ module.exports = function (app) {
             }
 	          // Calculate optimum wind angle (B&G thing)
 	          if (options.optimumWindAngle == true) {
-	            performance.optimumWindAngle = performance.beatAngle - TWA * port
+              performance.optimumWindAngle = (TWA - performance.beatAngle) * port
 	          }
 	          // Calculate beat VMG
 	          if (options.beatVMG == true) {
@@ -226,7 +225,7 @@ module.exports = function (app) {
             }
 	          if (options.optimumWindAngle == true) {
 	            // Calculate optimum wind angle
-	            performance.optimumWindAngle = performance.runAngle - TWA * port
+	            performance.optimumWindAngle = (performance.runAngle - TWA) * port * -1
 	          }
 	          if (options.beatVMG == true) {
 	            // Calculate run VMG
@@ -402,7 +401,7 @@ function ktsToMs(knots) {
   return knots / 1.94384
 }
 
-function MsToKts(ms) {
+function msToKts(ms) {
   return ms * 1.94384
 }
 

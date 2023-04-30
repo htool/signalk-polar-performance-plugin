@@ -1,6 +1,15 @@
 # Polar performance plugin
 Generate performance information based on a polar diagram.
 
+
+## MFD configuration
+
+### B&G
+To make use of the performance data and get e.g. lay lines you need to set:
+ - Settings -> Chart -> Laylines -> Targets... -> True wind angle to 'Actual'
+ - SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK'
+Now the Target TWA is coming from SignalK and the laylines will be drawn based on it's value.
+
 ## Data correctness
 It's assumed data is already corrected when it's read by this plugin. This can be sometimes be done by the sensor, sometimes upon entry into SignalK using the [calibration plugin](https://www.npmjs.com/package/@signalk/calibration).
 
