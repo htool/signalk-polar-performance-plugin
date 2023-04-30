@@ -389,7 +389,28 @@ module.exports = function (app) {
         tws.twa = twaArray
       })
 
-      // app.debug(JSON.stringify(polar))
+      // And now fill in some missing ends to avoid doing expensive calculations in the main loop
+      for (let index = 0; index < polar.length-1; index++) {
+        let lowTBS = polar[index].twa[0].tbs
+        let lowTWA = polar[index].twa[0].twa
+
+        // Sorted on angle, so first is lowest
+        let twaArray = polar[index].twa
+
+        app.debug('Padding polar from 0 to first given angle (%d deg, %d kts) to twaArray %s' , radToDeg(lowTWA), msToKts(lowTBS), JSON.stringify(twaArray))
+
+        // Now put some extra values at the beginning
+        for (let angle = 0; angle < lowTWA; angle = angle + degToRad(5)) {
+          let tbs = (angle / lowTWA) * Math.pow(Math.cos((-1*lowTWA + angle)*3),3) * lowTBS
+          let Obj = {'twa': angle, 'tbs': tbs}
+          // app.debug('Adding Obj: %s', JSON.stringify(Obj))
+          twaArray.unshift(Obj)
+          // app.debug('twaArray: %s', JSON.stringify(twaArray))
+        }
+
+      }
+
+      app.debug(JSON.stringify(polar))
 		  return (polar)
 		}
 
