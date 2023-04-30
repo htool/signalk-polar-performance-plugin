@@ -195,7 +195,7 @@ module.exports = function (app) {
           let gap = upper - lower
           let twsGapRatio = (1 / gap) * (TWS - lower)
           //app.debug('twsGapRatio: %d', twsGapRatio)
-	          // Calculate beat/run angle
+	        // Calculate beat/run angle
 	        if (TWA < halfPi) {
             // app.debug('Upwind')
             if (options.beatAngle == true) {
@@ -237,37 +237,52 @@ module.exports = function (app) {
           }
           // Calculate polar target boat speed
 
-          // Define the 4 near data points
+          // Interpolate Define the 4 near data points
           let lowerTWA = polar[indexTWS].twa
           let upperTWA = polar[indexTWS+1].twa
           // app.debug('TWAlower: %s', JSON.stringify(TWAlower))
+          // First find lowerTWA
           for (let indexTWA = 0 ; indexTWA < lowerTWA.length-1; indexTWA++) {
             let lowerTWAlower = lowerTWA[indexTWA]
             let lowerTWAupper = lowerTWA[indexTWA+1]
-            let upperTWAlower = upperTWA[indexTWA]
-            let upperTWAupper = upperTWA[indexTWA+1]
-
 	          // app.debug('lowerTWAlower: %s lowerTWAupper: %s', lowerTWAlower, lowerTWAupper)
             if (TWA >= lowerTWAlower.twa && TWA <= lowerTWAupper.twa) {
-	            // app.debug('lowerTWAlower: %d TWA: %d lowerTWAupper: %d', lowerTWAlower.twa, TWA, lowerTWAupper.twa)
-              // Calculate gap ratio
-              let gap = lowerTWAupper.twa - lowerTWAlower.twa
-              let twaGapRatio = (1 / gap) * (TWA - lowerTWAlower.twa)
-	            // app.debug('twaGapRatio: %d', twaGapRatio)
-              // Calculate lower tws boat speed
-	            let lowerTBS = lowerTWAlower.tbs + ((lowerTWAupper.tbs - lowerTWAlower.tbs) * twaGapRatio)
-              // Calculate upper tws boat speed
-	            let upperTBS = upperTWAlower.tbs + ((upperTWAupper.tbs - upperTWAlower.tbs) * twaGapRatio)
-
-              // Calculate polar performance
-              performance.polarSpeed = lowerTBS + ((upperTBS - lowerTBS) * twsGapRatio)
-	            // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', lowerTBS, performance.polarSpeed, upperTBS)
-
-              // Calculate polar performance ratio
-              performance.polarSpeedRatio = (1 / performance.polarSpeed) * BSP
+              // Now find upperTWA
+              for (let indexTWA = 0 ; indexTWA < upperTWA.length-1; indexTWA++) {
+                let upperTWAlower = upperTWA[indexTWA]
+                let upperTWAupper = upperTWA[indexTWA+1]
+                if (TWA >= upperTWAlower.twa && TWA <= upperTWAupper.twa) {
+                  // Found the 4 points
+			            // app.debug('lowerTWAlower: %d TWA: %d lowerTWAupper: %d', lowerTWAlower.twa, TWA, lowerTWAupper.twa)
+		              // Calculate gap ratio
+		              let gap = lowerTWAupper.twa - lowerTWAlower.twa
+		              let twaGapRatio = (1 / gap) * (TWA - lowerTWAlower.twa)
+			            // app.debug('twaGapRatio: %d', twaGapRatio)
+		              // Calculate lower tws boat speed
+			            let lowerTBS = lowerTWAlower.tbs + ((lowerTWAupper.tbs - lowerTWAlower.tbs) * twaGapRatio)
+		              // Calculate upper tws boat speed
+			            let upperTBS = upperTWAlower.tbs + ((upperTWAupper.tbs - upperTWAlower.tbs) * twaGapRatio)
+		              // Calculate polar boat speed
+		              performance.polarSpeed = lowerTBS + ((upperTBS - lowerTBS) * twsGapRatio)
+			            // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', lowerTBS, performance.polarSpeed, upperTBS)
+                  break
+                }
+              }
               break
             } 
           }
+          if (typeof performance.polarSpeed == 'undefined') {
+            if (TWA < performance.beatAngle) {
+              // In case TWA < lowest polar angle
+              app.debug('Low angle %d not present in table', radToDeg(TWA))
+              // performance.polarSpeed = 
+            } else if (TWA > performance.runAngle) {
+              // In case TWA > highest polar angle
+              app.debug('High angle %d not present in table', radToDeg(TWA))
+              // performance.polarSpeed =
+            }
+          }
+
           if (options.maxSpeed == true) {
             let lowerMax = polar[indexTWS]['Max speed']
             let upperMax = polar[indexTWS+1]['Max speed']
@@ -278,9 +293,19 @@ module.exports = function (app) {
             let maxSpeedAngle = lowerMaxAngle + ((upperMaxAngle - lowerMaxAngle) * twsGapRatio)
             performance.maxSpeedAngle = maxSpeedAngle
           }
-        } else {
-          // app.debug('%d not >= %d && <= %d', TWS, lower, upper)
+        } else if (indexTWS == 0 && TWS < lower) {
+          app.debug('No data for low wind speed (%d kts)', msToKts(TWS))
+        } else if (indexTWS == polar.length-1 && TWS > upper) {
+          app.debug('No data for high wind speed (%d kts)', msToKts(TWS))
         }
+      }
+      // Calculate polar performance ratio
+      if (typeof performance.polarSpeed != 'undefined') {
+        performance.polarSpeedRatio = (1 / performance.polarSpeed) * BSP
+      } else {
+        // No value would create stale values
+        performance.polarSpeed = 0
+        performance.polarSpeedRatio = 0
       }
       return performance
     }
@@ -322,35 +347,35 @@ module.exports = function (app) {
             angleName = 'Run angle'
             VMGName = 'Run VMG'
           }
-          for (let index = 1; index < row.length; index++) {
-            if (row[index] != 0) {
-              polar[index-1][angleName] = degToRad(angle)
-              polar[index-1][VMGName] = roundDec(Number((row[index]) * Math.abs(Math.cos(angle))))
-              if (typeof polar[index-1]['twa'] == 'undefined') {
-                polar[index-1]['twa'] = []
+          for (let index = 0; index < row.length-1; index++) {
+            if (row[index+1] != 0) {
+              polar[index][angleName] = degToRad(angle)
+              polar[index][VMGName] = roundDec(Number((row[index+1]) * Math.abs(Math.cos(angle))))
+              if (typeof polar[index]['twa'] == 'undefined') {
+                polar[index]['twa'] = []
               }
-              let tbs = ktsToMs(Number(row[index]))
+              let tbs = ktsToMs(Number(row[index+1]))
               let Obj = {"twa": degToRad(angle), "tbs": tbs}
-              polar[index-1]['twa'] = polar[index-1]['twa'].concat(Obj)
-              if (typeof polar[index-1]['Max speed'] == 'undefined' || tbs > polar[index-1]['Max speed']) {
-                polar[index-1]['Max speed'] = tbs
-                polar[index-1]['Max speed angle'] = degToRad(angle)
+              polar[index]['twa'] = polar[index]['twa'].concat(Obj)
+              if (typeof polar[index]['Max speed'] == 'undefined' || tbs > polar[index]['Max speed']) {
+                polar[index]['Max speed'] = tbs
+                polar[index]['Max speed angle'] = degToRad(angle)
               }
             }
           }
         } else {
           // Normal line
           let angle = degToRad(Number(row[0]))  // CSV deg to internal rad
-          for (let index = 1; index < row.length; index++) {
-            if (typeof polar[index-1].twa == 'undefined') {
-              polar[index-1].twa = []
+          for (let index = 0; index < row.length-1; index++) {
+            if (typeof polar[index].twa == 'undefined') {
+              polar[index].twa = []
             }
-            let tbs = ktsToMs(Number(row[index]))
+            let tbs = ktsToMs(Number(row[index+1]))
             let Obj = {"twa": angle, "tbs": tbs}
-            polar[index-1]['twa'] = polar[index-1]['twa'].concat(Obj)
-            if (tbs > polar[index-1]['Max speed']) {
-              polar[index-1]['Max speed'] = tbs
-              polar[index-1]['Max speed angle'] = angle
+            polar[index]['twa'] = polar[index]['twa'].concat(Obj)
+            if (tbs > polar[index]['Max speed']) {
+              polar[index]['Max speed'] = tbs
+              polar[index]['Max speed angle'] = angle
             }
           }
         }
