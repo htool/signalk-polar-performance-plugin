@@ -61,8 +61,7 @@ module.exports = function (app) {
    
     // Global variables
     var BSP, STW, TWA, TWS, port // Angles in rad, speed in m/s
-    var Pi = Math.PI
-    var halfPi = Pi / 2
+    var halfPi = Math.PI / 2
 
     // Subscribe to paths
     let localSubscription = {
@@ -391,32 +390,47 @@ module.exports = function (app) {
 
       // And now fill in some missing ends to avoid doing expensive calculations in the main loop
       for (let index = 0; index < polar.length-1; index++) {
-        let lowTBS = polar[index].twa[0].tbs
-        let lowTWA = polar[index].twa[0].twa
-
         // Sorted on angle, so first is lowest
         let twaArray = polar[index].twa
+        let lowTBS = twaArray[0].tbs
+        let lowTWA = twaArray[0].twa
 
-        app.debug('Padding polar from 0 to first given angle (%d deg, %d kts) to twaArray %s' , radToDeg(lowTWA), msToKts(lowTBS), JSON.stringify(twaArray))
-
+        // app.debug('Padding polar from 0 to first given angle (%d deg, %d kts) to twaArray %s' , radToDeg(lowTWA), msToKts(lowTBS), JSON.stringify(twaArray))
+        
         // Now put some extra values at the beginning
+        var topArray = []
         for (let angle = 0; angle < lowTWA; angle = angle + degToRad(5)) {
           let tbs = (angle / lowTWA) * Math.pow(Math.cos((-1*lowTWA + angle)*3),3) * lowTBS
           let Obj = {'twa': angle, 'tbs': tbs}
           // app.debug('Adding Obj: %s', JSON.stringify(Obj))
-          twaArray.unshift(Obj)
+          topArray.push(Obj)
           // app.debug('twaArray: %s', JSON.stringify(twaArray))
         }
-
+        twaArray = topArray.concat(twaArray)
+        // app.debug('twaArray: %s', JSON.stringify(polar[index].twa))
       }
 
-      app.debug(JSON.stringify(polar))
+      for (let index = 0; index < polar.length-1; index++) {
+        let twaArray = polar[index].twa
+        let highTBS = twaArray[twaArray.length-1].tbs
+        let highTWA = twaArray[twaArray.length-1].twa
+
+        // app.debug('Padding polar from highTWA to last given angle (%d, %d kts) to twaArray %s' , highTWA, msToKts(highTBS), JSON.stringify(twaArray))
+
+        // Now put some extra values at the beginning
+        var tailArray = []
+        for (let angle = Math.PI; angle > highTWA; angle = angle - degToRad(5)) {
+          let tbs = Math.pow(highTWA/angle, 2) * highTBS
+          let Obj = {'twa': angle, 'tbs': tbs}
+          tailArray.unshift(Obj)
+        }
+        twaArray = twaArray.concat(tailArray)
+      }
+
+      // app.debug(JSON.stringify(polar))
 		  return (polar)
 		}
-
-
   }
-
 
   plugin.stop = function () {
     // Here we put logic we need when the plugin stops

@@ -33,11 +33,13 @@ In the plugin configuration you can toggle the following options:
  - Polar Speed Ratio (performance.polarSpeedRatio)
  - Plugin option to use SOG as boat speed
  - Wind angle for maximum speed at this wind speed
+ - Fill up the ends of the polar diagram
 
 ### To-do list
- - Fill up the ends of the polar diagram
  - Improved interpolation
  - Make moment to do calculation smarter/configurable
+ - API to see JSON of polar
+ - Visualisation of the polar diagram
  - Create polar from live data
  -- Save polar info to file
  -- Save new record speed for angle in polar
@@ -46,7 +48,6 @@ In the plugin configuration you can toggle the following options:
  -- Configure the resolution of the polar diagram
  - Support multiple polar diagrams
  - Capture heel in polar diagram
- - Visualisation of the polar diagram
 
 ## MFD configuration
 
