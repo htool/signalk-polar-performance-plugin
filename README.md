@@ -59,15 +59,15 @@ To get the values calculated by this plugin from SignalK to your B&G MFD/Triton2
 To see lay lines you need to set:
  - Settings -> Chart -> Laylines -> Targets... -> True wind angle to 'Actual'
 
- ![](doc/BandG_Laylines_Target_TWA_to_Active.png)
+ ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Laylines_Target_TWA_to_Active.png)
 
  - SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK'
 
- ![](doc/BandG_Target_TWA_to_SignalK.png)
+ ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Target_TWA_to_SignalK.png)
 
 Now the Target TWA is coming from SignalK and the laylines will be drawn based on it's value.
 
-![](doc/BandG_Sailsteer_with_laylines.png)
+![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Sailsteer_with_laylines.png)
 
 ### Raymarine
 If you have a Raymarine MFD and can tell more about this, please add to the README or tell me.
