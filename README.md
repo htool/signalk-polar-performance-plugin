@@ -1,23 +1,6 @@
 # Polar performance plugin
 Generate performance information based on a polar diagram.
 
-
-## MFD configuration
-
-### B&G
-To make use of the performance data and get e.g. lay lines you need to set:
- - Settings -> Chart -> Laylines -> Targets... -> True wind angle to 'Actual'
-
- ![](doc/BandG_Laylines_Target_TWA_to_Active.png)
-
- - SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK'
-
- ![](doc/BandG_Target_TWA_to_SignalK.png)
-
-Now the Target TWA is coming from SignalK and the laylines will be drawn based on it's value.
-
-![](doc/BandG_Sailsteer_with_laylines.png)
-
 ## Data correctness
 It's assumed data is already corrected when it's read by this plugin. This can be sometimes be done by the sensor, sometimes upon entry into SignalK using the [calibration plugin](https://www.npmjs.com/package/@signalk/calibration).
 
@@ -64,3 +47,27 @@ In the plugin configuration you can toggle the following options:
  - Support multiple polar diagrams
  - Capture heel in polar diagram
  - Visualisation of the polar diagram
+
+## MFD configuration
+
+### B&G
+To get the values calculated by this plugin from SignalK to your B&G MFD/Triton2, you need to install the [B&G performance plugin](https://www.npmjs.com/package/signalk-bandg-performance-plugin) and select at least the following values:
+ - Polar Speed (Polar Speed - POL SPD)
+ - Polar Speed Ratio (Polar Performance - POL PERF))
+ - Target TWA (TARG TWA)
+
+To see lay lines you need to set:
+ - Settings -> Chart -> Laylines -> Targets... -> True wind angle to 'Actual'
+
+ ![](doc/BandG_Laylines_Target_TWA_to_Active.png)
+
+ - SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK'
+
+ ![](doc/BandG_Target_TWA_to_SignalK.png)
+
+Now the Target TWA is coming from SignalK and the laylines will be drawn based on it's value.
+
+![](doc/BandG_Sailsteer_with_laylines.png)
+
+### Raymarine
+If you have a Raymarine MFD and can tell more about this, please add to the README or tell me.
