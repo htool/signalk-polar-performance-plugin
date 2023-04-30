@@ -7,11 +7,11 @@ Generate performance information based on a polar diagram.
 ### B&G
 To make use of the performance data and get e.g. lay lines you need to set:
  - Settings -> Chart -> Laylines -> Targets... -> True wind angle to 'Actual'
- ![doc/BandG_Laylines_Target_TWA_to_Active.png]
+ ![](doc/BandG_Laylines_Target_TWA_to_Active.png)
  - SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK'
- ![BandG_Target_TWA_to_SignalK.png]
+ ![](BandG_Target_TWA_to_SignalK.png)
 Now the Target TWA is coming from SignalK and the laylines will be drawn based on it's value.
-![BandG_Sailsteer_with_laylines.png]
+![](BandG_Sailsteer_with_laylines.png)
 
 ## Data correctness
 It's assumed data is already corrected when it's read by this plugin. This can be sometimes be done by the sensor, sometimes upon entry into SignalK using the [calibration plugin](https://www.npmjs.com/package/@signalk/calibration).
