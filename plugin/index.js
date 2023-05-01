@@ -68,7 +68,7 @@ module.exports = function (app) {
     app.debug('polar: %s', JSON.stringify(polar))
    
     // Global variables
-    var BSP, STW, TWA, TargetTWA, TWS, HDG, port // Angles in rad, speed in m/s
+    var BSP, STW, TWA, targetTWA, TWS, HDG, port // Angles in rad, speed in m/s
     var halfPi = Math.PI / 2
 
     // Subscribe to paths
@@ -99,11 +99,9 @@ module.exports = function (app) {
     }
     if (options.tackTrue == true) {
       localSubscription.subscribe.push({
-        {
           path: 'navigation.headingTrue',
           policy: 'instant'
-        }
-      }
+      })
     }
 
     app.subscriptionmanager.subscribe(
@@ -202,7 +200,9 @@ module.exports = function (app) {
         metas.push({path: 'performance.maxSpeedAngle', value: {"units": "rad"}})
       }
       if (options.tackTrue == true) {
-        values.push({path: 'performance.tackTrue', value: roundDec(perfObj.tackTrue)})
+        if (typeof perfObj.tackTrue != 'undefined') {
+          values.push({path: 'performance.tackTrue', value: roundDec(perfObj.tackTrue)})
+        }
       }
 
       app.debug('sendUpdates: %s', JSON.stringify(values))
@@ -236,6 +236,7 @@ module.exports = function (app) {
 	            let beatLower = polar[indexTWS]['Beat angle']
 	            let beatUpper = polar[indexTWS+1]['Beat angle']
 	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
+              targetTWA = performance.beatAngle
             }
 	          // Calculate optimum wind angle (B&G thing)
 	          if (options.optimumWindAngle == true) {
@@ -257,6 +258,7 @@ module.exports = function (app) {
 	            let runUpper = polar[indexTWS+1]['Run angle']
 	            //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
 	            performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
+              targetTWA = performance.runAngle
             }
 	          if (options.optimumWindAngle == true) {
               if (typeof performance.runAngle != 'undefined') {
@@ -273,15 +275,16 @@ module.exports = function (app) {
             }
           }
           // Calculate opposite Tack True
+          // app.debug('tackTrue: port: %d HDG: %d targetTWA: %d', port, radToDeg(HDG), radToDeg(targetTWA))
           if (port) {
-            let tackTrue = HDG - TargetTWA
+            let tackTrue = HDG - targetTWA
             if (tackTrue < 0) {
               tackTrue = tackTrue + (2*Math.PI)
             }
             performance.tackTrue = tackTrue
           } else {
-            let tackTrue = HDG + TargetTWA
-            if (tackTrue > (2*Math.PI) {
+            let tackTrue = HDG + targetTWA
+            if (tackTrue > (2*Math.PI)) {
               tackTrue = tackTrue - (2*Math.PI)
             }
             performance.tackTrue = tackTrue
@@ -452,9 +455,9 @@ module.exports = function (app) {
         for (let index = 0; index < polar.length-1; index++) {
           let tws = polar[index].tws
           let beatVMG = 0
-          let beatVMGelement = 0
+          let beatElement = 0
           let runVMG = 0
-          let runVMGelement = 0
+          let runElement = 0
 
           let twaArray = polar[index].twa
           for (let element = 0; element < twaArray.length-1; element++) {
@@ -471,12 +474,12 @@ module.exports = function (app) {
               }
             }
           }
-          app.debug('beatVMG for %d is %d (angel %d)', tws, twaArray[beatVMGelement].vmg, twaArray[beatVMGelement].twa)
-          app.debug(' runVMG for %d is %d (angel %d)', tws, twaArray[runVMGelement].vmg, twaArray[runVMGelement].twa)
-          polar[index]['Beat angle'] = twaArray[beatVMGelement].twa
-          polar[index]['Beat VMG'] = twaArray[beatVMGelement].vmg
-          polar[index]['Run angle'] = twaArray[runVMGelement].twa
-          polar[index]['Run VMG'] = twaArray[runVMGelement].vmg
+          app.debug('beatVMG for %d is %d (angel %d)', tws, twaArray[beatElement].vmg, twaArray[beatElement].twa)
+          app.debug(' runVMG for %d is %d (angel %d)', tws, twaArray[runElement].vmg, twaArray[runElement].twa)
+          polar[index]['Beat angle'] = twaArray[beatElement].twa
+          polar[index]['Beat VMG'] = twaArray[beatElement].vmg
+          polar[index]['Run angle'] = twaArray[runElement].twa
+          polar[index]['Run VMG'] = twaArray[runElement].vmg
         }
         
       }
