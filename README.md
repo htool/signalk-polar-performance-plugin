@@ -17,8 +17,11 @@ The polar diagram can be configured through CSV notation as used on [ORC sailboa
 
 ### Plugin options
 In the plugin configuration you can toggle the following options:
- - Enable calculation of beat/upwind and run/gybe/downwind angle
- - Enable calculation of beat/upwind and run/gybe/downwind VMG
+ - Enable calculation/sending of beat/upwind and run/gybe/downwind angle
+ - Enable calculation/sending of beat/upwind and run/gybe/downwind VMG
+ - Enable sending Target TWA
+ - Enable calculation of Optimum Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)
+ - Enable sending of maximum speed angle and boat speed for a given TWS
  - Enable calculation of Optimum Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)
 
 ## Calculated performance data
@@ -40,6 +43,7 @@ In the plugin configuration you can toggle the following options:
  - Make moment to do calculation smarter/configurable
  - API to see JSON of polar
  - Visualisation of the polar diagram
+ - Extrapolation of polar data
  - Create polar from live data
  -- Save polar info to file
  -- Save new record speed for angle in polar

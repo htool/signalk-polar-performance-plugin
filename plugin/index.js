@@ -18,11 +18,15 @@ module.exports = function (app) {
     properties: {
       beatAngle: {
         type: 'boolean',
-        title: 'Enable calculation of beat/upwind and run/gybe/downwind angle'
+        title: 'Enable calculation/sending of beat/upwind and run/gybe/downwind angle'
       },
       beatVMG: {
         type: 'boolean',
-        title: 'Enable calculation of beat/upwind and run/gybe/downwind VMG'
+        title: 'Enable calculation/sending of beat/upwind and run/gybe/downwind VMG'
+      },
+      targetTWA: {
+        type: 'boolean',
+        title: 'Enable sending Target TWA (performance.targetAngle)'
       },
       optimumWindAngle: {
         type: 'boolean',
@@ -136,22 +140,34 @@ module.exports = function (app) {
       let values = []
       let metas = []
       if (typeof perfObj.beatAngle != 'undefined') {
-        values.push({path: 'performance.beatAngle', value: roundDec(perfObj.beatAngle)})
-        values.push({path: 'performance.targetAngle', value: roundDec(perfObj.beatAngle)})
+        if (options.beatAngle == true) {
+          values.push({path: 'performance.beatAngle', value: roundDec(perfObj.beatAngle)})
+        }
+        if (options.targetTWA == true) {
+          values.push({path: 'performance.targetAngle', value: roundDec(perfObj.beatAngle)})
+        }
       }
       if (typeof perfObj.beatVMG != 'undefined') {
         values.push({path: 'performance.beatAngleVelocityMadeGood', value: roundDec(perfObj.beatVMG)})
-        values.push({path: 'performance.targetVelocityMadeGood', value: roundDec(perfObj.beatVMG)})
-        metas.push({path: 'performance.targetVelocityMadeGood', value: {"units": "rad"}})
+        if (options.targetTWA == true) {
+          values.push({path: 'performance.targetVelocityMadeGood', value: roundDec(perfObj.beatVMG)})
+          metas.push({path: 'performance.targetVelocityMadeGood', value: {"units": "rad"}})
+        }
       }
       if (typeof perfObj.runAngle != 'undefined') {
-        values.push({path: 'performance.gybeAngle', value: roundDec(perfObj.runAngle)})
-        values.push({path: 'performance.targetAngle', value: roundDec(perfObj.runAngle)})
+        if (options.beatAngle == true) {
+          values.push({path: 'performance.gybeAngle', value: roundDec(perfObj.runAngle)})
+        }
+        if (options.targetTWA == true) {
+          values.push({path: 'performance.targetAngle', value: roundDec(perfObj.runAngle)})
+        }
       }
       if (typeof perfObj.runVMG != 'undefined') {
         values.push({path: 'performance.gybeAngleVelocityMadeGood', value: roundDec(perfObj.runVMG)})
-        values.push({path: 'performance.targetVelocityMadeGood', value: roundDec(perfObj.runVMG)})
-        metas.push({path: 'performance.targetVelocityMadeGood', value: {"units": "rad"}})
+        if (options.targetTWA == true) {
+          values.push({path: 'performance.targetVelocityMadeGood', value: roundDec(perfObj.runVMG)})
+          metas.push({path: 'performance.targetVelocityMadeGood', value: {"units": "rad"}})
+        }
       }
       if (typeof perfObj.optimumWindAngle != 'undefined') {
         values.push({path: 'performance.optimumWindAngle', value: roundDec(perfObj.optimumWindAngle)})
@@ -197,13 +213,11 @@ module.exports = function (app) {
 	        // Calculate beat/run angle
 	        if (TWA < halfPi) {
             // app.debug('Upwind')
-            if (options.beatAngle == true) {
-	            // Take beat angle
-              if (typeof polar[indexTWS]['Beat angle'] != 'undefined') {
-	              let beatLower = polar[indexTWS]['Beat angle']
-	              let beatUpper = polar[indexTWS+1]['Beat angle']
-	              performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
-              }
+	          // Take beat angle
+            if (typeof polar[indexTWS]['Beat angle'] != 'undefined') {
+	            let beatLower = polar[indexTWS]['Beat angle']
+	            let beatUpper = polar[indexTWS+1]['Beat angle']
+	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
             }
 	          // Calculate optimum wind angle (B&G thing)
 	          if (options.optimumWindAngle == true) {
@@ -212,23 +226,19 @@ module.exports = function (app) {
               }
 	          }
 	          // Calculate beat VMG
-	          if (options.beatVMG == true) {
-              if (typeof polar[indexTWS]['Beat VMG'] != 'undefined') {
-	              let VMGLower = polar[indexTWS]['Beat VMG']
-	              let VMGUpper = polar[indexTWS+1]['Beat VMG']
-	              performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
-              }
+            if (typeof polar[indexTWS]['Beat VMG'] != 'undefined') {
+	            let VMGLower = polar[indexTWS]['Beat VMG']
+	            let VMGUpper = polar[indexTWS+1]['Beat VMG']
+	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
             }
 	        } else {
             // app.debug('Downwind')
-            if (options.beatAngle == true) {
-              if (typeof polar[indexTWS]['Run angle'] != 'undefined') {
-	              // Calculate run angle
-	              let runLower = polar[indexTWS]['Run angle']
-	              let runUpper = polar[indexTWS+1]['Run angle']
-	              //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
-	              performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
-              }
+            if (typeof polar[indexTWS]['Run angle'] != 'undefined') {
+	            // Calculate run angle
+	            let runLower = polar[indexTWS]['Run angle']
+	            let runUpper = polar[indexTWS+1]['Run angle']
+	            //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
+	            performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
             }
 	          if (options.optimumWindAngle == true) {
               if (typeof performance.runAngle != 'undefined') {
@@ -236,14 +246,12 @@ module.exports = function (app) {
 	              performance.optimumWindAngle = (performance.runAngle - TWA) * port * -1
               }
 	          }
-	          if (options.beatVMG == true) {
-	            // Calculate run VMG
-              if (typeof polar[indexTWS]['Run VMG'] != 'undefined') {
-	              let VMGLower = polar[indexTWS]['Run VMG']
-	              let VMGUpper = polar[indexTWS+1]['Run VMG']
-	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
-	              performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
-              }
+	          // Calculate run VMG
+            if (typeof polar[indexTWS]['Run VMG'] != 'undefined') {
+	            let VMGLower = polar[indexTWS]['Run VMG']
+	            let VMGUpper = polar[indexTWS+1]['Run VMG']
+	          //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
+	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
             }
           }
           // Calculate polar target boat speed
@@ -348,10 +356,10 @@ module.exports = function (app) {
           app.debug('beat and run angles are included')
         } else if (row.includes('0')) {
           // Beat / Run angle
-          let angle = Number(row[0])
+          let angle = degToRad(Number(row[0]))
           let angleName
           let VMGName
-          if (angle < 90) {
+          if (angle < halfPi) {
             angleName = 'Beat angle'
             VMGName = 'Beat VMG'
           } else {
@@ -360,17 +368,18 @@ module.exports = function (app) {
           }
           for (let index = 0; index < row.length-1; index++) {
             if (row[index+1] != 0) {
-              polar[index][angleName] = degToRad(angle)
-              polar[index][VMGName] = roundDec(Number((row[index+1]) * Math.abs(Math.cos(angle))))
+              polar[index][angleName] = angle
+              let tbs = ktsToMs(Number(row[index+1]))
+              let vmg = tbs * Math.abs(Math.cos(angle))
+              polar[index][VMGName] = roundDec(vmg)
               if (typeof polar[index]['twa'] == 'undefined') {
                 polar[index]['twa'] = []
               }
-              let tbs = ktsToMs(Number(row[index+1]))
-              let Obj = {"twa": degToRad(angle), "tbs": tbs}
+              let Obj = {"twa": angle, "tbs": tbs, "vmg": vmg}
               polar[index]['twa'] = polar[index]['twa'].concat(Obj)
               if (typeof polar[index]['Max speed'] == 'undefined' || tbs > polar[index]['Max speed']) {
                 polar[index]['Max speed'] = tbs
-                polar[index]['Max speed angle'] = degToRad(angle)
+                polar[index]['Max speed angle'] = angle
               }
             }
           }
@@ -382,9 +391,13 @@ module.exports = function (app) {
               polar[index].twa = []
             }
             let tbs = ktsToMs(Number(row[index+1]))
-            let Obj = {"twa": angle, "tbs": tbs}
-            app.debug('Adding Obj: %s', JSON.stringify(Obj))
+            let vmg = tbs * Math.abs(Math.cos(angle))
+            let Obj = {"twa": angle, "tbs": tbs, "vmg": vmg}
+            // app.debug('Adding Obj: %s', JSON.stringify(Obj))
             polar[index]['twa'] = polar[index]['twa'].concat(Obj)
+            // See if we need to set/overwrite beat/run angle
+
+
             // See if this a new Max speed
             if (typeof polar[index]['Max speed'] == 'undefined' || tbs > polar[index]['Max speed']) {
               polar[index]['Max speed'] = tbs
@@ -402,34 +415,68 @@ module.exports = function (app) {
         tws.twa = twaArray
       })
 
+      // Find the beat/run angle if not set yet.
+      if (typeof polar[0].beatAngle == 'undefined') {
+        for (let index = 0; index < polar.length-1; index++) {
+          let tws = polar[index].tws
+          let beatVMG = 0
+          let beatVMGelement = 0
+          let runVMG = 0
+          let runVMGelement = 0
+
+          let twaArray = polar[index].twa
+          for (let element = 0; element < twaArray.length-1; element++) {
+            let Obj = twaArray[element]
+            if (Obj.twa < halfPi) {
+              // Beat
+              if (Obj.vmg > beatVMG) {
+                beatElement = element
+              }
+            } else {
+              // Run
+              if (Obj.vmg > runVMG) {
+                runElement = element
+              }
+            }
+          }
+          app.debug('beatVMG for %d is %d (angel %d)', tws, twaArray[beatVMGelement].vmg, twaArray[beatVMGelement].twa)
+          app.debug(' runVMG for %d is %d (angel %d)', tws, twaArray[runVMGelement].vmg, twaArray[runVMGelement].twa)
+          polar[index]['Beat angle'] = twaArray[beatVMGelement].twa
+          polar[index]['Beat VMG'] = twaArray[beatVMGelement].vmg
+          polar[index]['Run angle'] = twaArray[runVMGelement].twa
+          polar[index]['Run VMG'] = twaArray[runVMGelement].vmg
+        }
+        
+      }
+
       // And now fill in some missing ends to avoid doing expensive calculations in the main loop
       for (let index = 0; index < polar.length-1; index++) {
         // Sorted on angle, so first is lowest
+        let tws = polar[index].tws
         let twaArray = polar[index].twa
         let lowTBS = twaArray[0].tbs
         let lowTWA = twaArray[0].twa
 
-        // app.debug('Padding polar from 0 to first given angle (%d deg, %d kts) to twaArray %s' , radToDeg(lowTWA), msToKts(lowTBS), JSON.stringify(twaArray))
+        app.debug('Padding polar for %s from 0 to first given angle (%d deg, %d kts)', msToKts(tws).toFixed(0), radToDeg(lowTWA), msToKts(lowTBS))
         
         // Now put some extra values at the beginning
         var topArray = []
         for (let angle = 0; angle < lowTWA; angle = angle + degToRad(5)) {
           let tbs = (angle / lowTWA) * Math.pow(Math.cos((-1*lowTWA + angle)*3),3) * lowTBS
           let Obj = {'twa': angle, 'tbs': tbs}
-          // app.debug('Adding Obj: %s', JSON.stringify(Obj))
           topArray.push(Obj)
-          // app.debug('twaArray: %s', JSON.stringify(twaArray))
         }
-        twaArray = topArray.concat(twaArray)
-        // app.debug('twaArray: %s', JSON.stringify(polar[index].twa))
+        // app.debug('Adding values: %s', JSON.stringify(topArray))
+        polar[index].twa = topArray.concat(twaArray)
       }
 
       for (let index = 0; index < polar.length-1; index++) {
+        let tws = polar[index].tws
         let twaArray = polar[index].twa
         let highTBS = twaArray[twaArray.length-1].tbs
         let highTWA = twaArray[twaArray.length-1].twa
 
-        // app.debug('Padding polar from highTWA to last given angle (%d, %d kts) to twaArray %s' , highTWA, msToKts(highTBS), JSON.stringify(twaArray))
+        app.debug('Padding polar for %s from highTWA to last given angle (%d, %d kts)', msToKts(tws).toFixed(0), highTWA, msToKts(highTBS))
 
         // Now put some extra values at the beginning
         var tailArray = []
@@ -438,7 +485,8 @@ module.exports = function (app) {
           let Obj = {'twa': angle, 'tbs': tbs}
           tailArray.unshift(Obj)
         }
-        twaArray = twaArray.concat(tailArray)
+        // app.debug('Adding values: %s', JSON.stringify(tailArray))
+        polar[index].twa = twaArray.concat(tailArray)
       }
 
       // app.debug(JSON.stringify(polar))
