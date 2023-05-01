@@ -37,12 +37,12 @@ In the plugin configuration you can toggle the following options:
  - Plugin option to use SOG as boat speed
  - Wind angle for maximum speed at this wind speed
  - Fill up the ends of the polar diagram
+ - Visualisation of the polar diagram
 
 ### To-do list
  - Improved interpolation
  - Make moment to do calculation smarter/configurable
  - API to see JSON of polar
- - Visualisation of the polar diagram
  - Extrapolation of polar data
  - Create polar from live data
  -- Save polar info to file

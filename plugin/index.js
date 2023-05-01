@@ -66,6 +66,20 @@ module.exports = function (app) {
     // Load polar table
     var polar = csvToPolarObject(options.csvTable)
     app.debug('polar: %s', JSON.stringify(polar))
+
+    plugin.registerWithRouter = function(router) {
+      // Will appear here; plugins/signalk-polar-performance-plugin/
+      app.debug("registerWithRouter")
+      router.get("/polar", (req, res) => {
+        res.contentType("application/json")
+        res.send(JSON.stringify(polar))
+      })
+      router.get("/chartData", (req, res) => {
+        res.contentType("application/json")
+        res.send(JSON.stringify(getChartData()))
+      })
+    }
+
    
     // Global variables
     var BSP, STW, TWA, targetTWA, TWS, HDG, port // Angles in rad, speed in m/s
@@ -497,7 +511,8 @@ module.exports = function (app) {
         // Now put some extra values at the beginning
         var topArray = []
         for (let angle = 0; angle < lowTWA; angle = angle + degToRad(5)) {
-          let tbs = (angle / lowTWA) * Math.pow(Math.cos((-1*lowTWA + angle)*3),3) * lowTBS
+          let tbs = (angle / lowTWA) * Math.pow(Math.cos((-1*lowTWA + angle)*2),2) * lowTBS
+          if (tbs < 0 ) { tbs = 0 }
           let Obj = {'twa': angle, 'tbs': tbs}
           topArray.push(Obj)
         }
@@ -527,6 +542,41 @@ module.exports = function (app) {
       // app.debug(JSON.stringify(polar))
 		  return (polar)
 		}
+
+    function getChartData () {
+      const color = ["#0000FF","#3300FF","#6600FF","#9900FF","#CC00FF","#FF00FF","#0033FF","#3333FF","#6633FF","#9933FF","#CC33FF","#FF33FF","#0066FF","#3366FF","#6666FF","#9966FF","#CC66FF","#FF66FF"]
+
+      var data = {
+        labels: [],
+        datasets: []
+      }
+      for (let angle = 0; angle <= 180; angle += 5) {
+        data.labels.push(angle)
+      }
+      for (let index = 0; index < polar.length -1; index++) {
+        // Add x axis label TWS
+        let tws = msToKts(polar[index].tws).toFixed(0)
+        let twaArray = polar[index].twa
+        data.datasets[index] = {
+          data: [],
+          pointRadius: [],
+          borderColor: color[index],
+          fill: false,
+          parsing: false,
+          label: tws + ' kts'
+        }
+        for (let twaIndex = 0; twaIndex <= twaArray.length-1; twaIndex++) {
+          let twaObj = twaArray[twaIndex]
+          let radius = 2
+          if (twaObj.twa == polar[index]['Beat angle'] || twaObj.twa == polar[index]['Run angle']) {
+            radius = 5
+          }
+          data.datasets[index].data.push({x: Math.round(radToDeg(twaObj.twa)), y: Number(msToKts(twaObj.tbs).toFixed(2))})
+          data.datasets[index].pointRadius.push(radius)
+        }
+      }
+      return data
+    }
   }
 
   plugin.stop = function () {

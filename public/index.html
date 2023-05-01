@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.5.0/Chart.min.js"></script>
+<script type='text/javascript' src='/jquery/dist/jquery.min.js'></script>
+<title>Polar performance</title>
+<body>
+
+<canvas id="myChart" style="width:100%;max-width:1200px"></canvas>
+
+<script>
+$.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) {
+  showChart(json)
+})
+
+function showChart (data) {
+  console.log(data)
+
+  new Chart("myChart", {
+    type: "scatter",
+    data: data,
+    options: {
+      legend: {display: true},
+      spanGaps: true,
+      scales: {
+        x: {
+          type: 'linear'
+        },
+        xAxes: [{
+          scaleLabel: {
+            display: true,
+            labelString: 'True wind angle (TWA)'
+          }
+        }],
+        yAxes: [{
+          scaleLabel: {
+            display: true,
+            labelString: 'Target boat speed (POL SPD)'
+          }
+        }],
+      }
+    }
+  })
+}
+</script>
+
