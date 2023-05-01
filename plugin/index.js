@@ -198,40 +198,52 @@ module.exports = function (app) {
 	        if (TWA < halfPi) {
             // app.debug('Upwind')
             if (options.beatAngle == true) {
-	            // Calculate beat angle
-	            let beatLower = polar[indexTWS]['Beat angle']
-	            let beatUpper = polar[indexTWS+1]['Beat angle']
-	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
+	            // Take beat angle
+              if (typeof polar[indexTWS]['Beat angle'] != 'undefined') {
+	              let beatLower = polar[indexTWS]['Beat angle']
+	              let beatUpper = polar[indexTWS+1]['Beat angle']
+	              performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
+              }
             }
 	          // Calculate optimum wind angle (B&G thing)
 	          if (options.optimumWindAngle == true) {
-              performance.optimumWindAngle = (TWA - performance.beatAngle) * port
+              if (typeof performance.beatAngle != 'undefined') {
+                performance.optimumWindAngle = (TWA - performance.beatAngle) * port
+              }
 	          }
 	          // Calculate beat VMG
 	          if (options.beatVMG == true) {
-	            let VMGLower = polar[indexTWS]['Beat VMG']
-	            let VMGUpper = polar[indexTWS+1]['Beat VMG']
-	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
+              if (typeof polar[indexTWS]['Beat VMG'] != 'undefined') {
+	              let VMGLower = polar[indexTWS]['Beat VMG']
+	              let VMGUpper = polar[indexTWS+1]['Beat VMG']
+	              performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
+              }
             }
 	        } else {
             // app.debug('Downwind')
             if (options.beatAngle == true) {
-	            // Calculate run angle
-	            let runLower = polar[indexTWS]['Run angle']
-	            let runUpper = polar[indexTWS+1]['Run angle']
-	            //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
-	            performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
+              if (typeof polar[indexTWS]['Run angle'] != 'undefined') {
+	              // Calculate run angle
+	              let runLower = polar[indexTWS]['Run angle']
+	              let runUpper = polar[indexTWS+1]['Run angle']
+	              //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
+	              performance.runAngle = runLower + ((runUpper - runLower) * twsGapRatio)
+              }
             }
 	          if (options.optimumWindAngle == true) {
-	            // Calculate optimum wind angle
-	            performance.optimumWindAngle = (performance.runAngle - TWA) * port * -1
+              if (typeof performance.runAngle != 'undefined') {
+	              // Calculate optimum wind angle
+	              performance.optimumWindAngle = (performance.runAngle - TWA) * port * -1
+              }
 	          }
 	          if (options.beatVMG == true) {
 	            // Calculate run VMG
-	            let VMGLower = polar[indexTWS]['Run VMG']
-	            let VMGUpper = polar[indexTWS+1]['Run VMG']
+              if (typeof polar[indexTWS]['Run VMG'] != 'undefined') {
+	              let VMGLower = polar[indexTWS]['Run VMG']
+	              let VMGUpper = polar[indexTWS+1]['Run VMG']
 	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
-	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
+	              performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
+              }
             }
           }
           // Calculate polar target boat speed
@@ -371,8 +383,10 @@ module.exports = function (app) {
             }
             let tbs = ktsToMs(Number(row[index+1]))
             let Obj = {"twa": angle, "tbs": tbs}
+            app.debug('Adding Obj: %s', JSON.stringify(Obj))
             polar[index]['twa'] = polar[index]['twa'].concat(Obj)
-            if (tbs > polar[index]['Max speed']) {
+            // See if this a new Max speed
+            if (typeof polar[index]['Max speed'] == 'undefined' || tbs > polar[index]['Max speed']) {
               polar[index]['Max speed'] = tbs
               polar[index]['Max speed angle'] = angle
             }
