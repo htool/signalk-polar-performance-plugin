@@ -28,6 +28,10 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Enable sending Target TWA (performance.targetAngle)'
       },
+      tackTrue: {
+        type: 'boolean',
+        title: 'Enable calculating Opposite Tack True (performance.tackTrue)'
+      },
       optimumWindAngle: {
         type: 'boolean',
         title: 'Enable calculation of Optimum Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)'
@@ -64,7 +68,7 @@ module.exports = function (app) {
     app.debug('polar: %s', JSON.stringify(polar))
    
     // Global variables
-    var BSP, STW, TWA, TWS, port // Angles in rad, speed in m/s
+    var BSP, STW, TWA, TargetTWA, TWS, HDG, port // Angles in rad, speed in m/s
     var halfPi = Math.PI / 2
 
     // Subscribe to paths
@@ -93,6 +97,14 @@ module.exports = function (app) {
         policy: 'instant'
       })
     }
+    if (options.tackTrue == true) {
+      localSubscription.subscribe.push({
+        {
+          path: 'navigation.headingTrue',
+          policy: 'instant'
+        }
+      }
+    }
 
     app.subscriptionmanager.subscribe(
       localSubscription,
@@ -120,6 +132,9 @@ module.exports = function (app) {
 	        SOG = delta.value
           BSP = SOG
 	        // app.debug('speedThroughWater (STW): %d', STW)
+	      } else if (delta.path == 'navigation.headingTrue') {
+	        HDG = delta.value
+	        // app.debug('heading (HDG): %d', HDG)
 	      } else if (delta.path == 'environment.wind.speedTrue') {
 	        TWS = delta.value
 	        // app.debug('environment.wind.speedTrue (TWS): %d', TWS)
@@ -185,6 +200,9 @@ module.exports = function (app) {
         metas.push({path: 'performance.maxSpeed', value: {"units": "m/s"}})
         values.push({path: 'performance.maxSpeedAngle', value: roundDec(perfObj.maxSpeedAngle)})
         metas.push({path: 'performance.maxSpeedAngle', value: {"units": "rad"}})
+      }
+      if (options.tackTrue == true) {
+        values.push({path: 'performance.tackTrue', value: roundDec(perfObj.tackTrue)})
       }
 
       app.debug('sendUpdates: %s', JSON.stringify(values))
@@ -253,6 +271,20 @@ module.exports = function (app) {
 	          //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
 	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
             }
+          }
+          // Calculate opposite Tack True
+          if (port) {
+            let tackTrue = HDG - TargetTWA
+            if (tackTrue < 0) {
+              tackTrue = tackTrue + (2*Math.PI)
+            }
+            performance.tackTrue = tackTrue
+          } else {
+            let tackTrue = HDG + TargetTWA
+            if (tackTrue > (2*Math.PI) {
+              tackTrue = tackTrue - (2*Math.PI)
+            }
+            performance.tackTrue = tackTrue
           }
           // Calculate polar target boat speed
 
