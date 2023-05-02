@@ -562,7 +562,6 @@ module.exports = function (app) {
           pointRadius: [],
           borderColor: color[index],
           fill: false,
-          parsing: false,
           label: tws + ' kts'
         }
         for (let twaIndex = 0; twaIndex <= twaArray.length-1; twaIndex++) {

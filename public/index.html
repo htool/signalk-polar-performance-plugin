@@ -14,7 +14,6 @@ $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) 
 
 function showChart (data) {
   console.log(data)
-
   new Chart("myChart", {
     type: "scatter",
     data: data,
@@ -37,6 +36,23 @@ function showChart (data) {
             labelString: 'Target boat speed (POL SPD)'
           }
         }],
+      },
+      tooltips: {
+        enabled: true,
+        callbacks: {
+          label: function (tooltipItems, data) {
+            console.log("tooltipItems: " + JSON.stringify(tooltipItems))
+            console.log("data: " + data)
+            let label = tooltipItems.xLabel + "° " + tooltipItems.yLabel + " kts"
+            return label
+          }
+        },
+        backgroundColor: '#ddd',
+        titleFontSize: 16,
+        titleFontColor: '#0066ff',
+        bodyFontColor: '#333',
+        bodyFontSize: 16,
+        displayColors: false
       }
     }
   })
