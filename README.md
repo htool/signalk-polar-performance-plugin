@@ -15,6 +15,10 @@ The following paths are read
 ### Polar diagram
 The polar diagram can be configured through CSV notation as used on [ORC sailboat data](https://jieter.github.io/orc-data/site/).
 
+The resulting polar after processing can be seen here in the WebApp, looking something like:
+![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_polar.png)
+
+
 ### Plugin options
 In the plugin configuration you can toggle the following options:
  - Enable calculation/sending of beat/upwind and run/gybe/downwind angle
