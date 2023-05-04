@@ -3,7 +3,7 @@
 <script type='text/javascript' src="./Chart.min.js"></script>
 <script type='text/javascript' src='/jquery/dist/jquery.min.js'></script>
 <title>Polar performance</title>
-<body>
+<body style="background-color:#020202;">
 
 <canvas id="myChart" style="width:100%;max-width:1200px"></canvas>
 
@@ -18,22 +18,65 @@ function showChart (data) {
     type: "scatter",
     data: data,
     options: {
-      legend: {display: true},
+      legend: {
+        display: true,
+        labels: {
+          fontSize: 16,
+          fontColor: 'white'
+        }
+      },
       spanGaps: true,
       scales: {
         x: {
-          type: 'linear'
+          type: 'linear',
+          ticks: {
+            color: 'white',
+            font: {
+              size: 14
+            }
+          }
+        },
+        y: {
+          type: 'linear',
+          ticks: {
+            color: 'white',
+            font: {
+              size: 14
+            }
+          }
         },
         xAxes: [{
           scaleLabel: {
             display: true,
-            labelString: 'True wind angle (TWA)'
+            labelString: 'True wind angle (TWA)',
+            fontColor: 'white',
+            fontSize: 16
+          },
+          ticks: {
+            display: true,
+            fontColor: 'white',
+            fontSize: 16,
+          }, 
+          gridLines: {
+            color: 'rgba(180,180,180,0.7)',
+            lineWidth: 1
           }
         }],
         yAxes: [{
           scaleLabel: {
             display: true,
-            labelString: 'Target boat speed (POL SPD)'
+            labelString: 'Target boat speed (POL SPD)',
+            fontColor: 'white',
+            fontSize: 14
+          },
+          ticks: {
+            display: true,
+            fontColor: 'white',
+            fontSize: 14,
+          }, 
+          gridLines: {
+            color: 'rgba(180,180,180,0.7)',
+            lineWidth: 1
           }
         }],
       },
@@ -47,15 +90,19 @@ function showChart (data) {
             return label
           }
         },
-        backgroundColor: '#ddd',
-        titleFontSize: 16,
+        backgroundColor: '#666',
+        titleFontSize: 18,
         titleFontColor: '#0066ff',
-        bodyFontColor: '#333',
-        bodyFontSize: 16,
+        bodyFontColor: '#ddd',
+        bodyFontSize: 18,
         displayColors: false
       }
     }
   })
+
+  var ctx = document.getElementById("myChart")
+  ctx.style.backgroundColor = 'rgba(0,0,0,0.8)'
+  ctx.style.fontColor = 'white'
 }
 </script>
 

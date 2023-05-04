@@ -544,7 +544,19 @@ module.exports = function (app) {
 		}
 
     function getChartData () {
-      const color = ["#0000FF","#3300FF","#6600FF","#9900FF","#CC00FF","#FF00FF","#0033FF","#3333FF","#6633FF","#9933FF","#CC33FF","#FF33FF","#0066FF","#3366FF","#6666FF","#9966FF","#CC66FF","#FF66FF"]
+      var backgroundColor = []
+      var borderColor = []
+      for (let c = 0; c < 8; c++) {
+        let r = 0 + (c*10)
+        let g = 130 + (c*20 % 100)
+        let b = 80 + (c*30 % 120)
+        let color =  r + ', ' + g + ', ' + b
+        backgroundColor.push('rgba(' + color + ', 1)')
+        borderColor.push('rgba(' + color + ', 0.8)')
+      }
+      app.debug(backgroundColor)
+      app.debug(borderColor)
+
 
       var data = {
         labels: [],
@@ -560,7 +572,8 @@ module.exports = function (app) {
         data.datasets[index] = {
           data: [],
           pointRadius: [],
-          borderColor: color[index],
+          backgroundColor: backgroundColor[index],
+          borderColor: borderColor[index],
           fill: false,
           label: tws + ' kts'
         }
