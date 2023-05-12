@@ -47,7 +47,7 @@ module.exports = function (app) {
       },
       csvTable: {
         type: "string",
-        title: "Enter csv with polar in http://jieter.github.io/orc-data/site/ style."
+        title: "Copy/paste the csv content of the polar in http://jieter.github.io/orc-data/site/ style."
       }
     }
   }
