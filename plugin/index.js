@@ -546,7 +546,7 @@ module.exports = function (app) {
     function getChartData () {
       var backgroundColor = []
       var borderColor = []
-      for (let c = 0; c < 8; c++) {
+      for (let c = 0; c < 20; c++) {
         let r = 0 + (c*10)
         let g = 130 + (c*20 % 100)
         let b = 80 + (c*30 % 120)
@@ -565,7 +565,7 @@ module.exports = function (app) {
       for (let angle = 0; angle <= 180; angle += 5) {
         data.labels.push(angle)
       }
-      for (let index = 0; index < polar.length -1; index++) {
+      for (let index = 0; index < polar.length; index++) {
         // Add x axis label TWS
         let tws = msToKts(polar[index].tws).toFixed(0)
         let twaArray = polar[index].twa
