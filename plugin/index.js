@@ -1,3 +1,4 @@
+const halfPi = Math.PI / 2
 var sourceAddress
 
 module.exports = function (app) {
@@ -83,7 +84,6 @@ module.exports = function (app) {
    
     // Global variables
     var BSP, STW, TWA, targetTWA, TWS, HDG, port // Angles in rad, speed in m/s
-    var halfPi = Math.PI / 2
 
     // Subscribe to paths
     let localSubscription = {
@@ -394,6 +394,7 @@ module.exports = function (app) {
         if (row[0] == 'twa/tws') {
           // The row with TWS columns
           // Create empty TWS objects in polar object
+          app.debug('First row with TWS columns')
           polar = []
           for (let index = 1; index < row.length; index++) {
             
@@ -401,20 +402,23 @@ module.exports = function (app) {
             polar.push(twsObj)
           }
           app.debug('polar: %s', JSON.stringify(polar))
-        } else if (row[0] == '0') {
+        } else if (row.filter(i => i === '0').length > 1) {
           app.debug('beat and run angles are included')
-        } else if (row.includes('0')) {
           // Beat / Run angle
           let angle = degToRad(Number(row[0]))
           let angleName
           let VMGName
+          app.debug('angle < halfPi   %d < %d', angle, halfPi)
           if (angle < halfPi) {
             angleName = 'Beat angle'
             VMGName = 'Beat VMG'
+            app.debug('cvsToPolar: row includes Beat angle: %s', row.join(';'))
           } else {
             angleName = 'Run angle'
             VMGName = 'Run VMG'
+            app.debug('cvsToPolar: row includes Run angle: %s', row.join(';'))
           }
+
           for (let index = 0; index < row.length-1; index++) {
             if (row[index+1] != 0) {
               polar[index][angleName] = angle
@@ -465,16 +469,19 @@ module.exports = function (app) {
       })
 
       // Find the beat/run angle if not set yet.
-      if (typeof polar[0].beatAngle == 'undefined') {
-        for (let index = 0; index < polar.length-1; index++) {
-          let tws = polar[index].tws
+      for (let index = 0; index < polar.length; index++) {
+        let tws = polar[index].tws
+        app.debug('Beat angle for TWS %s is %s', msToKts(tws).toFixed(0), polar[index]['Beat angle'])
+        // app.debug(polar[index]['Beat angle'])
+        if (typeof polar[index]['Beat angle'] == 'undefined') {
+          app.debug('Finding beat angle for TWS %s')
           let beatVMG = 0
           let beatElement = 0
           let runVMG = 0
           let runElement = 0
 
           let twaArray = polar[index].twa
-          for (let element = 0; element < twaArray.length-1; element++) {
+          for (let element = 0; element < twaArray.length; element++) {
             let Obj = twaArray[element]
             if (Obj.twa < halfPi) {
               // Beat
@@ -488,8 +495,8 @@ module.exports = function (app) {
               }
             }
           }
-          app.debug('beatVMG for %d is %d (angel %d)', tws, twaArray[beatElement].vmg, twaArray[beatElement].twa)
-          app.debug(' runVMG for %d is %d (angel %d)', tws, twaArray[runElement].vmg, twaArray[runElement].twa)
+          app.debug('beatVMG for %s is %s (angle %s)', msToKts(tws).toFixed(0), msToKts(twaArray[beatElement].vmg).toFixed(2), radToDeg(twaArray[beatElement].twa).toFixed(1))
+          app.debug('runVMG for %s is %s (angle %s)', msToKts(tws).toFixed(0), msToKts(twaArray[runElement].vmg).toFixed(2), radToDeg(twaArray[runElement].twa).toFixed(1))
           polar[index]['Beat angle'] = twaArray[beatElement].twa
           polar[index]['Beat VMG'] = twaArray[beatElement].vmg
           polar[index]['Run angle'] = twaArray[runElement].twa
@@ -499,18 +506,19 @@ module.exports = function (app) {
       }
 
       // And now fill in some missing ends to avoid doing expensive calculations in the main loop
-      for (let index = 0; index < polar.length-1; index++) {
+      for (let index = 0; index < polar.length; index++) {
         // Sorted on angle, so first is lowest
         let tws = polar[index].tws
         let twaArray = polar[index].twa
         let lowTBS = twaArray[0].tbs
         let lowTWA = twaArray[0].twa
 
-        app.debug('Padding polar for %s from 0 to first given angle (%d deg, %d kts)', msToKts(tws).toFixed(0), radToDeg(lowTWA), msToKts(lowTBS))
+        // app.debug('Padding polar for %s from 0 to first given angle (%d deg, %d kts)', msToKts(tws).toFixed(0), radToDeg(lowTWA), msToKts(lowTBS))
         
         // Now put some extra values at the beginning
         var topArray = []
         for (let angle = 0; angle < lowTWA; angle = angle + degToRad(5)) {
+          app.debug('Padding for angle %d (< lowTWA)', radToDeg(angle).toFixed(1), radToDeg(lowTWA).toFixed(1))
           let tbs = (angle / lowTWA) * Math.pow(Math.cos((-1*lowTWA + angle)*2),2) * lowTBS
           if (tbs < 0 ) { tbs = 0 }
           let Obj = {'twa': angle, 'tbs': tbs}
@@ -583,7 +591,7 @@ module.exports = function (app) {
           if (twaObj.twa == polar[index]['Beat angle'] || twaObj.twa == polar[index]['Run angle']) {
             radius = 5
           }
-          data.datasets[index].data.push({x: Math.round(radToDeg(twaObj.twa)), y: Number(msToKts(twaObj.tbs).toFixed(2))})
+          data.datasets[index].data.push({x: Number(radToDeg(twaObj.twa).toFixed(1)), y: Number(msToKts(twaObj.tbs).toFixed(2))})
           data.datasets[index].pointRadius.push(radius)
         }
       }
