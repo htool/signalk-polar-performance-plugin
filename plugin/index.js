@@ -37,6 +37,10 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Enable calculation of Optimum Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)'
       },
+      VMG: {
+        type: 'boolean',
+        title: 'Enable calculation of VMG, polarVMG and polar VMG ratio'
+      },
       useSOG: {
         type: 'boolean',
         title: 'Use speed over ground (SOG) as boat speed.'
@@ -206,6 +210,11 @@ module.exports = function (app) {
       if (typeof perfObj.polarSpeed != 'undefined') {
         values.push({path: 'performance.polarSpeed', value: roundDec(perfObj.polarSpeed)})
         values.push({path: 'performance.polarSpeedRatio', value: roundDec(perfObj.polarSpeedRatio)})
+        if (options.VMG == true) {
+          values.push({path: 'performance.velocityMadeGood', value: roundDec(perfObj.velocityMadeGood)})
+          values.push({path: 'performance.polarVelocityMadeGood', value: roundDec(perfObj.polarVelocityMadeGood)})
+          values.push({path: 'performance.polarVelocityMadeGoodRatio', value: roundDec(perfObj.polarVelocityMadeGoodRatio)})
+        }
       }
       if (typeof perfObj.maxSpeed != 'undefined') {
         values.push({path: 'performance.maxSpeed', value: roundDec(perfObj.maxSpeed)})
@@ -369,11 +378,21 @@ module.exports = function (app) {
       }
       // Calculate polar performance ratio
       if (typeof performance.polarSpeed != 'undefined') {
-        performance.polarSpeedRatio = (1 / performance.polarSpeed) * BSP
+        performance.polarSpeedRatio = BSP / performance.polarSpeed
+        if (options.VMG == true) {
+          performance.velocityMadeGood = Math.abs(BSP * Math.cos(TWA))
+          performance.polarVelocityMadeGood = Math.abs(performance.polarSpeed * Math.cos(TWA))
+          performance.polarVelocityMadeGoodRatio = performance.velocityMadeGood / performance.polarVelocityMadeGood
+        }
       } else {
         // No value would create stale values
         performance.polarSpeed = 0
         performance.polarSpeedRatio = 0
+        if (options.VMG == true) {
+          performance.velocityMadeGood = 0
+          performance.polarVelocityMadeGood = 0
+          performance.polarRatioVelocityMadeGood = 0
+        }
       }
       return performance
     }
