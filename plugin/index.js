@@ -52,18 +52,19 @@ module.exports = function (app) {
       },
       dampingTWA: {
         type: 'number',
-        title: 'True Wind Angle damping factor (0 = no damping, 1 = full damping)',
-        default: 0
+        description: 'If data appears erratic or too sensitive, damping may be applied to amke information appear more stable. With damping set to 0, the data is presented in raw form wih no damping applied.',
+        title: 'True Wind Angle damping seconds',
+        default: 1
       },
       dampingTWS: {
         type: 'number',
-        title: 'True Wind Speed damping factor (0 = no damping, 1 = full damping)',
-        default: 0
+        title: 'True Wind Speed damping seconds',
+        default: 1
       },
       dampingBSP: {
         type: 'number',
-        title: 'Boat speed damping factor (0 = no damping, 1 = full damping)',
-        default: 0
+        title: 'Boat speed damping damping',
+        default: 1
       },
       csvTable: {
         type: "string",
@@ -157,11 +158,11 @@ module.exports = function (app) {
       deltas.forEach(delta => {
 	      // app.debug('handleData: %s', JSON.stringify(delta))
 	      if (delta.path == 'navigation.speedThroughWater') {
-	        STW = applyDamping (delta.value, 'BSP', options.dampingBSP || 0, 3)
+	        STW = applyDamping (delta.value, 'BSP', options.dampingBSP || 0)
           BSP = STW
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.speedOverGround') {
-	        SOG = applyDamping (delta.value, 'BSP', options.dampingBSP || 0, 3)
+	        SOG = applyDamping (delta.value, 'BSP', options.dampingBSP || 0)
           BSP = SOG
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.headingTrue') {
@@ -169,7 +170,7 @@ module.exports = function (app) {
 	        // app.debug('heading (HDG): %d', HDG)
 	      } else if (delta.path == 'environment.wind.speedTrue') {
           // applyDamping (Xn, unit, a, n)
-	        TWS = applyDamping (delta.value, 'TWS', options.dampingTWS || 0, 3)
+	        TWS = applyDamping (delta.value, 'TWS', options.dampingTWS || 0)
 	        // app.debug('environment.wind.speedTrue (TWS): %d applyDamping: %d', delta.value, TWS)
 	        // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
           sendUpdates(getPerformanceData(TWS, TWA, BSP))
@@ -179,8 +180,8 @@ module.exports = function (app) {
           } else {
             port = 1
           }
-	        TWA = Math.abs(applyDamping (delta.value, 'TWA', options.dampingTWA || 0, 1))
-	        // app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s', radToDeg(delta.value).toFixed(0), radToDeg(TWA).toFixed(0))
+	        TWA = Math.abs(applyDamping (delta.value, 'TWA', options.dampingTWA || 0))
+	        app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s', radToDeg(delta.value).toFixed(0), radToDeg(TWA).toFixed(0))
 	      }
       })
     }
@@ -637,22 +638,26 @@ module.exports = function (app) {
       return data
     }
 
-		function applyDamping (Xn, unit, a, n) {
-		  if (typeof damping[unit] == 'undefined') {
-		    // Doesn't exist yet, make array for unit
-		    damping[unit] = {Yn: []}
-		  }
-		  // Yn = a * Yn-1 + (1-a) * Xn
-		  let Yn = a * (damping[unit]['Yn'][n-1] || Xn) + (1-a) * Xn
-		  // Add Yn to begin of Yn array
-		  damping[unit]['Yn'].push(Yn)
-		  // Remove last value from Yn array if needed
-		  if (damping[unit]['Yn'].length > n+1) {
-		    damping[unit]['Yn'].shift()
-		  }
-		  // app.debug('Unit: %s array: %s', unit, damping[unit]['Yn'].join(','))
-		  return Yn
-		}
+		function applyDamping (Xn, unit, RC) {
+      if (RC == 0) {
+        return Xn
+      } else {
+			  if (typeof damping[unit] == 'undefined') {
+			    // Doesn't exist yet, make obj for unit
+			    damping[unit] = {Yn: Xn, dt: Date.now()}
+			  }
+	      // Calculate a
+	      let dt = (Date.now() - damping[unit].dt)/1000
+	      damping[unit].dt = Date.now()
+	      let a = dt / (RC + dt)
+			  // Yn = (1-a) * Yn-1 + a * Xn
+			  let Yn = (1-a) * (damping[unit].Yn || Xn) + a * Xn
+			  // Remember Yn
+			  damping[unit].Yn = Yn
+			  // app.debug('Unit: %s  dt: %d  a: %d  obj: %s', unit, dt, a, JSON.stringify(damping[unit]))
+			  return Yn
+			}
+	  }
   }
 
   plugin.stop = function () {
@@ -689,7 +694,11 @@ function msToKts(ms) {
 }
 
 function roundDec (value) {
-  value = Number(value.toFixed(3))
-  return value
+  if (typeof value == 'undefined') {
+    return undefined
+  } else {
+    value = Number(value.toFixed(3))
+    return value
+  }
 }
 
