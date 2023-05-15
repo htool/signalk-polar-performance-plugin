@@ -5,6 +5,7 @@ module.exports = function (app) {
   var plugin = {}
   var unsubscribes = []
   var timers = []
+  var damping = {}
 
   plugin.id = 'signalk-polar-performance-plugin'
   plugin.name = 'Polar performance plugin'
@@ -48,6 +49,21 @@ module.exports = function (app) {
       maxSpeed: {
         type: 'boolean',
         title: 'Enable writing of maximum speed angle and boat speed for a given TWS'
+      },
+      dampingTWA: {
+        type: 'number',
+        title: 'True Wind Angle damping factor (0 = no damping, 1 = full damping)',
+        default: 0
+      },
+      dampingTWS: {
+        type: 'number',
+        title: 'True Wind Speed damping factor (0 = no damping, 1 = full damping)',
+        default: 0
+      },
+      dampingBSP: {
+        type: 'number',
+        title: 'Boat speed damping factor (0 = no damping, 1 = full damping)',
+        default: 0
       },
       csvTable: {
         type: "string",
@@ -141,20 +157,21 @@ module.exports = function (app) {
       deltas.forEach(delta => {
 	      // app.debug('handleData: %s', JSON.stringify(delta))
 	      if (delta.path == 'navigation.speedThroughWater') {
-	        STW = delta.value
+	        STW = applyDamping (delta.value, 'BSP', options.dampingBSP || 0, 3)
           BSP = STW
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.speedOverGround') {
-	        SOG = delta.value
+	        SOG = applyDamping (delta.value, 'BSP', options.dampingBSP || 0, 3)
           BSP = SOG
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.headingTrue') {
 	        HDG = delta.value
 	        // app.debug('heading (HDG): %d', HDG)
 	      } else if (delta.path == 'environment.wind.speedTrue') {
-	        TWS = delta.value
-	        // app.debug('environment.wind.speedTrue (TWS): %d', TWS)
-	        app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
+          // applyDamping (Xn, unit, a, n)
+	        TWS = applyDamping (delta.value, 'TWS', options.dampingTWS || 0, 3)
+	        // app.debug('environment.wind.speedTrue (TWS): %d applyDamping: %d', delta.value, TWS)
+	        // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
           sendUpdates(getPerformanceData(TWS, TWA, BSP))
 	      } else if (delta.path == 'environment.wind.angleTrueWater') {
           if (delta.value < 0) {
@@ -162,7 +179,8 @@ module.exports = function (app) {
           } else {
             port = 1
           }
-	        TWA = Math.abs(delta.value)
+	        TWA = Math.abs(applyDamping (delta.value, 'TWA', options.dampingTWA || 0, 1))
+	        // app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s', radToDeg(delta.value).toFixed(0), radToDeg(TWA).toFixed(0))
 	      }
       })
     }
@@ -210,10 +228,12 @@ module.exports = function (app) {
       if (typeof perfObj.polarSpeed != 'undefined') {
         values.push({path: 'performance.polarSpeed', value: roundDec(perfObj.polarSpeed)})
         values.push({path: 'performance.polarSpeedRatio', value: roundDec(perfObj.polarSpeedRatio)})
-        if (options.VMG == true) {
+        if (typeof perfObj.velocityMadeGood != 'undefined') {
           values.push({path: 'performance.velocityMadeGood', value: roundDec(perfObj.velocityMadeGood)})
           values.push({path: 'performance.polarVelocityMadeGood', value: roundDec(perfObj.polarVelocityMadeGood)})
+          metas.push({path: 'performance.polarVelocityMadeGood', value: {"units": "m/s"}})
           values.push({path: 'performance.polarVelocityMadeGoodRatio', value: roundDec(perfObj.polarVelocityMadeGoodRatio)})
+          metas.push({path: 'performance.polarVelocityMadeGoodRatio', value: {"units": "ratio"}})
         }
       }
       if (typeof perfObj.maxSpeed != 'undefined') {
@@ -616,6 +636,23 @@ module.exports = function (app) {
       }
       return data
     }
+
+		function applyDamping (Xn, unit, a, n) {
+		  if (typeof damping[unit] == 'undefined') {
+		    // Doesn't exist yet, make array for unit
+		    damping[unit] = {Yn: []}
+		  }
+		  // Yn = a * Yn-1 + (1-a) * Xn
+		  let Yn = a * (damping[unit]['Yn'][n-1] || Xn) + (1-a) * Xn
+		  // Add Yn to begin of Yn array
+		  damping[unit]['Yn'].push(Yn)
+		  // Remove last value from Yn array if needed
+		  if (damping[unit]['Yn'].length > n+1) {
+		    damping[unit]['Yn'].shift()
+		  }
+		  // app.debug('Unit: %s array: %s', unit, damping[unit]['Yn'].join(','))
+		  return Yn
+		}
   }
 
   plugin.stop = function () {
@@ -655,3 +692,4 @@ function roundDec (value) {
   value = Number(value.toFixed(3))
   return value
 }
+
