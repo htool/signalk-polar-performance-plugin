@@ -673,12 +673,26 @@ module.exports = function (app) {
 			    // Doesn't exist yet, make obj for unit
 			    damping[unit] = {Yn: Xn, dt: Date.now()}
 			  }
+        // Edge case when hovering around -pi and +pi
+        if (Xn > Math.PI && damping[unit].Yn < (0-Math.PI)) {
+          Xn = Xn - (2*Math.PI)
+        } else if (Xn < (0-Math.PI) && damping[unit].Yn > Math.PI) {
+          Xn = Xn + (2*Math.PI)
+        }
 	      // Calculate a
 	      let dt = (Date.now() - damping[unit].dt)/1000
 	      damping[unit].dt = Date.now()
 	      let a = dt / (RC + dt)
 			  // Yn = (1-a) * Yn-1 + a * Xn
 			  let Yn = (1-a) * (damping[unit].Yn || Xn) + a * Xn
+
+        // Fix is we go outside -pi to pi
+        if (Yn > Math.PI) {
+          Yn = Yn - Math.PI
+        } else if (Yn < (0-Math.PI)) {
+          Yn = Yn + Math.PI
+        }
+
 			  // Remember Yn
 			  damping[unit].Yn = Yn
 			  // app.debug('Unit: %s  dt: %d  a: %d  obj: %s', unit, dt, a, JSON.stringify(damping[unit]))
