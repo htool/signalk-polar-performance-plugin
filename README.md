@@ -43,12 +43,14 @@ In the plugin configuration you can toggle the following options:
  - Fill up the ends of the polar diagram
  - Visualisation of the polar diagram
  - Configurable damping alorithm on inputs
+ - Extrapolation of polar data towards 0
+ - Configurable overall performance adjustment ratio
 
 ### To-do list
  - Improved interpolation
  - Make moment to do calculation smarter/configurable
  - API to see JSON of polar
- - Extrapolation of polar data
+ - Extrapolation of polar data towards 50 kts?
  - Create polar from live data
  -- Save polar info to file
  -- Save new record speed for angle in polar

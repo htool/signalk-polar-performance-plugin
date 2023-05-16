@@ -50,6 +50,12 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Enable writing of maximum speed angle and boat speed for a given TWS'
       },
+      perfAdjust: {
+        type: 'number',
+        description: 'This ratio allows you to lower the polar boat speeds in case you are not expecting to meet 100% due to e.g. weight. 1 = 100%, 0.8 = 80% etc',
+        title: 'Performance adjustment ratio',
+        default: 1
+      },
       dampingTWA: {
         type: 'number',
         description: 'If data appears erratic or too sensitive, damping may be applied to amke information appear more stable. With damping set to 0, the data is presented in raw form wih no damping applied.',
@@ -462,7 +468,7 @@ module.exports = function (app) {
           for (let index = 0; index < row.length-1; index++) {
             if (row[index+1] != 0) {
               polar[index][angleName] = angle
-              let tbs = ktsToMs(Number(row[index+1]))
+              let tbs = ktsToMs(Number(row[index+1])) * (options.perfAdjust || 1)
               let vmg = tbs * Math.abs(Math.cos(angle))
               polar[index][VMGName] = roundDec(vmg)
               if (typeof polar[index]['twa'] == 'undefined') {
@@ -483,7 +489,7 @@ module.exports = function (app) {
             if (typeof polar[index].twa == 'undefined') {
               polar[index].twa = []
             }
-            let tbs = ktsToMs(Number(row[index+1]))
+            let tbs = ktsToMs(Number(row[index+1])) * (options.perfAdjust || 1)
             let vmg = tbs * Math.abs(Math.cos(angle))
             let Obj = {"twa": angle, "tbs": tbs, "vmg": vmg}
             // app.debug('Adding Obj: %s', JSON.stringify(Obj))
