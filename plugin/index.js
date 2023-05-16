@@ -674,7 +674,7 @@ module.exports = function (app) {
 			    damping[unit] = {Yn: Xn, dt: Date.now()}
 			  }
         // Edge case when hovering around -pi and +pi
-        if (Xn > Math.PI && damping[unit].Yn < (0-Math.PI)) {
+        if (Xn > halfPi && damping[unit].Yn < (0-halfPi)) {
           Xn = Xn - (2*Math.PI)
         } else if (Xn < (0-Math.PI) && damping[unit].Yn > Math.PI) {
           Xn = Xn + (2*Math.PI)
