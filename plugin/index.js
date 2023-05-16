@@ -546,6 +546,23 @@ module.exports = function (app) {
       }
 
       // And now fill in some missing ends to avoid doing expensive calculations in the main loop
+      if (polar[0].tws > 0) {
+        // Add a 0 line to allow interpolation at very low wind speeds
+        app.debug('Add a 0 line to allow interpolation at very low wind speeds')
+        let Obj = {
+           tws: 0.0001,
+          'Beat angle': polar[0]['Beat angle'],
+          'Beat VMG': polar[0]['Beat VMG'],
+          'Run angle': polar[0]['Run angle'],
+          'Run VMG': polar[0]['Run VMG'],
+          twa: []
+        }
+        Object.keys(polar[0].twa).forEach(twaObj => {
+          Obj.twa.push({twa: twaObj.twa, tbs: 0})
+        })
+        polar.unshift(Obj)
+      }
+
       for (let index = 0; index < polar.length; index++) {
         // Sorted on angle, so first is lowest
         let tws = polar[index].tws
@@ -568,7 +585,7 @@ module.exports = function (app) {
         polar[index].twa = topArray.concat(twaArray)
       }
 
-      for (let index = 0; index < polar.length-1; index++) {
+      for (let index = 0; index < polar.length; index++) {
         let tws = polar[index].tws
         let twaArray = polar[index].twa
         let highTBS = twaArray[twaArray.length-1].tbs
@@ -635,6 +652,8 @@ module.exports = function (app) {
           data.datasets[index].pointRadius.push(radius)
         }
       }
+      // Remove 0 kts line
+      data.datasets.shift()
       return data
     }
 
