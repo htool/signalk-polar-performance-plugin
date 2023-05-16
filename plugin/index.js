@@ -285,6 +285,7 @@ module.exports = function (app) {
             if (typeof polar[indexTWS]['Beat angle'] != 'undefined') {
 	            let beatLower = polar[indexTWS]['Beat angle']
 	            let beatUpper = polar[indexTWS+1]['Beat angle']
+	            //app.debug('beatLower: %s beatUpper: %s', beatLower, beatUpper)
 	            performance.beatAngle = beatLower + ((beatUpper - beatLower) * twsGapRatio)
               targetTWA = performance.beatAngle
             }
@@ -298,6 +299,7 @@ module.exports = function (app) {
             if (typeof polar[indexTWS]['Beat VMG'] != 'undefined') {
 	            let VMGLower = polar[indexTWS]['Beat VMG']
 	            let VMGUpper = polar[indexTWS+1]['Beat VMG']
+	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
 	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
 	            performance.targetVMG = performance.beatVMG
             }
@@ -321,7 +323,7 @@ module.exports = function (app) {
             if (typeof polar[indexTWS]['Run VMG'] != 'undefined') {
 	            let VMGLower = polar[indexTWS]['Run VMG']
 	            let VMGUpper = polar[indexTWS+1]['Run VMG']
-	          //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
+	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
 	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
 	            performance.targetVMG = performance.runVMG
             }
@@ -346,7 +348,7 @@ module.exports = function (app) {
           // Interpolate Define the 4 near data points
           let lowerTWA = polar[indexTWS].twa
           let upperTWA = polar[indexTWS+1].twa
-          // app.debug('TWAlower: %s', JSON.stringify(TWAlower))
+          // app.debug('lowerTWA: %s', JSON.stringify(lowerTWA))
           // First find lowerTWA
           for (let indexTWA = 0 ; indexTWA < lowerTWA.length-1; indexTWA++) {
             let lowerTWAlower = lowerTWA[indexTWA]
@@ -420,7 +422,7 @@ module.exports = function (app) {
         if (options.VMG == true) {
           performance.velocityMadeGood = 0
           performance.polarVelocityMadeGood = 0
-          performance.polarRatioVelocityMadeGood = 0
+          performance.polarVelocityMadeGoodRatio = 0
         }
       }
       return performance
@@ -478,9 +480,11 @@ module.exports = function (app) {
               }
               let Obj = {"twa": angle, "tbs": tbs, "vmg": vmg}
               polar[index]['twa'] = polar[index]['twa'].concat(Obj)
+              app.debug('Finding max speed')
               if (typeof polar[index]['Max speed'] == 'undefined' || tbs > polar[index]['Max speed']) {
                 polar[index]['Max speed'] = tbs
                 polar[index]['Max speed angle'] = angle
+                app.debug('Found max speed: %s', JSON.stringify(polar[index]))
               }
             }
           }
@@ -503,6 +507,7 @@ module.exports = function (app) {
             if (typeof polar[index]['Max speed'] == 'undefined' || tbs > polar[index]['Max speed']) {
               polar[index]['Max speed'] = tbs
               polar[index]['Max speed angle'] = angle
+              app.debug('Found max speed: %s', JSON.stringify(polar[index]))
             }
           }
         }
@@ -563,10 +568,12 @@ module.exports = function (app) {
           'Beat VMG': polar[0]['Beat VMG'],
           'Run angle': polar[0]['Run angle'],
           'Run VMG': polar[0]['Run VMG'],
+          'Max speed': 0,
+          'Max speed angle': polar[0]['Max speed angle'],
           twa: []
         }
-        Object.keys(polar[0].twa).forEach(twaObj => {
-          Obj.twa.push({twa: twaObj.twa, tbs: 0})
+        Object.values(polar[0].twa).forEach(twaObj => {
+          Obj.twa.push({twa: twaObj.twa, tbs: 0, vmg: 0})
         })
         polar.unshift(Obj)
       }
