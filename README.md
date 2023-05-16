@@ -42,6 +42,7 @@ In the plugin configuration you can toggle the following options:
  - Wind angle for maximum speed at this wind speed
  - Fill up the ends of the polar diagram
  - Visualisation of the polar diagram
+ - Configurable damping alorithm on inputs
 
 ### To-do list
  - Improved interpolation
@@ -52,7 +53,6 @@ In the plugin configuration you can toggle the following options:
  -- Save polar info to file
  -- Save new record speed for angle in polar
  -- Determine if we're on a steady course to avoid fake records
- -- Dampening algoritms
  -- Configure the resolution of the polar diagram
  - Support multiple polar diagrams
  - Capture heel in polar diagram
