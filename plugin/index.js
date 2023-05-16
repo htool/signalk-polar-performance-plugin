@@ -408,7 +408,7 @@ module.exports = function (app) {
         performance.polarSpeedRatio = BSP / performance.polarSpeed
         if (options.VMG == true) {
           performance.velocityMadeGood = Math.abs(BSP * Math.cos(TWA))
-          performance.polarVelocityMadeGood = Math.abs(performance.polarSpeed * Math.cos(targetTWA))
+          performance.polarVelocityMadeGood = Math.abs(performance.targetVelocityMadeGood * Math.cos(targetTWA))
           performance.polarVelocityMadeGoodRatio = performance.velocityMadeGood / performance.polarVelocityMadeGood
         }
       } else {
