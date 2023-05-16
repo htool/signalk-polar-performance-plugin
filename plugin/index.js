@@ -299,6 +299,7 @@ module.exports = function (app) {
 	            let VMGLower = polar[indexTWS]['Beat VMG']
 	            let VMGUpper = polar[indexTWS+1]['Beat VMG']
 	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
+	            performance.targetVMG = performance.beatVMG
             }
 	        } else {
             // app.debug('Downwind')
@@ -322,6 +323,7 @@ module.exports = function (app) {
 	            let VMGUpper = polar[indexTWS+1]['Run VMG']
 	          //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
 	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
+	            performance.targetVMG = performance.runVMG
             }
           }
           // Calculate opposite Tack True
@@ -408,7 +410,7 @@ module.exports = function (app) {
         performance.polarSpeedRatio = BSP / performance.polarSpeed
         if (options.VMG == true) {
           performance.velocityMadeGood = Math.abs(BSP * Math.cos(TWA))
-          performance.polarVelocityMadeGood = Math.abs(performance.targetVelocityMadeGood * Math.cos(targetTWA))
+          performance.polarVelocityMadeGood = performance.targetVMG
           performance.polarVelocityMadeGoodRatio = performance.velocityMadeGood / performance.polarVelocityMadeGood
         }
       } else {
