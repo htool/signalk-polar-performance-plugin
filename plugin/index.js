@@ -175,19 +175,19 @@ module.exports = function (app) {
 	        HDG = delta.value
 	        // app.debug('heading (HDG): %d', HDG)
 	      } else if (delta.path == 'environment.wind.speedTrue') {
-          // applyDamping (Xn, unit, a, n)
 	        TWS = applyDamping (delta.value, 'TWS', options.dampingTWS || 0)
 	        // app.debug('environment.wind.speedTrue (TWS): %d applyDamping: %d', delta.value, TWS)
 	        // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
           sendUpdates(getPerformanceData(TWS, TWA, BSP))
 	      } else if (delta.path == 'environment.wind.angleTrueWater') {
-          if (delta.value < 0) {
+	        let TWAtmp = applyDamping (delta.value, 'TWA', options.dampingTWA || 0)
+          if (TWAtmp < 0) {
             port = -1
           } else {
             port = 1
           }
-	        TWA = Math.abs(applyDamping (delta.value, 'TWA', options.dampingTWA || 0))
-	        app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s', radToDeg(delta.value).toFixed(0), radToDeg(TWA).toFixed(0))
+          TWA = Math.abs(TWAtmp)
+	        app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s port: %d', delta.value, TWA, port)
 	      }
       })
     }
@@ -353,15 +353,15 @@ module.exports = function (app) {
           for (let indexTWA = 0 ; indexTWA < lowerTWA.length-1; indexTWA++) {
             let lowerTWAlower = lowerTWA[indexTWA]
             let lowerTWAupper = lowerTWA[indexTWA+1]
-	          // app.debug('lowerTWAlower: %s lowerTWAupper: %s', lowerTWAlower, lowerTWAupper)
             if (TWA >= lowerTWAlower.twa && TWA <= lowerTWAupper.twa) {
+	            // app.debug('lowerTWAlower: %s lowerTWAupper: %s', JSON.stringify(lowerTWAlower), JSON.stringify(lowerTWAupper))
               // Now find upperTWA
               for (let indexTWA = 0 ; indexTWA < upperTWA.length-1; indexTWA++) {
                 let upperTWAlower = upperTWA[indexTWA]
                 let upperTWAupper = upperTWA[indexTWA+1]
                 if (TWA >= upperTWAlower.twa && TWA <= upperTWAupper.twa) {
                   // Found the 4 points
-			            // app.debug('lowerTWAlower: %d TWA: %d lowerTWAupper: %d', lowerTWAlower.twa, TWA, lowerTWAupper.twa)
+			            // app.debug('lowerTWAlower: %d TWA: %d lowerTWAupper: %d', radToDeg(lowerTWAlower.twa), radToDeg(TWA), radToDeg(lowerTWAupper.twa))
 		              // Calculate gap ratio
 		              let gap = lowerTWAupper.twa - lowerTWAlower.twa
 		              let twaGapRatio = (1 / gap) * (TWA - lowerTWAlower.twa)
@@ -372,7 +372,7 @@ module.exports = function (app) {
 			            let upperTBS = upperTWAlower.tbs + ((upperTWAupper.tbs - upperTWAlower.tbs) * twaGapRatio)
 		              // Calculate polar boat speed
 		              performance.polarSpeed = lowerTBS + ((upperTBS - lowerTBS) * twsGapRatio)
-			            // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', lowerTBS, performance.polarSpeed, upperTBS)
+			            // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', msToKts(lowerTBS), performance.polarSpeed, msToKts(upperTBS))
                   break
                 }
               }
@@ -680,12 +680,18 @@ module.exports = function (app) {
 			    // Doesn't exist yet, make obj for unit
 			    damping[unit] = {Yn: Xn, dt: Date.now()}
 			  }
-        // Edge case when hovering around -pi and +pi
-        if (Xn > halfPi && damping[unit].Yn < (0-halfPi)) {
-          Xn = Xn - (2*Math.PI)
-        } else if (Xn < (0-Math.PI) && damping[unit].Yn > Math.PI) {
-          Xn = Xn + (2*Math.PI)
+        // Edge case when hovering around -pi and +pi for TWA
+        if (unit == 'TWA') {
+          if (Xn > halfPi && damping[unit].Yn < (halfPi * -1)) {
+            // app.debug('applyDamping: unit: %s Xn: %d > %d   Yn: %d  < %d  -2Pi', unit, Xn, halfPi, damping[unit].Yn, halfPi * -1)
+            Xn = Xn - (2*Math.PI)
+          } else if (Xn < (halfPi * -1) && damping[unit].Yn > halfPi) {
+            // app.debug('applyDamping: unit: %s Xn: %d < %d   Yn: %d  > %d  +2Pi', unit, Xn, halfPi * -1, damping[unit].Yn, halfPi)
+            Xn = Xn + (2*Math.PI)
+          }
         }
+
+        // app.debug('applyDamping: unit: %s Xn: %d Yn: %d ', unit, Xn, damping[unit].Yn)
 	      // Calculate a
 	      let dt = (Date.now() - damping[unit].dt)/1000
 	      damping[unit].dt = Date.now()
@@ -693,16 +699,19 @@ module.exports = function (app) {
 			  // Yn = (1-a) * Yn-1 + a * Xn
 			  let Yn = (1-a) * (damping[unit].Yn || Xn) + a * Xn
 
-        // Fix is we go outside -pi to pi
-        if (Yn > Math.PI) {
-          Yn = Yn - Math.PI
-        } else if (Yn < (0-Math.PI)) {
-          Yn = Yn + Math.PI
+        // Fix if we go outside -pi to pi
+        if (unit == 'TWA') {
+          if (Yn > Math.PI) {
+            Yn = Yn - 2*Math.PI
+          } else if (Yn < Math.PI * -1) {
+            Yn = Yn + 2*Math.PI
+          }
         }
 
 			  // Remember Yn
 			  damping[unit].Yn = Yn
 			  // app.debug('Unit: %s  dt: %d  a: %d  obj: %s', unit, dt, a, JSON.stringify(damping[unit]))
+        // app.debug('applyDamping: unit: %s new Yn: %d ', unit, damping[unit].Yn)
 			  return Yn
 			}
 	  }
