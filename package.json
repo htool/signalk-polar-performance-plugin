@@ -1,6 +1,6 @@
 {
   "name": "signalk-polar-performance-plugin",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "description": "A plugin that calculates performance information based on a (CSV) polar diagram.",
   "main": "plugin/index.js",
   "scripts": {
