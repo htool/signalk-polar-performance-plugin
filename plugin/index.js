@@ -164,11 +164,11 @@ module.exports = function (app) {
       deltas.forEach(delta => {
 	      // app.debug('handleData: %s', JSON.stringify(delta))
 	      if (delta.path == 'navigation.speedThroughWater') {
-	        STW = applyDamping (delta.value, 'BSP', options.dampingBSP || 0)
+	        STW = applyDamping (delta.value, 'STW', options.dampingBSP || 0)
           BSP = STW
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.speedOverGround') {
-	        SOG = applyDamping (delta.value, 'BSP', options.dampingBSP || 0)
+	        SOG = applyDamping (delta.value, 'SOG', options.dampingBSP || 0)
           BSP = SOG
 	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.headingTrue') {
@@ -409,6 +409,7 @@ module.exports = function (app) {
       }
       // Calculate polar performance ratio
       if (typeof performance.polarSpeed != 'undefined') {
+        app.debug('performance.polarSpeedRatio = BSP (%s)/ performance.polarSpeed (%s)', msToKts(BSP).toFixed(2), msToKts(performance.polarSpeed).toFixed(2))
         performance.polarSpeedRatio = BSP / performance.polarSpeed
         if (options.VMG == true) {
           performance.velocityMadeGood = Math.abs(BSP * Math.cos(TWA))
