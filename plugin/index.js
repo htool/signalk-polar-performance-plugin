@@ -276,6 +276,10 @@ module.exports = function (app) {
       for (let indexTWS = 0 ; indexTWS < polar.length-1; indexTWS++) {
         let lower = polar[indexTWS].tws
         let upper = polar[indexTWS+1].tws
+        if (indexTWS == polar.length-1 && TWS > upper) {
+          // North of polar
+          TWS = upper
+        }
         if (TWS >= lower && TWS <= upper) {
           //app.debug('TWS between %d and %d', lower, upper)
           // Calculate gap ratio

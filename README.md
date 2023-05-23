@@ -45,12 +45,13 @@ In the plugin configuration you can toggle the following options:
  - Configurable damping alorithm on inputs
  - Extrapolation of polar data towards 0
  - Configurable overall performance adjustment ratio
+ - Dots in webapp indicating Polar Speed and Boat Speed
+ - Use highest polar speed when going north of Polar
 
 ### To-do list
  - Improved interpolation
  - Make moment to do calculation smarter/configurable
  - API to see JSON of polar
- - Extrapolation of polar data towards 50 kts?
  - Create polar from live data
  -- Save polar info to file
  -- Save new record speed for angle in polar
