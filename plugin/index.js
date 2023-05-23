@@ -195,6 +195,10 @@ module.exports = function (app) {
     function sendUpdates (perfObj) {
       let values = []
       let metas = []
+      values.push({path: 'performance.boatSpeedDamped', value: roundDec(BSP)})
+      metas.push({path: 'performance.boatSpeedDamped', value: {"units": "m/s"}})
+      values.push({path: 'environment.wind.angleTrueWaterDamped', value: roundDec(TWA)})
+      metas.push({path: 'environment.wind.angleTrueWaterDamped', value: {"units": "rad"}})
       if (typeof perfObj.beatAngle != 'undefined') {
         if (options.beatAngle == true) {
           values.push({path: 'performance.beatAngle', value: roundDec(perfObj.beatAngle)})
