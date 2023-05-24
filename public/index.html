@@ -195,16 +195,16 @@ function handleData (data) {
   var value = data.updates[0].values[0].value
 
   if (path == 'performance.polarSpeed') {
-    polarSpeed = msToKts(value)
+    polarSpeed = roundDec(msToKts(value), 1)
     // console.log('polarSpeed set to %s', polarSpeed)
     chartData.datasets[0].data[0].y = polarSpeed
   } else if (path == 'environment.wind.angleTrueWaterDamped') {
-    TWA = radToDeg(value)
+    TWA = roundDec(radToDeg(value),1)
     // console.log('TWA set to %s', TWA)
     chartData.datasets[0].data[0].x = TWA
     chartData.datasets[1].data[0].x = TWA
   } else if (path == 'performance.boatSpeedDamped') {
-    boatSpeed = msToKts(value)
+    boatSpeed = roundDec(msToKts(value),1)
     // console.log('boatSpeed set to %s', boatSpeed)
     chartData.datasets[1].data[0].y = boatSpeed
   }
@@ -227,7 +227,14 @@ function msToKts(ms) {
   return ms * 1.94384
 }
 
-
+function roundDec (value, decimals) {
+  if (typeof value == 'undefined') {
+    return undefined
+  } else {
+    value = Number(value.toFixed(decimals))
+    return value
+  }
+}
 
 </script>
 
