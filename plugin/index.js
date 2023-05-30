@@ -163,14 +163,14 @@ module.exports = function (app) {
     function handleDelta (deltas) {
       deltas.forEach(delta => {
 	      // app.debug('handleData: %s', JSON.stringify(delta))
-	      if (delta.path == 'navigation.speedThroughWater') {
+	      if (delta.path == 'navigation.speedThroughWater' && options.useSOG == false) {
 	        STW = applyDamping (delta.value, 'STW', options.dampingBSP || 0)
           BSP = STW
 	        // app.debug('speedThroughWater (STW): %d', STW)
-	      } else if (delta.path == 'navigation.speedOverGround') {
+	      } else if (delta.path == 'navigation.speedOverGround' && options.useSOG == true) {
 	        SOG = applyDamping (delta.value, 'SOG', options.dampingBSP || 0)
           BSP = SOG
-	        // app.debug('speedThroughWater (STW): %d', STW)
+	        // app.debug('speedOverGround (SOG): %d', SOG)
 	      } else if (delta.path == 'navigation.headingTrue') {
 	        HDG = delta.value
 	        // app.debug('heading (HDG): %d', HDG)
