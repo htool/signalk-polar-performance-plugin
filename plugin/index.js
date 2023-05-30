@@ -88,7 +88,6 @@ module.exports = function (app) {
   plugin.start = function (options, restartPlugin) {
     // Here we put our plugin logic
     app.debug('Plugin started');
-    var unsubscribes = [];
     app.debug('Options: %s', JSON.stringify(options))
 
     // Load polar table
@@ -166,11 +165,11 @@ module.exports = function (app) {
 	      if (delta.path == 'navigation.speedThroughWater' && options.useSOG == false) {
 	        STW = applyDamping (delta.value, 'STW', options.dampingBSP || 0)
           BSP = STW
-	        app.debug('speedThroughWater (STW): %d', STW)
+	        // app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.speedOverGround' && options.useSOG == true) {
 	        SOG = applyDamping (delta.value, 'SOG', options.dampingBSP || 0)
           BSP = SOG
-	        app.debug('speedOverGround (SOG): %d', SOG)
+	        // app.debug('speedOverGround (SOG): %d', SOG)
 	      } else if (delta.path == 'navigation.headingTrue') {
 	        HDG = delta.value
 	        // app.debug('heading (HDG): %d', HDG)
@@ -729,8 +728,10 @@ module.exports = function (app) {
   plugin.stop = function () {
     // Here we put logic we need when the plugin stops
     app.debug('Plugin stopped')
+    app.debug('unsubscribes before: %s', JSON.stringify(unsubscribes))
     unsubscribes.forEach(f => f())
     unsubscribes = []
+    app.debug('unsubscribes after: %s', JSON.stringify(unsubscribes))
     timers.forEach(timer => {
       clearInterval(timer)
     }) 
