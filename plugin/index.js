@@ -728,10 +728,8 @@ module.exports = function (app) {
   plugin.stop = function () {
     // Here we put logic we need when the plugin stops
     app.debug('Plugin stopped')
-    app.debug('unsubscribes before: %s', JSON.stringify(unsubscribes))
     unsubscribes.forEach(f => f())
     unsubscribes = []
-    app.debug('unsubscribes after: %s', JSON.stringify(unsubscribes))
     timers.forEach(timer => {
       clearInterval(timer)
     }) 
