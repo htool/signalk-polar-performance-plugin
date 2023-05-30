@@ -166,11 +166,11 @@ module.exports = function (app) {
 	      if (delta.path == 'navigation.speedThroughWater' && options.useSOG == false) {
 	        STW = applyDamping (delta.value, 'STW', options.dampingBSP || 0)
           BSP = STW
-	        // app.debug('speedThroughWater (STW): %d', STW)
+	        app.debug('speedThroughWater (STW): %d', STW)
 	      } else if (delta.path == 'navigation.speedOverGround' && options.useSOG == true) {
 	        SOG = applyDamping (delta.value, 'SOG', options.dampingBSP || 0)
           BSP = SOG
-	        // app.debug('speedOverGround (SOG): %d', SOG)
+	        app.debug('speedOverGround (SOG): %d', SOG)
 	      } else if (delta.path == 'navigation.headingTrue') {
 	        HDG = delta.value
 	        // app.debug('heading (HDG): %d', HDG)
@@ -728,16 +728,13 @@ module.exports = function (app) {
 
   plugin.stop = function () {
     // Here we put logic we need when the plugin stops
-    app.debug('Plugin stopped');
-    plugin.stop = function () {
-      unsubscribes.forEach(f => f());
-      unsubscribes = [];
-      timers.forEach(timer => {
-        clearInterval(timer)
-      }) 
-    };
-
-  };
+    app.debug('Plugin stopped')
+    unsubscribes.forEach(f => f())
+    unsubscribes = []
+    timers.forEach(timer => {
+      clearInterval(timer)
+    }) 
+  }
 
   return plugin;
 };
