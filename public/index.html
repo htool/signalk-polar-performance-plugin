@@ -163,14 +163,23 @@ function connect () {
 
     ws.onclose = function() {
       console.log("WebSocket closed")
+      setTimeout(connect, 500)
     }
 
     ws.onerror = function(err) {
       console.log("WebSocket connection error: " + err.message + " - closing connection");
+      setTimeout(connect, 500)
     }
     
   }
 }
+
+window.addEventListener('focus', function () {
+  if (ws.readyState == 0) {
+    console.log("Restarting websocket")
+    connect()
+  }
+})
 
 function startListeners () {
   var paths = [{'path': 'environment.wind.angleTrueWaterDamped'}, {'path': 'performance.polarSpeed'}, {'path': 'performance.boatSpeedDamped'}]
