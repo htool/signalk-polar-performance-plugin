@@ -196,14 +196,14 @@ module.exports = function (app) {
       let metas = []
       values.push({path: 'performance.boatSpeedDamped', value: roundDec(BSP)})
       metas.push({path: 'performance.boatSpeedDamped', value: {"units": "m/s"}})
-      values.push({path: 'environment.wind.angleTrueWaterDamped', value: roundDec(TWA)})
+      values.push({path: 'environment.wind.angleTrueWaterDamped', value: roundDec(TWA) * port})
       metas.push({path: 'environment.wind.angleTrueWaterDamped', value: {"units": "rad"}})
       if (typeof perfObj.beatAngle != 'undefined') {
         if (options.beatAngle == true) {
-          values.push({path: 'performance.beatAngle', value: roundDec(perfObj.beatAngle)})
+          values.push({path: 'performance.beatAngle', value: roundDec(perfObj.beatAngle * port)})
         }
         if (options.targetTWA == true) {
-          values.push({path: 'performance.targetAngle', value: roundDec(perfObj.beatAngle)})
+          values.push({path: 'performance.targetAngle', value: roundDec(perfObj.beatAngle * port)})
         }
       }
       if (typeof perfObj.beatVMG != 'undefined') {
@@ -215,10 +215,10 @@ module.exports = function (app) {
       }
       if (typeof perfObj.runAngle != 'undefined') {
         if (options.beatAngle == true) {
-          values.push({path: 'performance.gybeAngle', value: roundDec(perfObj.runAngle)})
+          values.push({path: 'performance.gybeAngle', value: roundDec(perfObj.runAngle * port)})
         }
         if (options.targetTWA == true) {
-          values.push({path: 'performance.targetAngle', value: roundDec(perfObj.runAngle)})
+          values.push({path: 'performance.targetAngle', value: roundDec(perfObj.runAngle * port)})
         }
       }
       if (typeof perfObj.runVMG != 'undefined') {
@@ -309,6 +309,7 @@ module.exports = function (app) {
 	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
 	            performance.beatVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
 	            performance.targetVMG = performance.beatVMG
+              performance.targetSpeed = performance.beatVMG / Math.cos(targetTWA)
             }
 	        } else {
             // app.debug('Downwind')
@@ -333,6 +334,7 @@ module.exports = function (app) {
 	            //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
 	            performance.runVMG = VMGLower + ((VMGUpper - VMGLower) * twsGapRatio)
 	            performance.targetVMG = performance.runVMG
+              performance.targetSpeed = performance.runVMG / Math.abs(Math.cos(targetTWA))
             }
           }
           // Calculate opposite Tack True
