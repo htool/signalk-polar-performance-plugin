@@ -213,14 +213,12 @@ module.exports = function (app) {
     function sendUpdates (perfObj) {
       let values = []
       let metas = []
-      let currentTime = new Date().getTime()
 
       function addValue (path, value, meta) {
         if (lastValues[path] !== value) {
           values.push({
             path: path,
-            value: roundDec(value),
-            timestamp: currentTime
+            value: roundDec(value)
           })
           if (meta) {
             metas.push({ path: path, value: meta })
