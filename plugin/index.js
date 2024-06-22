@@ -273,6 +273,7 @@ module.exports = function (app) {
           values: values,
         }
       ]})
+    }
 
     function getPerformanceData (TWS, TWA, BSP) {
       var performance = {}
