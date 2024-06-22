@@ -86,6 +86,7 @@ module.exports = function (app) {
 
 
   plugin.start = function (options, restartPlugin) {
+    firstUpdate = true
     // Here we put our plugin logic
     app.debug('Plugin started');
     app.debug('Options: %s', JSON.stringify(options))
@@ -259,14 +260,16 @@ module.exports = function (app) {
       }
 
       app.debug('sendUpdates: %s', JSON.stringify(values))
-      app.handleMessage(plugin.id, {
-        updates: [
+      let updates = { updates: [
           {
             values: values,
-            meta: metas
           }
-        ]
-      })
+        ]}
+      if (firstUpdate) {
+        updates.updates[0].metas = metas
+        firstUpdate = false
+      }
+      app.handleMessage(plugin.id, updates)
     }
 
     function getPerformanceData (TWS, TWA, BSP) {
