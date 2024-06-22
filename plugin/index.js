@@ -314,21 +314,26 @@ module.exports = function (app) {
         }
       }
 
-      let updates = {
+      if (firstUpdate) {
+        // Send meta updates
+        app.handleMessage(plugin.id, {
+          updates: [
+            {
+              meta: metas
+            }
+          ]
+        })
+        firstUpdate = false
+      }
+
+      // Send values updates
+      app.handleMessage(plugin.id, {
         updates: [
           {
             values: values
           }
         ]
-      }
-
-      if (firstUpdate) {
-        updates.updates[0].metas = metas
-        firstUpdate = false
-      }
-
-      // Send updates
-      app.handleMessage(plugin.id, updates)
+      })
     }
 
     function getPerformanceData (TWS, TWA, BSP) {
