@@ -260,17 +260,19 @@ module.exports = function (app) {
       }
 
       app.debug('sendUpdates: %s', JSON.stringify(values))
-      let updates = { updates: [
-          {
-            values: values,
-          }
-        ]}
       if (firstUpdate) {
-        updates.updates[0].metas = metas
+        app.handleMessage(plugin.id, { updates: [
+          {
+            meta: metas,
+          }
+        ]})
         firstUpdate = false
       }
-      app.handleMessage(plugin.id, updates)
-    }
+      app.handleMessage(plugin.id, { updates: [
+        {
+          values: values,
+        }
+      ]})
 
     function getPerformanceData (TWS, TWA, BSP) {
       var performance = {}
