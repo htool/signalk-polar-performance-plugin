@@ -250,7 +250,7 @@ module.exports = function (app) {
         addValue('performance.beatAngleVelocityMadeGood', perfObj.beatVMG)
         if (options.targetTWA === true) {
           addValue('performance.targetVelocityMadeGood', perfObj.beatVMG, {
-            units: 'rad'
+            units: 'm/s'
           })
         }
       }
