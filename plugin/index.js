@@ -50,6 +50,11 @@ module.exports = function (app) {
         type: 'boolean',
         title: 'Use speed over ground (SOG) as boat speed.'
       },
+      useSOGsource: {
+        type: 'string',
+        default: '',
+        title: 'Source (name.id) to filter SOG on'
+      },
       maxSpeed: {
         type: 'boolean',
         title:
@@ -76,7 +81,7 @@ module.exports = function (app) {
       },
       dampingBSP: {
         type: 'number',
-        title: 'Boat speed damping damping',
+        title: 'Boat speed damping seconds',
         default: 1
       },
       csvTable: {
@@ -125,15 +130,18 @@ module.exports = function (app) {
       subscribe: [
         {
           path: 'navigation.speedThroughWater',
-          policy: 'instant'
+          policy: 'instant',
+          minPeriod: 500
         },
         {
           path: 'environment.wind.speedTrue',
-          policy: 'instant'
+          policy: 'instant',
+          minPeriod: 500
         },
         {
           path: 'environment.wind.angleTrueWater',
-          policy: 'instant'
+          policy: 'instant',
+          minPeriod: 500
         }
       ]
     }
@@ -142,7 +150,8 @@ module.exports = function (app) {
     if (options.useSOG == true) {
       localSubscription.subscribe.push({
         path: 'navigation.speedOverGround',
-        policy: 'instant'
+        policy: 'instant',
+        minPeriod: 500
       })
     }
     if (options.tackTrue == true) {
@@ -160,30 +169,34 @@ module.exports = function (app) {
       },
       delta => {
         delta.updates.forEach(u => {
-          // app.debug(u.values)
-          handleDelta(u.values)
+          // app.debug(u)
+          handleDelta(u.values,u['$source'])
         })
       }
     )
 
     // Handle delta
-    function handleDelta (deltas) {
+    function handleDelta (deltas, source) {
       deltas.forEach(delta => {
-        // app.debug('handleData: %s', JSON.stringify(delta))
+        app.debug('handleData (%s): %s', source, JSON.stringify(delta))
         if (
           delta.path == 'navigation.speedThroughWater' &&
           options.useSOG == false
         ) {
+          app.debug('STW useSOG: %j', options.useSOG)
           STW = applyDamping(delta.value, 'STW', options.dampingBSP || 0)
           BSP = STW
-          // app.debug('speedThroughWater (STW): %d', STW)
+          app.debug('speedThroughWater (STW): %d', STW)
         } else if (
           delta.path == 'navigation.speedOverGround' &&
           options.useSOG == true
         ) {
-          SOG = applyDamping(delta.value, 'SOG', options.dampingBSP || 0)
-          BSP = SOG
-          // app.debug('speedOverGround (SOG): %d', SOG)
+          app.debug('SOG useSOG: %j', options.useSOG)
+          if (options.useSOGsource == '' || source == options.useSOGsource) {
+            SOG = applyDamping(delta.value, 'SOG', options.dampingBSP || 0)
+            BSP = SOG
+            app.debug('speedOverGround (SOG) (%s): %d', source, SOG)
+          }
         } else if (delta.path == 'navigation.headingTrue') {
           HDG = delta.value
           // app.debug('heading (HDG): %d', HDG)
@@ -200,12 +213,7 @@ module.exports = function (app) {
             port = 1
           }
           TWA = Math.abs(TWAtmp)
-          app.debug(
-            'environment.wind.angleTrueWater (TWA): %s applyDamping: %s port: %d',
-            delta.value,
-            TWA,
-            port
-          )
+          // app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s port: %d', delta.value, TWA, port)
         }
       })
     }
@@ -503,12 +511,9 @@ module.exports = function (app) {
       }
       // Calculate polar performance ratio
       if (typeof performance.polarSpeed != 'undefined') {
-        app.debug(
-          'performance.polarSpeedRatio = BSP (%s)/ performance.polarSpeed (%s)',
-          msToKts(BSP).toFixed(2),
-          msToKts(performance.polarSpeed).toFixed(2)
-        )
+        // app.debug('performance.polarSpeedRatio = BSP (%s)/ performance.polarSpeed (%s)', msToKts(BSP).toFixed(2), msToKts(performance.polarSpeed).toFixed(2))
         performance.polarSpeedRatio = BSP / performance.polarSpeed
+        app.debug('performance.polarSpeedRatio = %s', performance.polarSpeedRatio.toFixed(2))
         if (options.VMG == true) {
           performance.velocityMadeGood = Math.abs(BSP * Math.cos(TWA))
           performance.polarVelocityMadeGood = performance.targetVMG
