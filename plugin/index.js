@@ -19,6 +19,11 @@ module.exports = function (app) {
   var schema = {
     // The plugin schema
     properties: {
+      trueWindSpeedPath: {
+        type: 'string',
+        default: 'environment.wind.speedTrue',
+        title: 'Wind speed path to use'
+      },
       beatAngle: {
         type: 'boolean',
         title:
@@ -134,7 +139,7 @@ module.exports = function (app) {
           minPeriod: 500
         },
         {
-          path: 'environment.wind.speedTrue',
+          path: trueWindSpeedPath,
           policy: 'instant',
           minPeriod: 500
         },
@@ -200,9 +205,9 @@ module.exports = function (app) {
         } else if (delta.path == 'navigation.headingTrue') {
           HDG = delta.value
           // app.debug('heading (HDG): %d', HDG)
-        } else if (delta.path == 'environment.wind.speedTrue') {
+        } else if (delta.path == trueWindSpeedPath) {
           TWS = applyDamping(delta.value, 'TWS', options.dampingTWS || 0)
-          // app.debug('environment.wind.speedTrue (TWS): %d applyDamping: %d', delta.value, TWS)
+          // app.debug('%s (TWS): %d applyDamping: %d', trueWindSpeedPath, delta.value, TWS)
           // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
           sendUpdates(getPerformanceData(TWS, TWA, BSP))
         } else if (delta.path == 'environment.wind.angleTrueWater') {
