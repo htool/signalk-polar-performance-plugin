@@ -22,7 +22,12 @@ module.exports = function (app) {
       trueWindSpeedPath: {
         type: 'string',
         default: 'environment.wind.speedTrue',
-        title: 'Wind speed path to use'
+        title: 'Wind speed path (TWS) to use'
+      },
+      useTWSsource: {
+        type: 'string',
+        default: '',
+        title: 'Source (name.id) to filter TWS on'
       },
       beatAngle: {
         type: 'boolean',
@@ -206,10 +211,12 @@ module.exports = function (app) {
           HDG = delta.value
           // app.debug('heading (HDG): %d', HDG)
         } else if (delta.path == trueWindSpeedPath) {
-          TWS = applyDamping(delta.value, 'TWS', options.dampingTWS || 0)
-          // app.debug('%s (TWS): %d applyDamping: %d', trueWindSpeedPath, delta.value, TWS)
-          // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
-          sendUpdates(getPerformanceData(TWS, TWA, BSP))
+          if (options.useTWSsource == '' || source == options.useTWSsource) {
+            TWS = applyDamping(delta.value, 'TWS', options.dampingTWS || 0)
+            // app.debug('%s (TWS): %d applyDamping: %d', trueWindSpeedPath, delta.value, TWS)
+            // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
+            sendUpdates(getPerformanceData(TWS, TWA, BSP))
+          }
         } else if (delta.path == 'environment.wind.angleTrueWater') {
           let TWAtmp = applyDamping(delta.value, 'TWA', options.dampingTWA || 0)
           if (TWAtmp < 0) {
