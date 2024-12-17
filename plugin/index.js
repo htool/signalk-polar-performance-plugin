@@ -19,11 +19,6 @@ module.exports = function (app) {
   var schema = {
     // The plugin schema
     properties: {
-      trueWindSpeedPath: {
-        type: 'string',
-        default: 'environment.wind.speedTrue',
-        title: 'Wind speed path (TWS) to use'
-      },
       useTWSsource: {
         type: 'string',
         default: '',
@@ -144,7 +139,7 @@ module.exports = function (app) {
           minPeriod: 500
         },
         {
-          path: trueWindSpeedPath,
+          path: 'environment.wind.speedTrue',
           policy: 'instant',
           minPeriod: 500
         },
@@ -210,10 +205,10 @@ module.exports = function (app) {
         } else if (delta.path == 'navigation.headingTrue') {
           HDG = delta.value
           // app.debug('heading (HDG): %d', HDG)
-        } else if (delta.path == trueWindSpeedPath) {
+        } else if (delta.path == 'environment.wind.speedTrue') {
           if (options.useTWSsource == '' || source == options.useTWSsource) {
             TWS = applyDamping(delta.value, 'TWS', options.dampingTWS || 0)
-            // app.debug('%s (TWS): %d applyDamping: %d', trueWindSpeedPath, delta.value, TWS)
+            // app.debug('(TWS): %d applyDamping: %d', delta.value, TWS)
             // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
             sendUpdates(getPerformanceData(TWS, TWA, BSP))
           }
