@@ -15,6 +15,34 @@ The following paths are read
 ### Polar diagram
 The polar diagram can be configured through CSV notation as used on [ORC sailboat data](https://jieter.github.io/orc-data/site/).
 
+## Example csv
+```
+twa/tws;6;8;10;12;14;16;20
+0;0;0;0;0;0;0;0
+46.9;4.23;0;0;0;0;0;0
+44.8;0;5.09;0;0;0;0;0
+43.5;0;0;5.72;0;0;0;0
+42.6;0;0;0;6.22;0;0;0
+41.8;0;0;0;0;6.57;0;0
+40.8;0;0;0;0;0;6.75;0
+41.1;0;0;0;0;0;0;6.93
+52;4.57;5.59;6.33;6.87;7.23;7.45;7.65
+60;4.93;5.93;6.66;7.15;7.47;7.68;7.94
+75;5.17;6.18;6.91;7.37;7.68;7.92;8.31
+90;5.29;6.43;7.23;7.71;8.03;8.29;8.57
+110;5.38;6.56;7.36;7.84;8.22;8.6;9.31
+120;5.2;6.38;7.23;7.76;8.16;8.55;9.36
+135;4.65;5.84;6.78;7.43;7.87;8.25;9.03
+150;3.92;5.05;5.97;6.7;7.2;7.58;8.17
+144.2;4.19;0;0;0;0;0;0
+146.4;0;5.25;0;0;0;0;0
+146.9;0;0;6.17;0;0;0;0
+147.1;0;0;0;6.91;0;0;0
+148.3;0;0;0;0;7.33;0;0
+171.2;0;0;0;0;0;6.76;0
+176.3;0;0;0;0;0;0;7.59
+```
+
 The resulting polar after processing can be seen here in the WebApp, looking something like:
 ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_polar.png)
 
