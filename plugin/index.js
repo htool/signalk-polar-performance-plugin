@@ -283,7 +283,7 @@ module.exports = function (app) {
         addValue('performance.gybeAngleVelocityMadeGood', perfObj.runVMG)
         if (options.targetTWA === true) {
           addValue('performance.targetVelocityMadeGood', perfObj.runVMG, {
-            units: 'rad'
+            units: 'm/s'
           })
         }
       }
