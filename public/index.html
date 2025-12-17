@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <script type='text/javascript' src="./Chart.min.js"></script>
-<script type='text/javascript' src="./jquery-3.7.1.min.js'></script>
+<script type='text/javascript' src="./jquery.min.js"></script>
 <title>Polar performance</title>
 <body style="background-color:#020202;">
 
@@ -9,42 +9,38 @@
 
 <script>
 
-var polarSpeed, boatSpeed, TWA
+var polarSpeed, boatSpeed, TWA, TWS
 var myChart, chartData
 
 $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) {
 
-  // Add actual values dots
+  // 1. Add actual values dots to the BEGINNING (Indices 0 and 1)
   json.datasets.unshift({
     label: 'Polar Speed',
     backgroundColor: 'rgba(0,255,0,0.7)',
     borderColor: 'rgba(0,255,0,0.2)',
     borderWidth: 1,
-    radius: 30,
-    type: 'bubble',
-    data: [
-      {
-        y: 0,
-        x: 0,
-        r: 10
-      }
-    ]
+    radius: 10, 
+    pointStyle: 'circle',
+    data: [{ y: 0, x: 0, r: 10 }]
   },
   {
     label: 'Boat Speed',
     backgroundColor: 'rgba(0,150,255,0.7)',
     borderColor: 'rgba(0,150,255,0.2)',
     borderWidth: 1,
-    radius: 30,
-    type: 'bubble',
-    data: [
-      {
-        y: 0,
-        x: 0,
-        r: 10
-      }
-    ]
+    radius: 10,
+    pointStyle: 'circle',
+    data: [{ y: 0, x: 0, r: 10 }]
   })
+
+  // 2. BACKUP ORIGINAL COLORS
+  // We iterate starting at 2 because 0 & 1 are the dots.
+  for (var i = 2; i < json.datasets.length; i++) {
+      // Store the original server-assigned color so we can revert to it
+      json.datasets[i]._originalColor = json.datasets[i].borderColor;
+      json.datasets[i].borderWidth = 1; // Ensure default width
+  }
 
   chartData = json
   showChart(chartData)
@@ -65,25 +61,8 @@ function showChart (data) {
       },
       spanGaps: true,
       scales: {
-        x: {
-          type: 'linear',
-          ticks: {
-            color: 'white',
-            font: {
-              size: 14
-            }
-          }
-        },
-        y: {
-          type: 'linear',
-          ticks: {
-            color: 'white',
-            font: {
-              size: 14
-            }
-          }
-        },
         xAxes: [{
+          type: 'linear',
           scaleLabel: {
             display: true,
             labelString: 'True wind angle (TWA)',
@@ -101,6 +80,7 @@ function showChart (data) {
           }
         }],
         yAxes: [{
+          type: 'linear',
           scaleLabel: {
             display: true,
             labelString: 'Target boat speed (POL SPD)',
@@ -122,8 +102,6 @@ function showChart (data) {
         enabled: true,
         callbacks: {
           label: function (tooltipItems, data) {
-            console.log("tooltipItems: " + JSON.stringify(tooltipItems))
-            console.log("data: " + data)
             let label = tooltipItems.xLabel + "° " + tooltipItems.yLabel + " kts"
             return label
           }
@@ -148,74 +126,61 @@ function connect () {
   console.log("connect()")
   ws = new WebSocket((window.location.protocol === 'https:' ? 'wss' : 'ws') + "://" + window.location.host + "/signalk/v1/stream?subscribe=none");
   ws.onopen = function() {
-    
-    // Start listening for value updates
     startListeners();
-
     ws.onmessage = function(event) {
       if (event.data.includes('signalk-server')) {
-        welcomeMessage = event.data;
-        console.log("Skipping welcome message: " + welcomeMessage)
+        console.log("Skipping welcome message")
       } else {
         handleData(JSON.parse(event.data));
       }
     }
-
-    ws.onclose = function() {
-      console.log("WebSocket closed")
-      setTimeout(connect, 500)
-    }
-
-    ws.onerror = function(err) {
-      console.log("WebSocket connection error: " + err.message + " - closing connection");
-      setTimeout(connect, 500)
-    }
-    
+    ws.onclose = function() { setTimeout(connect, 500) }
+    ws.onerror = function(err) { setTimeout(connect, 500) }
   }
 }
 
 window.addEventListener('focus', function () {
   if (ws.readyState == 0) {
-    console.log("Restarting websocket")
     connect()
   }
 })
 
 function startListeners () {
-  var paths = [{'path': 'environment.wind.angleTrueWaterDamped'}, {'path': 'performance.polarSpeed'}, {'path': 'performance.boatSpeedDamped'}]
+  var paths = [
+    {'path': 'environment.wind.angleTrueWaterDamped'}, 
+    {'path': 'performance.polarSpeed'}, 
+    {'path': 'performance.boatSpeedDamped'},
+    {'path': 'environment.wind.speedTrue'} 
+  ]
 
   var subscriptionObject = {
     "context": "vessels.self",
     "policy" : "ideal",
-    "minPeriod": 2000,
+    "minPeriod": 1000, 
     "subscribe": paths
   }
 
-  var subscriptionMessage = JSON.stringify(subscriptionObject);
-  console.log("subscriptionMessage: " + subscriptionMessage);
-  ws.send(subscriptionMessage);
+  ws.send(JSON.stringify(subscriptionObject));
 }
 
 function handleData (data) {
-  if (typeof data.updates[0].meta != 'undefined') {
-    return
-  }
+  if (typeof data.updates[0].meta != 'undefined') return
+  
   var path = data.updates[0].values[0].path
   var value = data.updates[0].values[0].value
 
   if (path == 'performance.polarSpeed') {
     polarSpeed = roundDec(msToKts(value), 1)
-    // console.log('polarSpeed set to %s', polarSpeed)
     chartData.datasets[0].data[0].y = polarSpeed
   } else if (path == 'environment.wind.angleTrueWaterDamped') {
     TWA = roundDec(Math.abs(radToDeg(value)),1)
-    // console.log('TWA set to %s', TWA)
     chartData.datasets[0].data[0].x = TWA
     chartData.datasets[1].data[0].x = TWA
   } else if (path == 'performance.boatSpeedDamped') {
     boatSpeed = roundDec(msToKts(value),1)
-    // console.log('boatSpeed set to %s', boatSpeed)
     chartData.datasets[1].data[0].y = boatSpeed
+  } else if (path == 'environment.wind.speedTrue') {
+    TWS = msToKts(value);
   }
 }
 
@@ -225,7 +190,96 @@ connect()
 setInterval(updateChart, 300)
 
 function updateChart () {
-  myChart.update()
+  if (myChart) {
+    interpolateColors(TWS);
+    myChart.update();
+  }
+}
+
+// --- NEW LOGIC: Interpolate Colors based on proximity ---
+function interpolateColors(tws) {
+  if (!tws || !chartData) return;
+
+  // We loop starting at 2 (skipping the two dots)
+  for (var i = 2; i < chartData.datasets.length; i++) {
+    var dataset = chartData.datasets[i];
+    var lineSpeed = parseFloat(dataset.label); // e.g. 6, 8, 10
+    
+    if (isNaN(lineSpeed)) continue;
+
+    // Retrieve original color or skip if not found
+    var originalColor = dataset._originalColor; 
+    if (!originalColor) continue;
+
+    // Calculate distance to current wind
+    var diff = Math.abs(tws - lineSpeed);
+    
+    // We define a "Range of Influence". 
+    // Example: If polars are 2kts apart (6, 8, 10), influence is 2.
+    // If diff is 0 (exact match), weight is 1.0 (Fully White).
+    // If diff is >= 2, weight is 0.0 (Original Color).
+    
+    // Find neighbors to determine dynamic range (assuming sorted polars)
+    // This is simple estimation: assume step is ~2 knots usually. 
+    var influenceRange = 2.5; 
+
+    // Calculate Weight (Linear fade)
+    // 1.0 = Exact Match (White), 0.0 = Far away (Original)
+    var weight = Math.max(0, 1 - (diff / influenceRange));
+
+    // Apply Cubic easing for smoother visual transition (optional, makes peaks sharper)
+    // weight = weight * weight * weight; 
+
+    // If weight is effectively zero, reset to original and thin line
+    if (weight < 0.05) {
+        dataset.borderColor = originalColor;
+        dataset.borderWidth = 1;
+        // Also reset points if they were changed
+        dataset.pointBorderColor = originalColor; 
+        dataset.pointBackgroundColor = originalColor;
+    } else {
+        // Blend Original + White based on weight
+        var blended = blendColors(originalColor, "#FFFFFF", weight);
+        dataset.borderColor = blended;
+        
+        // Thicken line based on weight (1px to 4px)
+        dataset.borderWidth = 1 + (3 * weight);
+        
+        // Color points too
+        dataset.pointBorderColor = blended;
+        dataset.pointBackgroundColor = blended;
+    }
+  }
+}
+
+// Helper to mix two hex/rgba strings
+function blendColors(color1, color2, weight) {
+    // 1. Parse Colors to [r,g,b]
+    var c1 = parseColor(color1); // Original
+    var c2 = parseColor(color2); // White (#FFFFFF)
+
+    // 2. Linear Interpolation
+    var r = Math.round(c1[0] + (c2[0] - c1[0]) * weight);
+    var g = Math.round(c1[1] + (c2[1] - c1[1]) * weight);
+    var b = Math.round(c1[2] + (c2[2] - c1[2]) * weight);
+
+    return "rgb(" + r + "," + g + "," + b + ")";
+}
+
+// Simple parser for Hex or RGB(A) strings
+function parseColor(input) {
+    if (input.substr(0,1) == "#") {
+        var col = input.slice(1);
+        if (col.length == 3) col = col[0]+col[0]+col[1]+col[1]+col[2]+col[2];
+        var int = parseInt(col, 16);
+        return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+    } 
+    else if (input.substr(0,3) == "rgb") {
+        // Extract numbers "rgba(100, 200, 50, 0.5)" -> [100, 200, 50]
+        var parts = input.match(/(\d+)/g);
+        return [parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2])];
+    }
+    return [100,100,100]; // Default fallback gray
 }
 
 function radToDeg(radians) {
@@ -246,4 +300,6 @@ function roundDec (value, decimals) {
 }
 
 </script>
+
+
 
