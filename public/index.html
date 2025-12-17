@@ -1,37 +1,89 @@
 <!DOCTYPE html>
 <html>
-<script type='text/javascript' src="./Chart.min.js"></script>
-<script type='text/javascript' src="./jquery-3.7.1-min.js"></script>
-<title>Polar performance</title>
-<body style="background-color:#020202;">
+<head>
+    <script type='text/javascript' src="./Chart.min.js"></script>
+    <script type='text/javascript' src="./jquery-3.7.1-min.js"></script>
+    <title>Polar performance</title>
+    <style>
+        body { background-color: #020202; margin: 0; padding: 0; color: white; font-family: Arial, sans-serif; }
+        
+        .chart-container { 
+            width: 100%; 
+            max-width: 1200px; 
+            margin: 0 auto; /* Center the whole thing */
+        }
+        
+        /* New Toolbar Styling - sits below the chart */
+        .config-toolbar {
+            display: flex;
+            justify-content: flex-end; /* Aligns content to the right */
+            align-items: center;
+            padding: 10px 20px;
+            background-color: #0a0a0a; /* Slightly lighter than background */
+            border-top: 1px solid #222;
+        }
+        
+        .config-toolbar label { font-size: 14px; color: #ccc; margin-right: 8px; }
+        
+        .config-toolbar input {
+            width: 50px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #555;
+            color: white;
+            text-align: center;
+            border-radius: 2px;
+            padding: 4px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
 
-<canvas id="myChart" style="width:100%;max-width:1200px"></canvas>
+<div class="chart-container">
+    <canvas id="myChart"></canvas>
+    
+    <!-- Configuration Toolbar (Now below the chart) -->
+    <div class="config-toolbar">
+        <label for="labelPos">Place polar wind speed label at TWA:</label>
+        <input type="number" id="labelPos" value="135" min="0" max="180" onchange="updateLabelPos(this.value)">
+    </div>
+</div>
 
 <script>
 
 var polarSpeed, boatSpeed, TWA, TWS
 var myChart, chartData
 
-// --- CUSTOM PLUGIN: DRAW LABELS + FIX DOT LAYERING ---
+// GLOBAL CONFIG: Load from storage or default to 135
+window.labelTWA = localStorage.getItem('polarLabelTWA') || 135;
+document.getElementById('labelPos').value = window.labelTWA;
+
+function updateLabelPos(val) {
+    window.labelTWA = val;
+    localStorage.setItem('polarLabelTWA', val);
+    if (myChart) myChart.update();
+}
+
+// --- CUSTOM PLUGIN: DRAW LABELS ---
 Chart.plugins.register({
   afterDraw: function(chartInstance) {
     try {
       var ctx = chartInstance.chart.ctx;
-      
-      // 1. DRAW LABELS (These will cover lines and existing dots)
+      var targetAngle = parseFloat(window.labelTWA) || 135; 
+
+      // 1. DRAW LABELS
       chartInstance.data.datasets.forEach(function(dataset, i) {
-        if (i < 2) return; // Skip dots loops
+        if (i < 2) return; 
         
         var meta = chartInstance.getDatasetMeta(i);
         if (meta.hidden) return;
 
-        var targetTWA = 125;
         var p1 = null, p2 = null;
         var p1Meta = null, p2Meta = null;
 
         // Find interpolation bracket
         for (var j = 0; j < dataset.data.length - 1; j++) {
-            if (dataset.data[j].x <= targetTWA && dataset.data[j+1].x >= targetTWA) {
+            if (dataset.data[j].x <= targetAngle && dataset.data[j+1].x >= targetAngle) {
                 p1 = dataset.data[j];
                 p2 = dataset.data[j+1];
                 p1Meta = meta.data[j]._model;
@@ -42,19 +94,20 @@ Chart.plugins.register({
 
         var x, y;
         if (p1 && p2) {
-            var ratio = (p2.x - p1.x === 0) ? 0 : (targetTWA - p1.x) / (p2.x - p1.x);
+            var ratio = (p2.x - p1.x === 0) ? 0 : (targetAngle - p1.x) / (p2.x - p1.x);
             x = p1Meta.x + (p2Meta.x - p1Meta.x) * ratio;
             y = p1Meta.y + (p2Meta.y - p1Meta.y) * ratio;
         } else {
-            // Fallback to closest point
+            // Fallback
             var closest = null, minDiff = 100;
             dataset.data.forEach(function(d, idx) {
-                var diff = Math.abs(d.x - targetTWA);
+                var diff = Math.abs(d.x - targetAngle);
                 if (diff < minDiff) { minDiff = diff; closest = meta.data[idx]._model; }
             });
             if (closest) { x = closest.x; y = closest.y; }
         }
 
+        // Draw only if on screen and reasonably close to request
         if (x > 0 && y > 0) {
             ctx.save();
             ctx.font = "bold 14px Arial";
@@ -75,11 +128,9 @@ Chart.plugins.register({
       });
 
       // 2. REDRAW DOTS (Datasets 0 and 1)
-      // This forces the Polar/Boat Speed dots to appear ON TOP of the labels/boxes we just drew
       [0, 1].forEach(function(i) {
           var meta = chartInstance.getDatasetMeta(i);
           if (!meta.hidden) {
-              // Iterate over every point in these datasets (usually just 1 point) and redraw it
               meta.data.forEach(function(point) {
                   point.draw();
               });
@@ -91,9 +142,6 @@ Chart.plugins.register({
     }
   }
 });
-
-
-
 
 $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) {
 
@@ -119,7 +167,6 @@ $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) 
 
   // 2. BACKUP ORIGINAL COLORS
   for (var i = 2; i < json.datasets.length; i++) {
-      // If server didn't send a color, give it a default gray so our fading logic works
       if (!json.datasets[i].borderColor) {
           json.datasets[i].borderColor = 'rgba(100, 100, 100, 0.5)';
       }
@@ -133,7 +180,6 @@ $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) 
 
 function showChart (data) {
   console.log(data)
-  
   myChart = new Chart("myChart", {
     type: "scatter",
     data: data,
@@ -294,7 +340,6 @@ function interpolateColors(tws) {
 
     var originalColor = dataset._originalColor; 
     
-    // Safety Fallback: If original color is missing, use default
     if (!originalColor) {
         originalColor = "rgba(100,100,100,0.5)";
         dataset._originalColor = originalColor;
@@ -329,8 +374,7 @@ function blendColors(color1, color2, weight) {
 }
 
 function parseColor(input) {
-    if (!input) return [100,100,100]; // Safety
-    
+    if (!input) return [100,100,100]; 
     if (input.substr(0,1) == "#") {
         var col = input.slice(1);
         if (col.length == 3) col = col[0]+col[0]+col[1]+col[1]+col[2]+col[2];
@@ -364,5 +408,5 @@ function roundDec (value, decimals) {
 }
 
 </script>
-
-
+</body>
+</html>
