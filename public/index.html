@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <script type='text/javascript' src="./Chart.min.js"></script>
-<script type='text/javascript' src="./jquery.min.js"></script>
+<script type='text/javascript' src="./jquery-3.7.1-min.js"></script>
 <title>Polar performance</title>
 <body style="background-color:#020202;">
 
@@ -11,6 +11,89 @@
 
 var polarSpeed, boatSpeed, TWA, TWS
 var myChart, chartData
+
+// --- CUSTOM PLUGIN: DRAW LABELS + FIX DOT LAYERING ---
+Chart.plugins.register({
+  afterDraw: function(chartInstance) {
+    try {
+      var ctx = chartInstance.chart.ctx;
+      
+      // 1. DRAW LABELS (These will cover lines and existing dots)
+      chartInstance.data.datasets.forEach(function(dataset, i) {
+        if (i < 2) return; // Skip dots loops
+        
+        var meta = chartInstance.getDatasetMeta(i);
+        if (meta.hidden) return;
+
+        var targetTWA = 125;
+        var p1 = null, p2 = null;
+        var p1Meta = null, p2Meta = null;
+
+        // Find interpolation bracket
+        for (var j = 0; j < dataset.data.length - 1; j++) {
+            if (dataset.data[j].x <= targetTWA && dataset.data[j+1].x >= targetTWA) {
+                p1 = dataset.data[j];
+                p2 = dataset.data[j+1];
+                p1Meta = meta.data[j]._model;
+                p2Meta = meta.data[j+1]._model;
+                break;
+            }
+        }
+
+        var x, y;
+        if (p1 && p2) {
+            var ratio = (p2.x - p1.x === 0) ? 0 : (targetTWA - p1.x) / (p2.x - p1.x);
+            x = p1Meta.x + (p2Meta.x - p1Meta.x) * ratio;
+            y = p1Meta.y + (p2Meta.y - p1Meta.y) * ratio;
+        } else {
+            // Fallback to closest point
+            var closest = null, minDiff = 100;
+            dataset.data.forEach(function(d, idx) {
+                var diff = Math.abs(d.x - targetTWA);
+                if (diff < minDiff) { minDiff = diff; closest = meta.data[idx]._model; }
+            });
+            if (closest) { x = closest.x; y = closest.y; }
+        }
+
+        if (x > 0 && y > 0) {
+            ctx.save();
+            ctx.font = "bold 14px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            var labelText = String(dataset.label);
+            
+            // Box
+            var textWidth = ctx.measureText(labelText).width;
+            ctx.fillStyle = "rgba(2,2,2,0.9)"; 
+            ctx.fillRect(x - (textWidth/2) - 3, y - 9, textWidth + 6, 18);
+
+            // Text
+            ctx.fillStyle = dataset.borderColor || '#ffffff'; 
+            ctx.fillText(labelText, x, y);
+            ctx.restore();
+        }
+      });
+
+      // 2. REDRAW DOTS (Datasets 0 and 1)
+      // This forces the Polar/Boat Speed dots to appear ON TOP of the labels/boxes we just drew
+      [0, 1].forEach(function(i) {
+          var meta = chartInstance.getDatasetMeta(i);
+          if (!meta.hidden) {
+              // Iterate over every point in these datasets (usually just 1 point) and redraw it
+              meta.data.forEach(function(point) {
+                  point.draw();
+              });
+          }
+      });
+
+    } catch (err) {
+      console.log("Label draw error: " + err);
+    }
+  }
+});
+
+
+
 
 $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) {
 
@@ -35,11 +118,13 @@ $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) 
   })
 
   // 2. BACKUP ORIGINAL COLORS
-  // We iterate starting at 2 because 0 & 1 are the dots.
   for (var i = 2; i < json.datasets.length; i++) {
-      // Store the original server-assigned color so we can revert to it
+      // If server didn't send a color, give it a default gray so our fading logic works
+      if (!json.datasets[i].borderColor) {
+          json.datasets[i].borderColor = 'rgba(100, 100, 100, 0.5)';
+      }
       json.datasets[i]._originalColor = json.datasets[i].borderColor;
-      json.datasets[i].borderWidth = 1; // Ensure default width
+      json.datasets[i].borderWidth = 1; 
   }
 
   chartData = json
@@ -48,6 +133,7 @@ $.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) 
 
 function showChart (data) {
   console.log(data)
+  
   myChart = new Chart("myChart", {
     type: "scatter",
     data: data,
@@ -196,78 +282,55 @@ function updateChart () {
   }
 }
 
-// --- NEW LOGIC: Interpolate Colors based on proximity ---
+// --- Interpolate Colors ---
 function interpolateColors(tws) {
   if (!tws || !chartData) return;
 
-  // We loop starting at 2 (skipping the two dots)
   for (var i = 2; i < chartData.datasets.length; i++) {
     var dataset = chartData.datasets[i];
-    var lineSpeed = parseFloat(dataset.label); // e.g. 6, 8, 10
+    var lineSpeed = parseFloat(dataset.label); 
     
     if (isNaN(lineSpeed)) continue;
 
-    // Retrieve original color or skip if not found
     var originalColor = dataset._originalColor; 
-    if (!originalColor) continue;
+    
+    // Safety Fallback: If original color is missing, use default
+    if (!originalColor) {
+        originalColor = "rgba(100,100,100,0.5)";
+        dataset._originalColor = originalColor;
+    }
 
-    // Calculate distance to current wind
     var diff = Math.abs(tws - lineSpeed);
-    
-    // We define a "Range of Influence". 
-    // Example: If polars are 2kts apart (6, 8, 10), influence is 2.
-    // If diff is 0 (exact match), weight is 1.0 (Fully White).
-    // If diff is >= 2, weight is 0.0 (Original Color).
-    
-    // Find neighbors to determine dynamic range (assuming sorted polars)
-    // This is simple estimation: assume step is ~2 knots usually. 
     var influenceRange = 2.5; 
-
-    // Calculate Weight (Linear fade)
-    // 1.0 = Exact Match (White), 0.0 = Far away (Original)
     var weight = Math.max(0, 1 - (diff / influenceRange));
 
-    // Apply Cubic easing for smoother visual transition (optional, makes peaks sharper)
-    // weight = weight * weight * weight; 
-
-    // If weight is effectively zero, reset to original and thin line
     if (weight < 0.05) {
         dataset.borderColor = originalColor;
         dataset.borderWidth = 1;
-        // Also reset points if they were changed
         dataset.pointBorderColor = originalColor; 
         dataset.pointBackgroundColor = originalColor;
     } else {
-        // Blend Original + White based on weight
         var blended = blendColors(originalColor, "#FFFFFF", weight);
         dataset.borderColor = blended;
-        
-        // Thicken line based on weight (1px to 4px)
         dataset.borderWidth = 1 + (3 * weight);
-        
-        // Color points too
         dataset.pointBorderColor = blended;
         dataset.pointBackgroundColor = blended;
     }
   }
 }
 
-// Helper to mix two hex/rgba strings
 function blendColors(color1, color2, weight) {
-    // 1. Parse Colors to [r,g,b]
-    var c1 = parseColor(color1); // Original
-    var c2 = parseColor(color2); // White (#FFFFFF)
-
-    // 2. Linear Interpolation
+    var c1 = parseColor(color1); 
+    var c2 = parseColor(color2); 
     var r = Math.round(c1[0] + (c2[0] - c1[0]) * weight);
     var g = Math.round(c1[1] + (c2[1] - c1[1]) * weight);
     var b = Math.round(c1[2] + (c2[2] - c1[2]) * weight);
-
     return "rgb(" + r + "," + g + "," + b + ")";
 }
 
-// Simple parser for Hex or RGB(A) strings
 function parseColor(input) {
+    if (!input) return [100,100,100]; // Safety
+    
     if (input.substr(0,1) == "#") {
         var col = input.slice(1);
         if (col.length == 3) col = col[0]+col[0]+col[1]+col[1]+col[2]+col[2];
@@ -275,11 +338,12 @@ function parseColor(input) {
         return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
     } 
     else if (input.substr(0,3) == "rgb") {
-        // Extract numbers "rgba(100, 200, 50, 0.5)" -> [100, 200, 50]
         var parts = input.match(/(\d+)/g);
-        return [parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2])];
+        if (parts && parts.length >= 3) {
+            return [parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2])];
+        }
     }
-    return [100,100,100]; // Default fallback gray
+    return [100,100,100]; 
 }
 
 function radToDeg(radians) {
@@ -300,6 +364,5 @@ function roundDec (value, decimals) {
 }
 
 </script>
-
 
 
