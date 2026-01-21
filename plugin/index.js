@@ -472,7 +472,7 @@ module.exports = function (app) {
           }
           // Calculate opposite Tack True
           // app.debug('tackTrue: port: %d HDG: %d targetTWA: %d', port, radToDeg(HDG), radToDeg(targetTWA))
-          if (port) {
+          if (port < 0) {
             let tackTrue = HDG - targetTWA
             if (tackTrue < 0) {
               tackTrue = tackTrue + 2 * Math.PI
