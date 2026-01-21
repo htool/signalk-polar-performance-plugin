@@ -260,13 +260,13 @@ module.exports = function (app) {
         if (options.beatAngle === true) {
           addValue('performance.beatAngle', perfObj.beatAngle * port, {
             units: 'rad',
-            description: 'The optimal beat/upwind angle for current TWS, negative top port.'
+            description: 'The optimal beat/upwind angle for current TWS, negative to port.'
           })
         }
         if (options.targetTWA === true) {
           addValue('performance.targetAngle', perfObj.beatAngle * port, {
             units: 'rad',
-            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative top port.'
+            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative to port.'
           })
         }
       }
@@ -275,13 +275,13 @@ module.exports = function (app) {
         if (options.beatAngle === true) {
           addValue('performance.gybeAngle', perfObj.runAngle * port, {
             units: 'rad',
-            description: 'The optimal run/downwind angle for current TWS, negative top port.'
+            description: 'The optimal run/downwind angle for current TWS, negative to port.'
           })
         }
         if (options.targetTWA === true) {
           addValue('performance.targetAngle', perfObj.runAngle * port, {
             units: 'rad',
-            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative top port.'
+            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative to port.'
           })
         }
       }
