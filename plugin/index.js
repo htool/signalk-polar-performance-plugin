@@ -243,89 +243,132 @@ module.exports = function (app) {
       }
 
       if (BSP) {
-        addValue('performance.boatSpeedDamped', BSP, { units: 'm/s' })
+        addValue('performance.boatSpeedDamped', BSP, { 
+          units: 'm/s',
+          description: 'Boat speed after applying damping factor (see Polar Performance Plugin settings).'
+       })
       }
 
       if (TWA) {
         addValue('environment.wind.angleTrueWaterDamped', TWA * port, {
-          units: 'rad'
+          units: 'rad',
+          description: 'True Wind Angle after applying damping factor (see Polar Performance Plugin settings).'
         })
       }
 
       if (typeof perfObj.beatAngle !== 'undefined') {
         if (options.beatAngle === true) {
-          addValue('performance.beatAngle', perfObj.beatAngle * port)
+          addValue('performance.beatAngle', perfObj.beatAngle * port, {
+            units: 'rad',
+            description: 'The optimal beat/upwind angle for current TWS.'
+          })
         }
         if (options.targetTWA === true) {
-          addValue('performance.targetAngle', perfObj.beatAngle * port)
-        }
-      }
-
-      if (typeof perfObj.beatVMG !== 'undefined') {
-        addValue('performance.beatAngleVelocityMadeGood', perfObj.beatVMG)
-        if (options.targetTWA === true) {
-          addValue('performance.targetVelocityMadeGood', perfObj.beatVMG, {
-            units: 'm/s'
+          addValue('performance.targetAngle', perfObj.beatAngle * port, {
+            units: 'rad',
+            description: 'The combined and automatic switching optimal beat or run angle for current TWS.'
           })
         }
       }
 
       if (typeof perfObj.runAngle !== 'undefined') {
         if (options.beatAngle === true) {
-          addValue('performance.gybeAngle', perfObj.runAngle * port)
+          addValue('performance.gybeAngle', perfObj.runAngle * port, {
+            units: 'rad',
+            description: 'The optimal run/downwind angle for current TWS.'
+          })
         }
         if (options.targetTWA === true) {
-          addValue('performance.targetAngle', perfObj.runAngle * port)
+          addValue('performance.targetAngle', perfObj.runAngle * port, {
+            units: 'rad',
+            description: 'The combined and automatic switching optimal beat or run angle for current TWS.'
+          })
+        }
+      }
+
+      if (typeof perfObj.beatVMG !== 'undefined') {
+        addValue('performance.beatAngleVelocityMadeGood', perfObj.beatVMG, {
+          units: 'm/s',
+          description: 'The beat/upwind Velocity Made Good for current boat speed and heading.'
+        })
+        if (options.targetTWA === true) {
+          addValue('performance.targetVelocityMadeGood', perfObj.beatVMG, {
+            units: 'm/s',
+            description: 'The combined and automatic switching beat or run Velocity Made Good for current boat speed and heading.'
+          })
         }
       }
 
       if (typeof perfObj.runVMG !== 'undefined') {
-        addValue('performance.gybeAngleVelocityMadeGood', perfObj.runVMG)
+        addValue('performance.gybeAngleVelocityMadeGood', perfObj.runVMG, {
+          units: 'm/s',
+          description: 'The run/downwind Velocity Made Good for current boat speed and heading.'
+        })
         if (options.targetTWA === true) {
           addValue('performance.targetVelocityMadeGood', perfObj.runVMG, {
-            units: 'm/s'
+            units: 'm/s',
+            description: 'The combined and automatic switching beat or run Velocity Made Good for current boat speed and heading.'
           })
         }
       }
 
       if (typeof perfObj.optimumWindAngle !== 'undefined') {
         addValue('performance.optimumWindAngle', perfObj.optimumWindAngle, {
-          units: 'rad'
+          units: 'rad',
+          description: 'The optimum wind angle (diff between TWA and environment.wind.directionTrue).'
         })
       }
 
       if (typeof perfObj.targetSpeed !== 'undefined') {
-        addValue('performance.targetSpeed', perfObj.targetSpeed)
+        addValue('performance.targetSpeed', perfObj.targetSpeed, { 
+            units: 'm/s',
+            description: 'Target boat speed for the current wind conditions according to polar chart.'
+           }
+        )
       }
 
       if (typeof perfObj.polarSpeed !== 'undefined') {
-        addValue('performance.polarSpeed', perfObj.polarSpeed)
-        addValue('performance.polarSpeedRatio', perfObj.polarSpeedRatio)
+        addValue('performance.polarSpeed', perfObj.polarSpeed, { 
+          units: 'm/s',
+          description: 'The polar chart boat speed as per the polar chart for current TWS and TWA.'
+        })
+        addValue('performance.polarSpeedRatio', perfObj.polarSpeedRatio, {
+          units: 'ratio',
+          description: 'The ratio between actual boat speed and polar chart boat speed for current TWS and TWA.'
+        })
         if (typeof perfObj.velocityMadeGood !== 'undefined') {
-          addValue('performance.velocityMadeGood', perfObj.velocityMadeGood)
-          addValue(
-            'performance.polarVelocityMadeGood',
-            perfObj.polarVelocityMadeGood,
-            { units: 'm/s' }
-          )
-          addValue(
-            'performance.polarVelocityMadeGoodRatio',
-            perfObj.polarVelocityMadeGoodRatio,
-            { units: 'ratio' }
-          )
+          addValue('performance.velocityMadeGood', perfObj.velocityMadeGood, {
+            units: 'm/s',
+            description: 'The actual Velocity Made Good based on current heading and boat speed.'
+          })
+          addValue('performance.polarVelocityMadeGood', perfObj.polarVelocityMadeGood, {
+            units: 'm/s',
+            description: 'The polar chart Velocity Made Good indicated in the polar for current TWS and TWA.'
+          })
+          addValue('performance.polarVelocityMadeGoodRatio', perfObj.polarVelocityMadeGoodRatio, {
+            units: 'ratio',
+            description: 'The ratio between actual Velocity Made Good and polar chart indicated Velocity Made Good for current TWS and TWA.'
+          })
         }
       }
 
       if (typeof perfObj.maxSpeed !== 'undefined') {
-        addValue('performance.maxSpeed', perfObj.maxSpeed, { units: 'm/s' })
+        addValue('performance.maxSpeed', perfObj.maxSpeed, { 
+          units: 'm/s',
+          description: 'Maximum boat speed as per polar chart.'
+        })
         addValue('performance.maxSpeedAngle', perfObj.maxSpeedAngle, {
-          units: 'rad'
+          units: 'rad',
+          description: 'The angle to achieve maximum boat speed (not the VMG), at the current TWS'
         })
       }
 
       if (options.tackTrue === true) {
         if (typeof perfObj.tackTrue !== 'undefined') {
-          addValue('performance.tackTrue', perfObj.tackTrue)
+          addValue('performance.tackTrue', perfObj.tackTrue, {
+            units: 'rad',
+            description: 'The Opposite Tack\'s True heading, based on current heading and optimal polar performance.'
+          })
         }
       }
 
