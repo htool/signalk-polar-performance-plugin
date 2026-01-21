@@ -252,7 +252,7 @@ module.exports = function (app) {
       if (TWA) {
         addValue('environment.wind.angleTrueWaterDamped', TWA * port, {
           units: 'rad',
-          description: 'True Wind Angle after applying damping factor (see Polar Performance Plugin settings).'
+          description: 'True Wind Angle after applying damping factor, negative to port (see Polar Performance Plugin settings).'
         })
       }
 
@@ -260,13 +260,13 @@ module.exports = function (app) {
         if (options.beatAngle === true) {
           addValue('performance.beatAngle', perfObj.beatAngle * port, {
             units: 'rad',
-            description: 'The optimal beat/upwind angle for current TWS.'
+            description: 'The optimal beat/upwind angle for current TWS, negative top port.'
           })
         }
         if (options.targetTWA === true) {
           addValue('performance.targetAngle', perfObj.beatAngle * port, {
             units: 'rad',
-            description: 'The combined and automatic switching optimal beat or run angle for current TWS.'
+            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative top port.'
           })
         }
       }
@@ -275,13 +275,13 @@ module.exports = function (app) {
         if (options.beatAngle === true) {
           addValue('performance.gybeAngle', perfObj.runAngle * port, {
             units: 'rad',
-            description: 'The optimal run/downwind angle for current TWS.'
+            description: 'The optimal run/downwind angle for current TWS, negative top port.'
           })
         }
         if (options.targetTWA === true) {
           addValue('performance.targetAngle', perfObj.runAngle * port, {
             units: 'rad',
-            description: 'The combined and automatic switching optimal beat or run angle for current TWS.'
+            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative top port.'
           })
         }
       }
@@ -307,7 +307,7 @@ module.exports = function (app) {
         if (options.targetTWA === true) {
           addValue('performance.targetVelocityMadeGood', perfObj.runVMG, {
             units: 'm/s',
-            description: 'The combined and automatic switching beat or run Velocity Made Good for current boat speed and heading.'
+            description: 'The combined and automatic switching beat or run Velocity Made Good for current TWS and TWA.'
           })
         }
       }
@@ -315,14 +315,14 @@ module.exports = function (app) {
       if (typeof perfObj.optimumWindAngle !== 'undefined') {
         addValue('performance.optimumWindAngle', perfObj.optimumWindAngle, {
           units: 'rad',
-          description: 'The optimum wind angle (diff between TWA and environment.wind.directionTrue).'
+          description: 'The optimum wind angle, negative to port (diff between TWA and environment.wind.directionTrue).'
         })
       }
 
       if (typeof perfObj.targetSpeed !== 'undefined') {
         addValue('performance.targetSpeed', perfObj.targetSpeed, { 
             units: 'm/s',
-            description: 'Target boat speed for the current wind conditions according to polar chart.'
+            description: 'Target boat speed based on current TWA.'
            }
         )
       }
@@ -359,7 +359,7 @@ module.exports = function (app) {
         })
         addValue('performance.maxSpeedAngle', perfObj.maxSpeedAngle, {
           units: 'rad',
-          description: 'The angle to achieve maximum boat speed (not the VMG), at the current TWS'
+          description: 'The angle to achieve maximum boat speed (not the VMG), based on current TWS, negative to port.'
         })
       }
 
@@ -367,7 +367,7 @@ module.exports = function (app) {
         if (typeof perfObj.tackTrue !== 'undefined') {
           addValue('performance.tackTrue', perfObj.tackTrue, {
             units: 'rad',
-            description: 'The Opposite Tack\'s True heading, based on current heading and optimal polar performance.'
+            description: 'The Opposite Tack\'s heading relative to True North, based on current TWS.'
           })
         }
       }
