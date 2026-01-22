@@ -472,7 +472,7 @@ module.exports = function (app) {
           }
           // Calculate opposite Tack True
           // app.debug('tackTrue: port: %d HDG: %d targetTWA: %d', port, radToDeg(HDG), radToDeg(targetTWA))
-          if (port) {
+          if (port < 0) {
             let tackTrue = HDG - targetTWA
             if (tackTrue < 0) {
               tackTrue = tackTrue + 2 * Math.PI
@@ -588,15 +588,39 @@ module.exports = function (app) {
       var polar = {}
       var beat = false
 
+      function upsertTwa (polarIndex, twaObj, angleDeg) {
+        const twaArray = polar[polarIndex].twa
+        const existingIndex = twaArray.findIndex(entry => entry.twa === twaObj.twa)
+        if (existingIndex >= 0) {
+          app.error(
+            'Duplicate TWA %s deg for TWS %s kts, keeping last value',
+            angleDeg,
+            msToKts(polar[polarIndex].tws).toFixed(1)
+          )
+          twaArray[existingIndex] = twaObj
+        } else {
+          twaArray.push(twaObj)
+        }
+      }
+
       // Create array of arrays from csv
       csv.split('\n').forEach(row => {
-        csvArray.push(row.split(';'))
+        const trimmedRow = row.trim()
+        if (!trimmedRow) {
+          return
+        }
+        const cells = trimmedRow.split(';').map(cell => cell.trim())
+        if (!cells[0]) {
+          return
+        }
+        csvArray.push(cells)
       })
       // app.debug('csvArray: %s', JSON.stringify(csvArray))
 
       // Populate the polar object from CSV rows
       csvArray.forEach(row => {
-        if (row[0] == 'twa/tws') {
+        const rowKey = row[0].trim().toLowerCase()
+        if (rowKey == 'twa/tws') {
           // The row with TWS columns
           // Create empty TWS objects in polar object
           app.debug('First row with TWS columns')
@@ -609,7 +633,8 @@ module.exports = function (app) {
         } else if (row.filter(i => i === '0').length > 1) {
           app.debug('beat and run angles are included')
           // Beat / Run angle
-          let angle = degToRad(Number(row[0]))
+          let angleDeg = Number(row[0])
+          let angle = degToRad(angleDeg)
           let angleName
           let VMGName
           app.debug('angle < halfPi   %d < %d', angle, halfPi)
@@ -624,17 +649,23 @@ module.exports = function (app) {
           }
 
           for (let index = 0; index < row.length - 1; index++) {
-            if (row[index + 1] != 0) {
+            if (!row[index + 1]) {
+              continue
+            }
+            const tbsCell = Number(row[index + 1])
+            if (Number.isNaN(tbsCell) || tbsCell === 0) {
+              continue
+            }
+            if (tbsCell != 0) {
               polar[index][angleName] = angle
-              let tbs =
-                ktsToMs(Number(row[index + 1])) * (options.perfAdjust || 1)
+              let tbs = ktsToMs(tbsCell) * (options.perfAdjust || 1)
               let vmg = tbs * Math.abs(Math.cos(angle))
               polar[index][VMGName] = roundDec(vmg)
               if (typeof polar[index]['twa'] == 'undefined') {
                 polar[index]['twa'] = []
               }
               let Obj = { twa: angle, tbs: tbs, vmg: vmg }
-              polar[index]['twa'] = polar[index]['twa'].concat(Obj)
+              upsertTwa(index, Obj, angleDeg)
               app.debug('Finding max speed')
               if (
                 typeof polar[index]['Max speed'] == 'undefined' ||
@@ -648,17 +679,24 @@ module.exports = function (app) {
           }
         } else {
           // Normal line
-          let angle = degToRad(Number(row[0])) // CSV deg to internal rad
+          let angleDeg = Number(row[0])
+          let angle = degToRad(angleDeg) // CSV deg to internal rad
           for (let index = 0; index < row.length - 1; index++) {
             if (typeof polar[index].twa == 'undefined') {
               polar[index].twa = []
             }
-            let tbs =
-              ktsToMs(Number(row[index + 1])) * (options.perfAdjust || 1)
+            if (!row[index + 1]) {
+              continue
+            }
+            const tbsCell = Number(row[index + 1])
+            if (Number.isNaN(tbsCell)) {
+              continue
+            }
+            let tbs = ktsToMs(tbsCell) * (options.perfAdjust || 1)
             let vmg = tbs * Math.abs(Math.cos(angle))
             let Obj = { twa: angle, tbs: tbs, vmg: vmg }
             // app.debug('Adding Obj: %s', JSON.stringify(Obj))
-            polar[index]['twa'] = polar[index]['twa'].concat(Obj)
+            upsertTwa(index, Obj, angleDeg)
             // See if we need to set/overwrite beat/run angle
 
             // See if this a new Max speed
