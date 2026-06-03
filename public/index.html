@@ -35,6 +35,26 @@
             padding: 4px;
             font-size: 14px;
         }
+        
+				#error-banner {
+				    position: fixed;
+				    bottom: 0;
+				    left: 0;
+				    right: 0;
+				    background: rgba(220, 60, 60, 0.95);
+				    color: white;
+				    text-align: center;
+				    padding: 14px 20px;
+				    font-size: 15px;
+				    z-index: 1000;
+				    box-shadow: 0 -2px 8px rgba(0,0,0,0.3);
+				    display: none;
+				  }
+
+        #error-banner.show {
+            display: block;
+        }
+        
     </style>
 </head>
 <body>
@@ -47,12 +67,17 @@
         <label for="labelPos">Place polar wind speed label at TWA:</label>
         <input type="number" id="labelPos" value="135" min="0" max="180" onchange="updateLabelPos(this.value)">
     </div>
+
+    <div id="error-banner"></div>
 </div>
 
 <script>
 
-var polarSpeed, boatSpeed, TWA, TWS
 var myChart, chartData
+let ws
+let polarSpeed = 0, boatSpeed = 0, TWA = 0, TWS = 0
+let dataReceived = { polar: false, boatSpeed: false, twa: false }
+let dataTimeout
 
 // GLOBAL CONFIG: Load from storage or default to 135
 window.labelTWA = localStorage.getItem('polarLabelTWA') || 135;
@@ -143,41 +168,80 @@ Chart.plugins.register({
   }
 });
 
-$.getJSON("/plugins/signalk-polar-performance-plugin/chartData", function(json) {
+$.getJSON("/plugins/signalk-polar-performance-plugin/chartData")
+  .done(function(json) {
+    if (!json || !json.datasets || json.datasets.length < 3) {
+      showError("No polar diagram data available.<br><br>Make sure you have entered a valid polar CSV in the plugin settings.");
+      return;
+    }
 
-  // 1. Add actual values dots to the BEGINNING (Indices 0 and 1)
-  json.datasets.unshift({
-    label: 'Polar Speed',
-    backgroundColor: 'rgba(0,255,0,0.7)',
-    borderColor: 'rgba(0,255,0,0.2)',
-    borderWidth: 1,
-    radius: 10, 
-    pointStyle: 'circle',
-    data: [{ y: 0, x: 0, r: 10 }]
-  },
-  {
-    label: 'Boat Speed',
-    backgroundColor: 'rgba(0,150,255,0.7)',
-    borderColor: 'rgba(0,150,255,0.2)',
-    borderWidth: 1,
-    radius: 10,
-    pointStyle: 'circle',
-    data: [{ y: 0, x: 0, r: 10 }]
-  })
+    // Add actual values dots (Polar Speed + Boat Speed)
+    json.datasets.unshift({
+      label: 'Polar Speed',
+      backgroundColor: 'rgba(0,255,0,0.7)',
+      borderColor: 'rgba(0,255,0,0.2)',
+      borderWidth: 1,
+      radius: 10, 
+      pointStyle: 'circle',
+      data: [{ y: 0, x: 0, r: 10 }]
+    },
+    {
+      label: 'Boat Speed',
+      backgroundColor: 'rgba(0,150,255,0.7)',
+      borderColor: 'rgba(0,150,255,0.2)',
+      borderWidth: 1,
+      radius: 10,
+      pointStyle: 'circle',
+      data: [{ y: 0, x: 0, r: 10 }]
+    });
 
-  // 2. BACKUP ORIGINAL COLORS
-  for (var i = 2; i < json.datasets.length; i++) {
+    // Backup original colors
+    for (var i = 2; i < json.datasets.length; i++) {
       if (!json.datasets[i].borderColor) {
-          json.datasets[i].borderColor = 'rgba(100, 100, 100, 0.5)';
+        json.datasets[i].borderColor = 'rgba(100, 100, 100, 0.5)';
       }
       json.datasets[i]._originalColor = json.datasets[i].borderColor;
       json.datasets[i].borderWidth = 1; 
+    }
+
+    chartData = json;
+    showChart(chartData);
+  })
+  .fail(function(jqXHR, textStatus, errorThrown) {
+    let reason = "Unknown error";
+    
+    if (jqXHR.status === 404) {
+      reason = "Plugin endpoint not found — is the plugin enabled?";
+    } else if (jqXHR.status === 500) {
+      reason = "Server error — check plugin configuration (invalid CSV polar?)";
+    } else if (textStatus === "parsererror") {
+      reason = "Invalid data received from server";
+    }
+
+    showError(`Failed to load polar data.<br><br>Reason: ${reason}`);
+  });
+
+// New error display function
+function showError(message) {
+  let banner = document.getElementById('error-banner');
+  
+  if (!banner) {
+    // Fallback: create banner dynamically if missing
+    banner = document.createElement('div');
+    banner.id = 'error-banner';
+    document.body.appendChild(banner);
   }
 
-  chartData = json
-  showChart(chartData)
-})
-
+  banner.innerHTML = `
+    ⚠️ ${message} 
+    &nbsp;&nbsp;
+    <button onclick="location.reload()" style="background:white; color:#c33; border:none; padding:4px 10px; border-radius:4px; cursor:pointer;">
+      Reload
+    </button>
+  `;
+  
+  banner.classList.add('show');
+}
 function showChart (data) {
   console.log(data)
   myChart = new Chart("myChart", {
@@ -293,6 +357,11 @@ function startListeners () {
   }
 
   ws.send(JSON.stringify(subscriptionObject));
+
+  // Start timeout to detect missing data
+  dataReceived = { polar: false, boatSpeed: false, twa: false, tws: false };
+  clearTimeout(dataTimeout);
+  dataTimeout = setTimeout(checkDataReceived, 20000);
 }
 
 function handleData (data) {
@@ -304,18 +373,51 @@ function handleData (data) {
   if (path == 'performance.polarSpeed') {
     polarSpeed = roundDec(msToKts(value), 1)
     chartData.datasets[0].data[0].y = polarSpeed
-  } else if (path == 'environment.wind.angleTrueWaterDamped') {
+    dataReceived.polar = true;
+  } else if (path === 'environment.wind.angleTrueWaterDamped') {
     TWA = roundDec(Math.abs(radToDeg(value)),1)
     chartData.datasets[0].data[0].x = TWA
     chartData.datasets[1].data[0].x = TWA
+    dataReceived.twa = true;
   } else if (path == 'performance.boatSpeedDamped') {
     boatSpeed = roundDec(msToKts(value),1)
     chartData.datasets[1].data[0].y = boatSpeed
+    dataReceived.boatSpeed = true;
   } else if (path == 'environment.wind.speedTrue') {
     TWS = msToKts(value);
+    dataReceived.tws = true;
   }
 }
 
+function checkDataReceived() {
+  let missing = [];
+
+  if (!dataReceived.polar) missing.push("Polar Speed (performance.polarSpeed)");
+  if (!dataReceived.boatSpeed) missing.push("Boat Speed (performance.boatSpeedDamped)");
+  if (!dataReceived.twa) missing.push("True Wind Angle (environment.wind.angleTrueWater)");
+  if (!dataReceived.tws) missing.push("True Wind Speed (environment.wind.speedTrue)");
+
+  if (missing.length > 0) {
+    showError(`Missing data: ${missing.join(', ')}. Check your instruments and polar settings.`);
+  }
+}
+
+// Enhanced error display
+function showError(message) {
+  const container = document.querySelector('.chart-container');
+  container.innerHTML = `
+    <div style="padding: 40px 20px; text-align: center; color: #ff7777;">
+      <h2 style="color: #ff6666;">⚠️ Cannot display Polar Performance</h2>
+      <div style="margin: 25px 0; line-height: 1.6; font-size: 17px;">
+        ${message}
+      </div>
+      <button onclick="location.reload()" 
+              style="padding: 12px 24px; font-size: 16px; background: #333; color: white; border: 1px solid #666; border-radius: 6px; cursor: pointer;">
+        Reload Page
+      </button>
+    </div>
+  `;
+}
 
 connect()
 

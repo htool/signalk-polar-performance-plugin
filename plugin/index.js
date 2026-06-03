@@ -116,13 +116,25 @@ module.exports = function (app) {
     plugin.registerWithRouter = function (router) {
       // Will appear here; plugins/signalk-polar-performance-plugin/
       app.debug('registerWithRouter')
+      // Middleware to set Origin-Agent-Cluster on every response from this plugin
+      router.use((req, res, next) => {
+        res.set('Origin-Agent-Cluster', '?1')
+        next()
+      })
       router.get('/polar', (req, res) => {
         res.contentType('application/json')
         res.send(JSON.stringify(polar))
       })
       router.get('/chartData', (req, res) => {
-        res.contentType('application/json')
-        res.send(JSON.stringify(getChartData()))
+        const chart = getChartData();
+        if (!chart || !chart.datasets || chart.datasets.length === 0) {
+          return res.status(500).json({ 
+            error: "No polar data", 
+            reason: "Polar CSV is empty or invalid. Please configure a valid polar in plugin settings." 
+          })
+        }
+      res.contentType('application/json');
+      res.send(JSON.stringify(chart));
       })
     }
 
