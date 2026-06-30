@@ -1,3 +1,7 @@
+---
+applyTo: "public/**"
+---
+
 # Instructions for Matching a SignalK Webapp to the SignalK Server UI
 
 ## Overview
