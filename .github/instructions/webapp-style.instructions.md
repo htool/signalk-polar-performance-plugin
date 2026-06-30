@@ -21,25 +21,47 @@ This guide documents the exact approach used to make the advancedwind webapp mat
 
 ## 2. Dynamically Inject the SignalK Stylesheet
 
-Because the CSS filename is hashed, discover it at runtime by fetching the admin UI root page and parsing the `<link rel="stylesheet">` tag out of it.
+Because the CSS filename is hashed by Vite and changes on every SignalK rebuild, discover it at runtime. Use the **Vite manifest** (SK server ≥ 2.27.0) as the primary method, with a fallback to scraping the admin UI root page for older servers.
 
 Add this inline `<script>` in `<head>` **before** any local stylesheet:
 
 ```html
 <script>
   (async () => {
+    const appendStylesheet = (href) => {
+      const el = document.createElement('link');
+      el.rel  = 'stylesheet';
+      el.href = href;
+      document.head.appendChild(el);
+    };
+    // Primary: read the Vite manifest published by SK server >= 2.27.0
+    try {
+      const res = await fetch('/admin/.vite/manifest.json');
+      if (res.ok) {
+        const manifest = await res.json();
+        let found = false;
+        for (const entry of Object.values(manifest)) {
+          if (!entry.isEntry) continue;
+          for (const css of entry.css ?? []) {
+            appendStylesheet('/admin/' + css);
+            found = true;
+          }
+        }
+        if (found) return;
+      }
+    } catch (e) {
+      // fall through to legacy scrape
+    }
+    // Fallback: parse the admin UI root page (older servers)
     try {
       const res  = await fetch('/');
       const html = await res.text();
       const doc  = new DOMParser().parseFromString(html, 'text/html');
       const link = doc.querySelector('link[rel="stylesheet"]');
       if (link) {
-        const el = document.createElement('link');
-        el.rel  = 'stylesheet';
         // Use res.url (final URL after redirects) as base — the admin UI
         // is served at /admin/, not /, so relative hrefs must resolve against it.
-        el.href = new URL(link.getAttribute('href'), res.url).href;
-        document.head.appendChild(el);
+        appendStylesheet(new URL(link.getAttribute('href'), res.url).href);
       }
     } catch (e) {
       console.warn('[webapp] Could not load SignalK admin stylesheet:', e);
@@ -51,8 +73,9 @@ Add this inline `<script>` in `<head>` **before** any local stylesheet:
 <link rel="stylesheet" href="main.css">
 ```
 
-**Why `res.url` and not `window.location.origin`?**
-`fetch('/')` follows the redirect from `/` to `/admin/`. `res.url` is the final URL after redirects, so relative paths like `./assets/style-*.css` resolve correctly to `/admin/assets/style-*.css`.
+**Why two methods?**
+- The Vite manifest at `/admin/.vite/manifest.json` is reliable and stable — use it when available (SK ≥ 2.27.0).
+- The HTML-scrape fallback handles older SK versions where the manifest is not published. `res.url` (not `window.location.origin`) is used as the base because `fetch('/')` follows the redirect to `/admin/`, making relative CSS hrefs resolve correctly.
 
 ---
 
@@ -318,7 +341,8 @@ Do **not** add layout rules for `body`, navbar, sidebar, cards or form controls 
 | Issue | Cause | Fix |
 |---|---|---|
 | SignalK logo / "Signal K" text appears in header | CoreUI CSS targets `.app-header .navbar-brand` with a background image | Suppress with `background-image: none !important`; do not use `navbar-brand` class on your own title element |
-| CSS stylesheet 404 / doesn't load | `res.url` not used as base, or SignalK admin UI served at unexpected path | Always use `new URL(href, res.url).href` to resolve the stylesheet path |
+| CSS stylesheet 404 / doesn't load | `res.url` not used as base, or SignalK admin UI served at unexpected path | Always use `new URL(href, res.url).href` in the fallback scrape path |
+| Stylesheet not loaded on SK ≥ 2.27.0 | Only using the HTML-scrape method | Prefer the Vite manifest at `/admin/.vite/manifest.json`; fall back to scrape |
 | Enable toggle pushes card header taller | Switch widget has natural height greater than text line height | Use `position: absolute` on the toggle container so it is out of layout flow |
 | Table value column jumps between scenes | Browser sizes columns from content without `table-layout: fixed` | Set `table-layout: fixed` and explicit `width` on both `td` columns |
 | Sidebar not collapsing | Missing toggle JS or wrong body classes | Toggle `sidebar-minimized` + `brand-minimized` on `<body>` via JS; no CoreUI JS bundle needed |
