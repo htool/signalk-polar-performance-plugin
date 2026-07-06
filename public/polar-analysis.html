@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Polar Analysis – TWA vs Speed &amp; VMG</title>
+  <script src="Chart.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f0f2f5; color: #1a1a1a; padding: 16px; }
+    h1  { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+    .controls { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 0.85rem; flex-wrap: wrap; }
+    .controls label { display: flex; align-items: center; gap: 4px; }
+    input[type=number] { width: 64px; padding: 3px 6px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 4px 14px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+    button:hover { background: #1d4ed8; }
+    #status { color: #666; font-size: 0.8rem; }
+    .row { display: flex; gap: 16px; }
+    .card { flex: 1; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.10); }
+    .card h2 { font-size: 0.85rem; font-weight: 600; color: #444; margin-bottom: 12px; }
+    .note { margin-top: 12px; font-size: 0.75rem; color: #888; line-height: 1.5; }
+    .note span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
+    @media (max-width: 700px) { .row { flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <h1>Polar Analysis – TWA vs Speed &amp; VMG</h1>
+
+  <div class="controls">
+    <label>TWS: <input type="number" id="tws" value="8" min="1" max="40" step="1"> kn</label>
+    <button onclick="load()">Load</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>TWA vs Polar Speed (knots)</h2>
+      <canvas id="speedChart"></canvas>
+    </div>
+    <div class="card">
+      <h2>TWA vs VMG (knots) &nbsp;<span style="font-weight:normal;color:#888;font-size:0.8rem">+ upwind &nbsp; − downwind</span></h2>
+      <canvas id="vmgChart"></canvas>
+    </div>
+  </div>
+
+  <div class="note">
+    Step: 1°.
+    <span style="background:#16a34a"></span>Green dot = beat angle (optimal upwind).
+    <span style="background:#dc2626"></span>Red dot = run angle (optimal downwind).
+    Flat region beyond run angle = currently clamped to run-angle speed.
+    VMG = speed × cos(TWA).
+  </div>
+
+  <script>
+    const API     = '/plugins/signalk-polar-performance-plugin'
+    const STEP    = (Math.PI / 180).toFixed(8)   // 1° in radians
+    const KN      = 1.94384                        // m/s → knots
+
+    let charts = {}
+
+    const r2d = r => r * 180 / Math.PI
+
+    async function load() {
+      const twsKn = parseFloat(document.getElementById('tws').value)
+      if (!Number.isFinite(twsKn) || twsKn <= 0) return
+      const twsMs = twsKn * 0.514444
+      document.getElementById('status').textContent = 'Loading…'
+
+      let data
+      try {
+        const resp = await fetch(`${API}/polar/curve?tws=${twsMs.toFixed(5)}&step=${STEP}`)
+        if (!resp.ok) throw new Error('HTTP ' + resp.status)
+        data = await resp.json()
+      } catch (e) {
+        document.getElementById('status').textContent = 'Error: ' + e.message
+        return
+      }
+
+      const beatDeg = data.beat ? r2d(data.beat.twa) : null
+      const runDeg  = data.run  ? r2d(data.run.twa)  : null
+
+      document.getElementById('status').textContent = [
+        `${data.points.length} pts`,
+        beatDeg != null ? `beat ${beatDeg.toFixed(1)}°` : '',
+        runDeg  != null ? `run ${runDeg.toFixed(1)}°`   : ''
+      ].filter(Boolean).join(' | ')
+
+      // Main line data: all curve points in knots
+      const speedLine = data.points.map(p => ({ x: r2d(p.twa), y: +(p.tbs * KN).toFixed(3) }))
+      const vmgLine   = data.points.map(p => ({
+        x: r2d(p.twa),
+        y: +(p.tbs * Math.cos(p.twa) * KN).toFixed(3)
+      }))
+
+      // Beat / run markers – use actual twa/tbs from the curve response
+      const beatSpeedMk = beatDeg != null
+        ? [{ x: beatDeg, y: +(data.beat.tbs * KN).toFixed(3) }] : []
+      const runSpeedMk  = runDeg  != null
+        ? [{ x: runDeg,  y: +(data.run.tbs  * KN).toFixed(3) }] : []
+
+      const beatVmgMk   = beatDeg != null
+        ? [{ x: beatDeg, y: +(data.beat.tbs * Math.cos(data.beat.twa) * KN).toFixed(3) }] : []
+      const runVmgMk    = runDeg  != null
+        ? [{ x: runDeg,  y: +(data.run.tbs  * Math.cos(data.run.twa)  * KN).toFixed(3) }] : []
+
+      render('speedChart', speedLine, beatSpeedMk, runSpeedMk, 'Speed (knots)', twsKn, beatDeg, runDeg, false)
+      render('vmgChart',   vmgLine,   beatVmgMk,   runVmgMk,  'VMG (knots)',   twsKn, beatDeg, runDeg, true)
+    }
+
+    function render(id, mainData, beatMk, runMk, yLabel, twsKn, beatDeg, runDeg, addZeroLine) {
+      if (charts[id]) charts[id].destroy()
+
+      const datasets = [
+        {
+          label: `${twsKn} kn TWS`,
+          data: mainData,
+          showLine: true, tension: 0,
+          borderColor: '#2563eb',
+          backgroundColor: 'rgba(37,99,235,0.07)',
+          fill: true,
+          pointRadius: 0,
+          borderWidth: 2
+        },
+        {
+          label: beatDeg != null ? `Beat ${beatDeg.toFixed(1)}°` : 'Beat',
+          data: beatMk,
+          showLine: false,
+          pointRadius: 7, pointStyle: 'circle',
+          backgroundColor: 'rgba(22,163,74,0.85)',
+          borderColor: '#15803d', borderWidth: 2,
+          pointHoverRadius: 9
+        },
+        {
+          label: runDeg != null ? `Run ${runDeg.toFixed(1)}°` : 'Run',
+          data: runMk,
+          showLine: false,
+          pointRadius: 7, pointStyle: 'circle',
+          backgroundColor: 'rgba(220,38,38,0.85)',
+          borderColor: '#b91c1c', borderWidth: 2,
+          pointHoverRadius: 9
+        }
+      ]
+
+      charts[id] = new Chart(document.getElementById(id), {
+        type: 'scatter',
+        data: { datasets },
+        options: {
+          animation: false,
+          plugins: {
+            legend: {
+              labels: { boxWidth: 10, font: { size: 11 }, padding: 10 }
+            },
+            tooltip: {
+              callbacks: {
+                label: ctx => `${ctx.dataset.label}: (${ctx.parsed.x.toFixed(1)}°, ${ctx.parsed.y.toFixed(2)} kn)`
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'linear', min: 0, max: 180,
+              title: { display: true, text: 'TWA (°)', font: { size: 11 } },
+              ticks: { stepSize: 30 }
+            },
+            y: {
+              title: { display: true, text: yLabel, font: { size: 11 } },
+              grid: addZeroLine
+                ? { color: ctx => ctx.tick.value === 0 ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.07)' }
+                : {}
+            }
+          }
+        }
+      })
+    }
+
+    load()
+  </script>
+</body>
+</html>

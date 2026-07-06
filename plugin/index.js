@@ -1,1003 +1,994 @@
-const halfPi = Math.PI / 2
-var sourceAddress
+'use strict'
 
-module.exports = function (app) {
-  var plugin = {}
-  var unsubscribes = []
-  var timers = []
-  var damping = {}
+const { PolarTable } = require('./PolarTable')
+const PolarFileStore = require('./PolarFileStore')
+const {
+  createSmoothedPolar,
+  createSmoothedHandler,
+  SmoothedAngle,
+  BaseSmoother,
+  ExponentialSmoother,
+  MovingAverageSmoother,
+  KalmanSmoother
+} = require('signalkutilities')
 
-  plugin.id = 'signalk-polar-performance-plugin'
-  plugin.name = 'Polar performance plugin'
-  plugin.description =
-    'A plugin that calculates performance information based on a (CSV) polar diagram.'
+const CURRENT_SETTINGS_VERSION = 1
 
-  plugin.uiSchema = {
-    csvTable: { 'ui:widget': 'textarea' }
+const DEFAULT_SETTINGS = {
+  settingsVersion: CURRENT_SETTINGS_VERSION,
+  activePolar: '',
+  perfAdjust: 1,
+  smootherType: 'Exponential',
+  smootherParamExponential: 1,
+  smootherParamMovingAverage: 10,
+  smootherParamKalman: 0.1,
+  beatAngle: false,
+  beatVMG: false,
+  targetTWA: false,
+  optimumWindAngle: false,
+  VMG: false,
+  maxSpeed: false,
+  polarSpeed: false,
+  useSOG: false,
+  tackTrue: false,
+  smoothedInputs: false
+}
+
+module.exports = (app) => {
+  // Module-level state — survives across start/stop cycles when the server
+  // hot-reloads config. Handlers are re-created on every start().
+  let settings = {}
+  let changedOptions = {}     // staged but not yet applied
+  let hasPendingChanges = false
+  let isRunning = false
+  let polarTable = null
+  let store = null
+  let orcIndex = null     // cached in-memory for the session after first fetch
+  let windSmoother = null
+  let bspSmoother = null
+  let hdgSmoother = null
+  let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
+
+  // Last-computed output values, updated by computeAndSend on every cycle.
+  // Keys match the settings keys; values are SI numbers or null.
+  const lastOutputs = {}
+
+  // Maps each settings toggle key to the SK paths it controls.
+  // Used both to nullify paths when a toggle is turned off and to build /status outputs.
+  const OUTPUT_PATHS = {
+    beatAngle:        ['performance.beatAngle', 'performance.gybeAngle'],
+    beatVMG:         ['performance.beatAngleVelocityMadeGood', 'performance.gybeAngleVelocityMadeGood'],
+    targetTWA:       ['performance.targetAngle', 'performance.targetVelocityMadeGood'],
+    optimumWindAngle:['performance.optimumWindAngle'],
+    VMG:             ['performance.velocityMadeGood', 'performance.polarVelocityMadeGood', 'performance.polarVelocityMadeGoodRatio'],
+    polarSpeed:      ['performance.polarSpeed', 'performance.targetSpeed', 'performance.polarSpeedRatio'],
+    maxSpeed:        ['performance.maxSpeed', 'performance.maxSpeedAngle'],
+    tackTrue:        ['performance.tackTrue'],
+    smoothedInputs:  ['environment.wind.angleTrueWaterDamped', 'performance.boatSpeedDamped'],
   }
 
-  var schema = {
-    // The plugin schema
-    properties: {
-      useTWSsource: {
-        type: 'string',
-        default: '',
-        title: 'Source (name.id) to filter TWS on'
-      },
-      beatAngle: {
-        type: 'boolean',
-        title:
-          'Enable calculation/sending of beat/upwind and run/gybe/downwind angle'
-      },
-      beatVMG: {
-        type: 'boolean',
-        title:
-          'Enable calculation/sending of beat/upwind and run/gybe/downwind VMG'
-      },
-      targetTWA: {
-        type: 'boolean',
-        title: 'Enable sending Target TWA (performance.targetAngle)'
-      },
-      tackTrue: {
-        type: 'boolean',
-        title: 'Enable calculating Opposite Tack True (performance.tackTrue)'
-      },
-      optimumWindAngle: {
-        type: 'boolean',
-        title:
-          'Enable calculation of Optimum Wind Angle (difference between TWA and beat/run angle (depends on beat/run angle)'
-      },
-      VMG: {
-        type: 'boolean',
-        title: 'Enable calculation of VMG, polarVMG and polar VMG ratio'
-      },
-      useSOG: {
-        type: 'boolean',
-        title: 'Use speed over ground (SOG) as boat speed.'
-      },
-      useSOGsource: {
-        type: 'string',
-        default: '',
-        title: 'Source (name.id) to filter SOG on'
-      },
-      maxSpeed: {
-        type: 'boolean',
-        title:
-          'Enable writing of maximum speed angle and boat speed for a given TWS'
-      },
-      perfAdjust: {
-        type: 'number',
-        description:
-          'This ratio allows you to lower the polar boat speeds in case you are not expecting to meet 100% due to e.g. weight. 1 = 100%, 0.8 = 80% etc',
-        title: 'Performance adjustment ratio',
-        default: 1
-      },
-      dampingTWA: {
-        type: 'number',
-        description:
-          'If data appears erratic or too sensitive, damping may be applied to amke information appear more stable. With damping set to 0, the data is presented in raw form wih no damping applied.',
-        title: 'True Wind Angle damping seconds',
-        default: 1
-      },
-      dampingTWS: {
-        type: 'number',
-        title: 'True Wind Speed damping seconds',
-        default: 1
-      },
-      dampingBSP: {
-        type: 'number',
-        title: 'Boat speed damping seconds',
-        default: 1
-      },
-      csvTable: {
-        type: 'string',
-        title:
-          'Copy/paste the csv content of the polar in http://jieter.github.io/orc-data/site/ style.'
-      }
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  function getSmootherClass(type) {
+    switch (type) {
+      case 'None':          return BaseSmoother
+      case 'MovingAverage': return MovingAverageSmoother
+      case 'Kalman':        return KalmanSmoother
+      default:              return ExponentialSmoother
     }
   }
 
-  plugin.schema = function () {
-    // updateSchema()
-    return schema
+  function getSmootherOptions(type, s) {
+    switch (type) {
+      case 'None':          return {}
+      case 'MovingAverage': return { timeSpan: s.smootherParamMovingAverage ?? 10 }
+      case 'Kalman':        return { steadyState: s.smootherParamKalman ?? 0.1 }
+      default:              return { tau: s.smootherParamExponential ?? 1 }
+    }
   }
 
-  plugin.start = function (options, restartPlugin) {
-    let firstUpdate = true
-    let lastValues = {}
-    // Here we put our plugin logic
-    app.debug('Plugin started')
-    app.debug('Options: %s', JSON.stringify(options))
+  /** Migrate legacy settings in-place, returning the updated object. */
+  function migrateSettings(s) {
+    const version = s.settingsVersion ?? 0
 
-    // Load polar table
-    var polar = csvToPolarObject(options.csvTable)
-    app.debug('polar: %s', JSON.stringify(polar))
+    if (version < 1) {
+      // v0 → v1: replace three separate damping fields with type-specific smoother params
+      const tau = Math.max(s.dampingTWA ?? 1, s.dampingTWS ?? 1, s.dampingBSP ?? 1)
+      s.smootherType = 'Exponential'
+      s.smootherParamExponential = tau
+      delete s.dampingTWA
+      delete s.dampingTWS
+      delete s.dampingBSP
+      delete s.useTWSsource
+      delete s.useSOGsource
 
-    plugin.registerWithRouter = function (router) {
-      // Will appear here; plugins/signalk-polar-performance-plugin/
+      // Migrate embedded CSV polar to a file in the data directory.
+      // Only advance settingsVersion if the CSV is successfully written —
+      // if it fails, keep csvTable in settings so the migration retries on next start.
+      if (s.csvTable && s.csvTable.trim()) {
+        try {
+          store.save('default_v06', s.csvTable)
+          s.activePolar = 'default_v06'
+          delete s.csvTable
+          app.debug('Legacy csvTable migrated to default_v06.csv')
+        } catch (e) {
+          app.setPluginError('Migration failed — could not save legacy CSV: ' + e.message)
+          app.debug('CSV migration error: %s', e.message)
+          return s  // abort migration; csvTable kept so next start retries
+        }
+      }
+
+      s.settingsVersion = 1
+      app.debug('Settings migrated from v0 to v1')
+    }
+
+    // Persist if any migration ran, so migrations don't repeat on next start
+    if ((s.settingsVersion ?? 0) > version) {
+      app.savePluginOptions(s)
+      app.debug('Migrated settings saved (v%d → v%d)', version, s.settingsVersion)
+    }
+
+    return s
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hot-apply runtime option changes
+  // ---------------------------------------------------------------------------
+
+  function applyOptionChanges() {
+    const keys = Object.keys(changedOptions)
+    if (keys.length === 0) return
+
+    // Merge all changes into settings first so every branch below sees the
+    // updated state when it reads from settings.
+    Object.assign(settings, changedOptions)
+    changedOptions = {}
+    hasPendingChanges = false
+
+    // Active polar — load new table
+    if ('activePolar' in settings || 'perfAdjust' in settings) {
+      if (keys.includes('activePolar') && settings.activePolar) {
+        try {
+          polarTable = store.load(settings.activePolar)
+          polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
+          app.setPluginStatus(`Polar '${settings.activePolar}' loaded`)
+        } catch (e) {
+          app.setPluginError(`Cannot load polar '${settings.activePolar}': ${e.message}`)
+        }
+      } else if (keys.includes('activePolar') && !settings.activePolar) {
+        polarTable = null
+        nullifyOutputs()
+        app.setPluginStatus('No polar configured — set activePolar or upload a CSV file')
+      } else if (keys.includes('perfAdjust') && polarTable) {
+        polarTable.setPerformanceAdjustment(settings.perfAdjust)
+      }
+    }
+
+    // Smoother type or parameter changes — update all running smoothers in-place
+    const SMOOTHER_KEYS = ['smootherType', 'smootherParamExponential', 'smootherParamMovingAverage', 'smootherParamKalman']
+    if (keys.some(k => SMOOTHER_KEYS.includes(k))) {
+      const SC = getSmootherClass(settings.smootherType)
+      const so = getSmootherOptions(settings.smootherType, settings)
+      if (windSmoother) { windSmoother.setSmootherClass(SC); windSmoother.setSmootherOptions(so) }
+      if (bspSmoother)  { bspSmoother.setSmootherClass(SC);  bspSmoother.setSmootherOptions(so)  }
+      if (hdgSmoother)  { hdgSmoother.setSmootherClass(SC);  hdgSmoother.setSmootherOptions(so)  }
+    }
+
+    // Speed source change — re-point the BSP handler; it auto-resubscribes
+    if (keys.includes('useSOG') && bspSmoother) {
+      bspSmoother.handler.path = settings.useSOG
+        ? 'navigation.speedOverGround'
+        : 'navigation.speedThroughWater'
+    }
+
+    // Tack heading toggle
+    if (keys.includes('tackTrue')) {
+      if (settings.tackTrue && !hdgSmoother) {
+        const SC = getSmootherClass(settings.smootherType)
+        const so = getSmootherOptions(settings.smootherType, settings)
+        hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
+          angleRange: '0to2pi',
+          SmootherClass: SC,
+          smootherOptions: so
+        })
+      } else if (!settings.tackTrue && hdgSmoother) {
+        hdgSmoother.terminate()
+        hdgSmoother = null
+      }
+    }
+
+    app.savePluginOptions(settings, (err) => {
+      if (err) app.error('Failed to save settings: ' + err.message)
+    })
+
+    // Nullify SK paths for any output toggle that was just switched off
+    const disabledPaths = keys
+      .filter(k => OUTPUT_PATHS[k] && !settings[k])
+      .flatMap(k => OUTPUT_PATHS[k])
+    if (disabledPaths.length) {
+      app.handleMessage(plugin.id, {
+        updates: [{ values: disabledPaths.map(path => ({ path, value: null })) }]
+      })
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Nullify all polar-derived SK paths — called when polar is deselected so
+  // consumers see null rather than stale values from the previous polar.
+  // ---------------------------------------------------------------------------
+
+  function nullifyOutputs() {
+    const allPaths = Object.values(OUTPUT_PATHS).flat()
+    app.handleMessage(plugin.id, {
+      updates: [{ values: allPaths.map(path => ({ path, value: null })) }]
+    })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Performance computation — called on every smoothed wind update
+  // ---------------------------------------------------------------------------
+
+  function computeAndSend() {
+    if (hasPendingChanges) applyOptionChanges()
+    if (!polarTable) return
+
+    const wind = windSmoother.polarValue
+    const TWS = wind.magnitude
+    const TWAsigned = wind.angle
+    if (!Number.isFinite(TWS) || !Number.isFinite(TWAsigned)) return
+
+    // TWA is always positive for polar lookups; sign is tracked via `port`
+    const TWA = Math.abs(TWAsigned)
+    const port = TWAsigned < 0 ? -1 : 1
+    const BSP = bspSmoother ? bspSmoother.value : null
+    const HDG = hdgSmoother ? hdgSmoother.value : null
+
+    const values = []
+    const metas = []
+
+    function add(skPath, value, unit, description) {
+      if (!Number.isFinite(value)) return
+      values.push({ path: skPath, value })
+      if (!metaSentPaths.has(skPath)) {
+        metas.push({ path: skPath, value: { units: unit, description } })
+        metaSentPaths.add(skPath)
+      }
+    }
+
+    // Always emit smoothed inputs
+    if (settings.smoothedInputs) {
+      add('environment.wind.angleTrueWaterDamped', TWAsigned, 'rad',
+        'True Wind Angle after smoothing, negative to port.')
+      if (Number.isFinite(BSP)) {
+        add('performance.boatSpeedDamped', BSP, 'm/s', 'Boat speed after smoothing.')
+      }
+    }
+
+    // Polar lookups
+    const isUpwind = TWA < Math.PI / 2
+    const beatAngle = polarTable.getBeatAngle(TWS)
+    const runAngle  = polarTable.getRunAngle(TWS)
+    const beatVMG   = polarTable.getBeatVMG(TWS)
+    const runVMG    = polarTable.getRunVMG(TWS)
+    const targetAngle = isUpwind ? beatAngle : runAngle
+    const targetVMG   = isUpwind ? beatVMG   : runVMG
+
+    if (Number.isFinite(beatAngle)) {
+      if (settings.beatAngle) {
+        add('performance.beatAngle', beatAngle * port, 'rad',
+          'Optimal beat angle for current TWS, negative to port.')
+      }
+      if (settings.targetTWA && isUpwind) {
+        add('performance.targetAngle', beatAngle * port, 'rad',
+          'Target TWA — auto-switches between beat and run, negative to port.')
+      }
+    }
+
+    if (Number.isFinite(runAngle)) {
+      if (settings.beatAngle) {
+        add('performance.gybeAngle', runAngle * port, 'rad',
+          'Optimal run/gybe angle for current TWS, negative to port.')
+      }
+      if (settings.targetTWA && !isUpwind) {
+        add('performance.targetAngle', runAngle * port, 'rad',
+          'Target TWA — auto-switches between beat and run, negative to port.')
+      }
+    }
+
+    if (Number.isFinite(beatVMG)) {
+      if (settings.beatVMG) {
+        add('performance.beatAngleVelocityMadeGood', beatVMG, 'm/s',
+          'Optimal beat VMG for current TWS.')
+      }
+      if (settings.targetTWA && isUpwind) {
+        add('performance.targetVelocityMadeGood', beatVMG, 'm/s',
+          'Target VMG — auto-switches between beat and run.')
+      }
+    }
+
+    if (Number.isFinite(runVMG)) {
+      if (settings.beatVMG) {
+        add('performance.gybeAngleVelocityMadeGood', runVMG, 'm/s',
+          'Optimal run VMG for current TWS.')
+      }
+      if (settings.targetTWA && !isUpwind) {
+        add('performance.targetVelocityMadeGood', runVMG, 'm/s',
+          'Target VMG — auto-switches between beat and run.')
+      }
+    }
+
+    // Optimum wind angle: angular difference between current TWA and optimal angle
+    if (settings.optimumWindAngle) {
+      if (isUpwind && Number.isFinite(beatAngle)) {
+        add('performance.optimumWindAngle', (TWA - beatAngle) * port, 'rad',
+          'Difference between TWA and beat angle, negative to port.')
+      } else if (!isUpwind && Number.isFinite(runAngle)) {
+        add('performance.optimumWindAngle', (runAngle - TWA) * port * -1, 'rad',
+          'Difference between TWA and run angle, negative to port.')
+      }
+    }
+
+    // Polar speed and performance ratios
+    const polarSpeed = polarTable.getBoatSpeed(TWS, TWA)
+    if (Number.isFinite(polarSpeed) && polarSpeed > 0) {
+      if (settings.polarSpeed) {
+        add('performance.polarSpeed', polarSpeed, 'm/s',
+          'Polar chart boat speed for current TWS and TWA.')
+
+        // Target speed: only meaningful when sailing within the polar range
+        if (Number.isFinite(targetAngle) && Number.isFinite(targetVMG)) {
+          const cosTarget = Math.abs(Math.cos(targetAngle))
+          if (cosTarget > 0.01) {
+            add('performance.targetSpeed', targetVMG / cosTarget, 'm/s',
+              'Boat speed needed to achieve target VMG at the optimal angle.')
+          }
+        }
+
+        if (Number.isFinite(BSP)) {
+          add('performance.polarSpeedRatio', BSP / polarSpeed, 'ratio',
+            'Actual boat speed divided by polar speed.')
+        }
+      }
+
+      if (Number.isFinite(BSP)) {
+        if (settings.VMG && Number.isFinite(targetVMG) && targetVMG > 0) {
+          const vmg = BSP * Math.cos(TWA)
+          add('performance.velocityMadeGood', vmg, 'm/s',
+            'Actual VMG based on current boat speed and TWA.')
+          add('performance.polarVelocityMadeGood', targetVMG, 'm/s',
+            'Polar VMG for current TWS.')
+          if (Number.isFinite(vmg)) {
+            add('performance.polarVelocityMadeGoodRatio', Math.abs(vmg) / targetVMG, 'ratio',
+              'Actual VMG divided by polar VMG.')
+          }
+        }
+      }
+    } else {
+      // Zero out to prevent stale values accumulating in the data model
+      if (settings.polarSpeed) {
+        add('performance.polarSpeed', 0, 'm/s',
+          'Polar chart boat speed for current TWS and TWA.')
+        add('performance.polarSpeedRatio', 0, 'ratio',
+          'Actual boat speed divided by polar speed.')
+        add('performance.targetSpeed', 0, 'm/s',
+          'Boat speed needed to achieve target VMG at the optimal angle.')
+      }
+    }
+
+    // Max speed for current TWS
+    if (settings.maxSpeed) {
+      const maxSpeed = polarTable.getMaxSpeed(TWS)
+      const maxSpeedAngle = polarTable.getMaxSpeedAngle(TWS)
+      if (Number.isFinite(maxSpeed)) {
+        add('performance.maxSpeed', maxSpeed, 'm/s',
+          'Maximum polar boat speed for current TWS.')
+        add('performance.maxSpeedAngle', maxSpeedAngle * port, 'rad',
+          'TWA at which maximum speed is achieved, negative to port.')
+      }
+    }
+
+    // Opposite tack heading
+    if (settings.tackTrue && Number.isFinite(HDG) && Number.isFinite(targetAngle)) {
+      let tack = port < 0 ? HDG - targetAngle : HDG + targetAngle
+      tack = ((tack % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+      add('performance.tackTrue', tack, 'rad',
+        'Opposite tack heading relative to true north.')
+    }
+
+    if (values.length === 0) return
+
+    if (metas.length > 0) {
+      app.handleMessage(plugin.id, { updates: [{ meta: metas }] })
+    }
+
+    app.handleMessage(plugin.id, { updates: [{ values }] })
+
+    // Snapshot enabled outputs for /status endpoint
+    // Each output key maps to an array of { path, value } computed this cycle
+    const outputSnapshot = {}
+    values.forEach(({ path, value }) => { outputSnapshot[path] = value })
+    Object.assign(lastOutputs, outputSnapshot)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chart data — builds the Chart.js dataset from the loaded polar table
+  // ---------------------------------------------------------------------------
+
+  function getChartData() {
+    if (!polarTable || !polarTable.table || polarTable.table.length === 0) return null
+
+    const polar = polarTable.table
+    const backgroundColor = []
+    const borderColor = []
+    for (let c = 0; c < 20; c++) {
+      const color = `${c * 10}, ${130 + (c * 20) % 100}, ${80 + (c * 30) % 120}`
+      backgroundColor.push(`rgba(${color}, 1)`)
+      borderColor.push(`rgba(${color}, 0.8)`)
+    }
+
+    const data = { labels: [], datasets: [] }
+    for (let a = 0; a <= 180; a += 5) data.labels.push(a)
+
+    for (let i = 0; i < polar.length; i++) {
+      const tws = (polar[i].tws * 1.94384).toFixed(0)
+      const twaArray = polar[i].twa
+      data.datasets[i] = {
+        data: [],
+        pointRadius: [],
+        backgroundColor: backgroundColor[i],
+        borderColor: borderColor[i],
+        fill: false,
+        label: `${tws} kts`
+      }
+      for (const pt of twaArray) {
+        const isOptimal = pt.twa === polar[i]['Beat angle'] || pt.twa === polar[i]['Run angle']
+        data.datasets[i].data.push({
+          x: Number((pt.twa * 180 / Math.PI).toFixed(1)),
+          y: Number((pt.tbs * 1.94384).toFixed(2))
+        })
+        data.datasets[i].pointRadius.push(isOptimal ? 5 : 2)
+      }
+    }
+    data.datasets.shift() // remove the 0-kts padding row
+    return data
+  }
+
+  // ---------------------------------------------------------------------------
+  // Plugin object
+  // ---------------------------------------------------------------------------
+
+  const plugin = {
+    id: 'signalk-polar-performance-plugin',
+    name: 'Polar Performance Plugin',
+    description: 'Calculates sailing performance metrics from a polar diagram.',
+
+    schema: () => ({
+      type: 'object',
+      properties: {
+        settingsVersion: {
+          type: 'integer',
+          default: CURRENT_SETTINGS_VERSION
+        },
+        activePolar: {
+          type: 'string',
+          title: 'Active polar (filename without .csv extension)',
+          default: ''
+        },
+        perfAdjust: {
+          type: 'number',
+          title: 'Performance adjustment ratio (1 = 100%, 0.9 = 90%)',
+          default: 1
+        },
+        smootherType: {
+          type: 'string',
+          title: 'Smoother type',
+          enum: ['None', 'Exponential', 'MovingAverage', 'Kalman'],
+          default: 'Exponential'
+        },
+        smootherParamExponential: {
+          type: 'number',
+          title: 'Exponential smoother: time constant tau (seconds)',
+          default: 1
+        },
+        smootherParamMovingAverage: {
+          type: 'number',
+          title: 'Moving average smoother: window size (seconds)',
+          default: 10
+        },
+        smootherParamKalman: {
+          type: 'number',
+          title: 'Kalman smoother: steady-state gain (0–1)',
+          default: 0.1
+        },
+        beatAngle: {
+          type: 'boolean',
+          title: 'Output beat and run angles (performance.beatAngle, performance.gybeAngle)'
+        },
+        beatVMG: {
+          type: 'boolean',
+          title: 'Output beat and run VMG'
+        },
+        targetTWA: {
+          type: 'boolean',
+          title: 'Output target TWA and VMG (auto-switches beat/run)'
+        },
+        optimumWindAngle: {
+          type: 'boolean',
+          title: 'Output optimum wind angle (TWA relative to optimal)'
+        },
+        VMG: {
+          type: 'boolean',
+          title: 'Output VMG, polarVMG, and polarVMG ratio'
+        },
+        maxSpeed: {
+          type: 'boolean',
+          title: 'Output maximum polar speed and angle for current TWS'
+        },
+        polarSpeed: {
+          type: 'boolean',
+          title: 'Output polar target speed, target boat speed, and polar speed ratio'
+        },
+        useSOG: {
+          type: 'boolean',
+          title: 'Use speed over ground (SOG) instead of speed through water'
+        },
+        tackTrue: {
+          type: 'boolean',
+          title: 'Output opposite tack true heading (performance.tackTrue)'
+        },
+        smoothedInputs: {
+          type: 'boolean',
+          title: 'Output smoothed wind angle and boat speed (environment.wind.angleTrueWaterDamped, performance.boatSpeedDamped)'
+        }
+      }
+    }),
+
+    uiSchema: () => ({
+      settingsVersion: { 'ui:widget': 'hidden' }
+    }),
+
+    // registerWithRouter is defined outside start() — runs once at plugin load
+    registerWithRouter(router) {
       app.debug('registerWithRouter')
-      // Middleware to set Origin-Agent-Cluster on every response from this plugin
+
       router.use((req, res, next) => {
         res.set('Origin-Agent-Cluster', '?1')
         next()
       })
+
+      // Legacy endpoint — returns the raw polar table structure
       router.get('/polar', (req, res) => {
-        res.contentType('application/json')
-        res.send(JSON.stringify(polar))
+        res.json(polarTable ? polarTable.table : [])
       })
+
+      // List of TWS values in the loaded polar, in m/s (excludes zero-padding entry).
+      // Useful for iterating all available library curves.
+      router.get('/polar/tws', (req, res) => {
+        if (!polarTable || !polarTable.table || polarTable.table.length === 0) {
+          return res.status(503).json({ error: 'No polar loaded' })
+        }
+        const tws = polarTable.table
+          .filter(entry => entry.tws > 0.001)
+          .map(entry => parseFloat(entry.tws.toFixed(4)))
+        res.json(tws)
+      })
+
+      // Interpolated polar curve for a given TWS.
+      // Query params:
+      //   tws  (required) – true wind speed in m/s
+      //   step (optional) – angular sampling step in radians, default 0.035 (~2°)
+      // Returns points from 0–π using getBoatSpeed() — same interpolation as
+      // the live performance computation — plus beat/run markers. All values in SI.
+      router.get('/polar/curve', (req, res) => {
+        if (!polarTable || !polarTable.table || polarTable.table.length === 0) {
+          return res.status(503).json({ error: 'No polar loaded' })
+        }
+        const tws = parseFloat(req.query.tws)
+        if (!Number.isFinite(tws) || tws < 0) {
+          return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
+        }
+        const stepRad = parseFloat(req.query.step) || (2 * Math.PI / 180)
+        if (!Number.isFinite(stepRad) || stepRad <= 0 || stepRad > Math.PI / 2) {
+          return res.status(400).json({ error: "'step' must be between 0 and π/2 radians" })
+        }
+
+        const points = []
+        for (let twa = 0; twa <= Math.PI + 1e-9; twa += stepRad) {
+          const tbs = polarTable.getBoatSpeed(tws, twa)
+          if (Number.isFinite(tbs) && tbs > 0) {
+            points.push({
+              twa: parseFloat(twa.toFixed(5)),
+              tbs: parseFloat(tbs.toFixed(4))
+            })
+          }
+        }
+
+        const beatAngle = polarTable.getBeatAngle(tws)
+        const beatVMG   = polarTable.getBeatVMG(tws)
+        const runAngle  = polarTable.getRunAngle(tws)
+        const runVMG    = polarTable.getRunVMG(tws)
+
+        const beatTbs = Number.isFinite(beatAngle) ? polarTable.getBoatSpeed(tws, beatAngle) : null
+        const runTbs  = Number.isFinite(runAngle)  ? polarTable.getBoatSpeed(tws, runAngle)  : null
+
+        res.json({
+          tws,
+          points,
+          beat: (Number.isFinite(beatAngle) && Number.isFinite(beatTbs)) ? {
+            twa: parseFloat(beatAngle.toFixed(5)),
+            tbs: parseFloat(beatTbs.toFixed(4)),
+            vmg: Number.isFinite(beatVMG) ? parseFloat(beatVMG.toFixed(4)) : null
+          } : null,
+          run: (Number.isFinite(runAngle) && Number.isFinite(runTbs)) ? {
+            twa: parseFloat(runAngle.toFixed(5)),
+            tbs: parseFloat(runTbs.toFixed(4)),
+            vmg: Number.isFinite(runVMG) ? parseFloat(runVMG.toFixed(4)) : null
+          } : null
+        })
+      })
+
+      // Current smoothed live values from the plugin's own smoothers. All SI units.
+      // tws/bsp/polarSpeed in m/s; twa in rad (positive = starboard, negative = port).
+      // Returns null for any field not yet available (plugin not running,
+      // no BSP source, polar not loaded, or boat in irons).
+      router.get('/live', (req, res) => {
+        const wind = windSmoother ? windSmoother.polarValue : null
+        const TWS       = wind ? wind.magnitude : null
+        const TWAsigned = wind ? wind.angle : null
+        const TWA       = Number.isFinite(TWAsigned) ? Math.abs(TWAsigned) : null
+        const BSP       = bspSmoother ? bspSmoother.value : null
+
+        const polarSpeed = (polarTable && Number.isFinite(TWS) && Number.isFinite(TWA))
+          ? polarTable.getBoatSpeed(TWS, TWA)
+          : null
+
+        const performance = (Number.isFinite(BSP) && Number.isFinite(polarSpeed) && polarSpeed > 0)
+          ? BSP / polarSpeed
+          : null
+
+        const si = v => Number.isFinite(v) ? parseFloat(v.toFixed(5)) : null
+
+        const polarState = (polarTable && Number.isFinite(TWS) && Number.isFinite(TWA))
+          ? polarTable.getInterpolationState(TWS, TWA)
+          : null
+
+        res.json({
+          tws:         si(TWS),
+          twa:         si(TWAsigned),
+          bsp:         si(BSP),
+          polarSpeed:  si(polarSpeed),
+          performance: Number.isFinite(performance) ? parseFloat(performance.toFixed(5)) : null,
+          polarState
+        })
+      })
+
+      // Comprehensive snapshot of everything the plugin knows about its current state.
+      // All values are SI units (m/s, rad). Use /meta for display unit conversion.
+      //
+      // inputs.raw.*  — last value delivered by the instrument (from smoother handler)
+      // inputs.smoothed.* — value the plugin actually used for computation
+      // outputs.*     — only present for enabled settings; null if polar not ready
+      // polarState    — same as /live
+      router.get('/status', (req, res) => {
+        const si = v => (Number.isFinite(v) ? parseFloat(v.toFixed(5)) : null)
+
+        // Raw inputs: read directly from the smoother handlers
+        const rawTws = si(windSmoother?.polar?.magnitudeHandler?.value ?? null)
+        const rawTwa = si(windSmoother?.polar?.angleHandler?.value ?? null)
+        const rawBsp = si(bspSmoother?.handler?.value ?? null)
+        const rawHdg = si(hdgSmoother?.handler?.value ?? null)
+
+        const wind = windSmoother ? windSmoother.polarValue : null
+        const TWS       = wind ? wind.magnitude : null
+        const TWAsigned = wind ? wind.angle     : null
+        const BSP       = bspSmoother ? bspSmoother.value : null
+        const HDG       = hdgSmoother ? hdgSmoother.value  : null
+
+        const bspPath = settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'
+
+        const polarState = (polarTable && Number.isFinite(TWS) && Number.isFinite(TWAsigned))
+          ? polarTable.getInterpolationState(TWS, Math.abs(TWAsigned))
+          : null
+
+        // Build outputs object: only include paths that are enabled and were
+        // computed in the last cycle (present in lastOutputs).
+        const outputs = {}
+        Object.entries(OUTPUT_PATHS).forEach(([key, paths]) => {
+          if (!settings[key]) return
+          paths.forEach(path => {
+            const v = lastOutputs[path]
+            outputs[path] = Number.isFinite(v) ? si(v) : null
+          })
+        })
+
+        res.json({
+          inputs: {
+            raw: {
+              tws: rawTws,
+              twa: rawTwa,
+              bsp: rawBsp,
+              ...(settings.tackTrue ? { hdg: rawHdg } : {})
+            },
+            smoothed: {
+              tws: si(TWS),
+              twa: si(TWAsigned),
+              bsp: si(BSP),
+              ...(settings.tackTrue && HDG != null ? { hdg: si(HDG) } : {})
+            },
+            paths: {
+              tws: 'environment.wind.speedTrue',
+              twa: 'environment.wind.angleTrueWater',
+              bsp: bspPath,
+              ...(settings.tackTrue ? { hdg: 'navigation.headingTrue' } : {})
+            }
+          },
+          outputs,
+          polarState
+        })
+      })
+
+      // Metadata describing the units and display preferences for each field
+      // returned by /live and /polar/curve. displayUnits are fetched from the
+      // SK server's path metadata so user unit preferences (kn vs m/s etc.) are
+      // respected. Falls back to safe defaults when SK metadata is unavailable.
+      router.get('/meta', async (req, res) => {
+        // Fetch displayUnits for a SK path; returns null on failure.
+        async function skMeta(path) {
+          try {
+            const url = `http://localhost:${app.config?.port ?? 3000}/signalk/v1/api/vessels/self/${path}/meta`
+            const r = await fetch(url)
+            if (!r.ok) return null
+            const j = await r.json()
+            return j.displayUnits ?? null
+          } catch (_) { return null }
+        }
+
+        const [twsDU, twaDU, bspDU] = await Promise.all([
+          skMeta('environment/wind/speedTrue'),
+          skMeta('environment/wind/angleTrueWater'),
+          skMeta('navigation/speedThroughWater')
+        ])
+
+        const speedDefault = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
+        const angleDefault = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
+        const ratioDefault = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
+
+        res.json({
+          tws:         { units: 'm/s', displayUnits: twsDU ?? speedDefault },
+          twa:         { units: 'rad', displayUnits: twaDU ?? angleDefault },
+          bsp:         { units: 'm/s', displayUnits: bspDU ?? speedDefault },
+          polarSpeed:  { units: 'm/s', displayUnits: twsDU ?? speedDefault },
+          performance: { units: 'ratio', displayUnits: ratioDefault },
+          'curve.tbs': { units: 'm/s', displayUnits: twsDU ?? speedDefault },
+          'curve.vmg': { units: 'm/s', displayUnits: twsDU ?? speedDefault },
+          'curve.twa': { units: 'rad', displayUnits: twaDU ?? angleDefault }
+        })
+      })
+
+      // Chart data for the webapp
       router.get('/chartData', (req, res) => {
-        const chart = getChartData();
-        if (!chart || !chart.datasets || chart.datasets.length === 0) {
-          return res.status(500).json({ 
-            error: "No polar data", 
-            reason: "Polar CSV is empty or invalid. Please configure a valid polar in plugin settings." 
+        const chart = getChartData()
+        if (!chart) {
+          return res.status(503).json({
+            error: 'No polar loaded',
+            reason: 'Configure activePolar in plugin settings or upload a CSV via /polars/:name'
           })
         }
-      res.contentType('application/json');
-      res.send(JSON.stringify(chart));
+        res.json(chart)
       })
-    }
 
-    // Global variables
-    var BSP, STW, TWA, targetTWA, TWS, HDG, port // Angles in rad, speed in m/s
+      // ---- Runtime settings ------------------------------------------------
 
-    // Subscribe to paths
-    let localSubscription = {
-      context: '*',
-      subscribe: [
-        {
-          path: 'navigation.speedThroughWater',
-          policy: 'instant',
-          minPeriod: 500
-        },
-        {
-          path: 'environment.wind.speedTrue',
-          policy: 'instant',
-          minPeriod: 500
-        },
-        {
-          path: 'environment.wind.angleTrueWater',
-          policy: 'instant',
-          minPeriod: 500
+      router.get('/settings', (req, res) => {
+        // Merge pending staged changes so the client always sees the latest
+        // intended state even before the next wind update drains them.
+        res.json({ ...settings, ...changedOptions, _defaults: DEFAULT_SETTINGS })
+      })
+
+      router.put('/settings', (req, res) => {
+        if (!req.body || typeof req.body !== 'object') {
+          return res.status(400).json({ error: 'Expected a JSON object' })
         }
-      ]
-    }
-
-    // Additional subscribes based on options
-    if (options.useSOG == true) {
-      localSubscription.subscribe.push({
-        path: 'navigation.speedOverGround',
-        policy: 'instant',
-        minPeriod: 500
+        // Stage changes; they are applied in applyOptionChanges() on the next
+        // wind update (or immediately below if the plugin is already running).
+        Object.assign(changedOptions, req.body)
+        hasPendingChanges = true
+        // Drain immediately so source/polar changes take effect even when the
+        // wind data stream is idle.
+        if (isRunning) applyOptionChanges()
+        res.json({ ...settings, ...changedOptions, _defaults: DEFAULT_SETTINGS })
       })
-    }
-    if (options.tackTrue == true) {
-      localSubscription.subscribe.push({
-        path: 'navigation.headingTrue',
-        policy: 'instant'
+
+      // ---- Polar file operations -------------------------------------------
+
+      router.get('/polars', (req, res) => {
+        try {
+          res.json(store ? store.listWithMeta() : [])
+        } catch (e) {
+          res.status(500).json({ error: e.message })
+        }
       })
-    }
 
-    app.subscriptionmanager.subscribe(
-      localSubscription,
-      unsubscribes,
-      subscriptionError => {
-        app.error('Error:' + subscriptionError)
-      },
-      delta => {
-        delta.updates.forEach(u => {
-          // app.debug(u)
-          handleDelta(u.values,u['$source'])
-        })
-      }
-    )
+      // NOTE: specific routes must come before the parameterised :name routes
+      router.get('/polars/import/search', async (req, res) => {
+        const q = (req.query.q || '').toLowerCase()
+        try {
+          if (!orcIndex) orcIndex = await PolarFileStore.fetchOrcIndex()
+          const results = orcIndex
+            .filter(b => !q ||
+              (b.name || '').toLowerCase().includes(q) ||
+              (b.sailnumber || '').toLowerCase().includes(q) ||
+              (b.boat?.type || '').toLowerCase().includes(q))
+            .map(b => ({
+              name: b.name,
+              sailnumber: b.sailnumber,
+              type: b.boat && b.boat.type,
+              year: b.boat && b.boat.year
+            }))
+          res.json(results)
+        } catch (e) {
+          orcIndex = null // allow retry after failure
+          res.status(502).json({ error: `Failed to fetch ORC data: ${e.message}` })
+        }
+      })
 
-    // Handle delta
-    function handleDelta (deltas, source) {
-      deltas.forEach(delta => {
-        app.debug('handleData (%s): %s', source, JSON.stringify(delta))
-        if (
-          delta.path == 'navigation.speedThroughWater' &&
-          options.useSOG == false
-        ) {
-          app.debug('STW useSOG: %j', options.useSOG)
-          STW = applyDamping(delta.value, 'STW', options.dampingBSP || 0)
-          BSP = STW
-          app.debug('speedThroughWater (STW): %d', STW)
-        } else if (
-          delta.path == 'navigation.speedOverGround' &&
-          options.useSOG == true
-        ) {
-          app.debug('SOG useSOG: %j', options.useSOG)
-          if (options.useSOGsource == '' || source == options.useSOGsource) {
-            SOG = applyDamping(delta.value, 'SOG', options.dampingBSP || 0)
-            BSP = SOG
-            app.debug('speedOverGround (SOG) (%s): %d', source, SOG)
+      router.post('/polars/import/:sailnumber', async (req, res) => {
+        const sn = req.params.sailnumber
+        try {
+          if (!orcIndex) orcIndex = await PolarFileStore.fetchOrcIndex()
+          const boat = orcIndex.find(b => b.sailnumber === sn)
+          if (!boat) {
+            return res.status(404).json({ error: `Sail number '${sn}' not found in ORC data` })
           }
-        } else if (delta.path == 'navigation.headingTrue') {
-          HDG = delta.value
-          // app.debug('heading (HDG): %d', HDG)
-        } else if (delta.path == 'environment.wind.speedTrue') {
-          if (options.useTWSsource == '' || source == options.useTWSsource) {
-            TWS = applyDamping(delta.value, 'TWS', options.dampingTWS || 0)
-            // app.debug('(TWS): %d applyDamping: %d', delta.value, TWS)
-            // app.debug('TWS: %d TWA: %d BSP: %d', msToKts(TWS), radToDeg(TWA)*port, msToKts(BSP))
-            sendUpdates(getPerformanceData(TWS, TWA, BSP))
-          }
-        } else if (delta.path == 'environment.wind.angleTrueWater') {
-          let TWAtmp = applyDamping(delta.value, 'TWA', options.dampingTWA || 0)
-          if (TWAtmp < 0) {
-            port = -1
+          const name = store.importFromORC(boat.vpp, sn, {
+            boatName: boat.name,
+            boatType: boat.boat?.type,
+            sailnumber: sn
+          })
+          res.json({ ok: true, name })
+        } catch (e) {
+          res.status(500).json({ error: e.message })
+        }
+      })
+
+      router.put('/polars/active/:name', (req, res) => {
+        try {
+          polarTable = store.load(req.params.name)
+          polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
+          settings.activePolar = req.params.name
+          app.setPluginStatus(`Polar '${req.params.name}' loaded`)
+          res.json({ ok: true, activePolar: req.params.name })
+        } catch (e) {
+          res.status(500).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:name', (req, res) => {
+        try {
+          res.type('text/plain').send(store.read(req.params.name))
+        } catch (e) {
+          res.status(404).json({ error: e.message })
+        }
+      })
+
+      router.post('/polars/:name', (req, res) => {
+        try {
+          // Accept JSON { csv, boatName, boatType, sailnumber } or plain text CSV
+          let csv, meta = null
+          if (req.body && typeof req.body === 'object' && req.body.csv) {
+            csv = req.body.csv
+            const { boatName, boatType, sailnumber } = req.body
+            if (boatName || boatType || sailnumber) meta = { boatName, boatType, sailnumber }
+          } else if (typeof req.body === 'string') {
+            csv = req.body
           } else {
-            port = 1
+            return res.status(400).json({ error: 'Expected JSON { csv } or text/plain' })
           }
-          TWA = Math.abs(TWAtmp)
-          // app.debug('environment.wind.angleTrueWater (TWA): %s applyDamping: %s port: %d', delta.value, TWA, port)
+          store.save(req.params.name, csv, meta)
+          res.json({ ok: true })
+        } catch (e) {
+          res.status(500).json({ error: e.message })
         }
       })
-    }
 
-    function sendUpdates (perfObj) {
-      let values = []
-      let metas = []
-
-      function addValue (path, value, meta) {
-        if (lastValues[path] !== value) {
-          values.push({
-            path: path,
-            value: roundDec(value)
-          })
-          if (meta) {
-            metas.push({ path: path, value: meta })
-          }
-          lastValues[path] = value // Update lastValues
+      router.delete('/polars/:name', (req, res) => {
+        try {
+          store.delete(req.params.name)
+          res.json({ ok: true })
+        } catch (e) {
+          res.status(500).json({ error: e.message })
         }
-      }
-
-      if (BSP) {
-        addValue('performance.boatSpeedDamped', BSP, { 
-          units: 'm/s',
-          description: 'Boat speed after applying damping factor (see Polar Performance Plugin settings).'
-       })
-      }
-
-      if (TWA) {
-        addValue('environment.wind.angleTrueWaterDamped', TWA * port, {
-          units: 'rad',
-          description: 'True Wind Angle after applying damping factor, negative to port (see Polar Performance Plugin settings).'
-        })
-      }
-
-      if (typeof perfObj.beatAngle !== 'undefined') {
-        if (options.beatAngle === true) {
-          addValue('performance.beatAngle', perfObj.beatAngle * port, {
-            units: 'rad',
-            description: 'The optimal beat/upwind angle for current TWS, negative to port.'
-          })
-        }
-        if (options.targetTWA === true) {
-          addValue('performance.targetAngle', perfObj.beatAngle * port, {
-            units: 'rad',
-            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative to port.'
-          })
-        }
-      }
-
-      if (typeof perfObj.runAngle !== 'undefined') {
-        if (options.beatAngle === true) {
-          addValue('performance.gybeAngle', perfObj.runAngle * port, {
-            units: 'rad',
-            description: 'The optimal run/downwind angle for current TWS, negative to port.'
-          })
-        }
-        if (options.targetTWA === true) {
-          addValue('performance.targetAngle', perfObj.runAngle * port, {
-            units: 'rad',
-            description: 'The combined and automatic switching optimal beat or run angle for current TWS, negative to port.'
-          })
-        }
-      }
-
-      if (typeof perfObj.beatVMG !== 'undefined') {
-        addValue('performance.beatAngleVelocityMadeGood', perfObj.beatVMG, {
-          units: 'm/s',
-          description: 'The beat/upwind Velocity Made Good for current boat speed and heading.'
-        })
-        if (options.targetTWA === true) {
-          addValue('performance.targetVelocityMadeGood', perfObj.beatVMG, {
-            units: 'm/s',
-            description: 'The combined and automatic switching beat or run Velocity Made Good for current boat speed and heading.'
-          })
-        }
-      }
-
-      if (typeof perfObj.runVMG !== 'undefined') {
-        addValue('performance.gybeAngleVelocityMadeGood', perfObj.runVMG, {
-          units: 'm/s',
-          description: 'The run/downwind Velocity Made Good for current boat speed and heading.'
-        })
-        if (options.targetTWA === true) {
-          addValue('performance.targetVelocityMadeGood', perfObj.runVMG, {
-            units: 'm/s',
-            description: 'The combined and automatic switching beat or run Velocity Made Good for current TWS and TWA.'
-          })
-        }
-      }
-
-      if (typeof perfObj.optimumWindAngle !== 'undefined') {
-        addValue('performance.optimumWindAngle', perfObj.optimumWindAngle, {
-          units: 'rad',
-          description: 'The optimum wind angle, negative to port (diff between TWA and environment.wind.directionTrue).'
-        })
-      }
-
-      if (typeof perfObj.targetSpeed !== 'undefined') {
-        addValue('performance.targetSpeed', perfObj.targetSpeed, { 
-            units: 'm/s',
-            description: 'Target boat speed based on current TWA.'
-           }
-        )
-      }
-
-      if (typeof perfObj.polarSpeed !== 'undefined') {
-        addValue('performance.polarSpeed', perfObj.polarSpeed, { 
-          units: 'm/s',
-          description: 'The polar chart boat speed as per the polar chart for current TWS and TWA.'
-        })
-        addValue('performance.polarSpeedRatio', perfObj.polarSpeedRatio, {
-          units: 'ratio',
-          description: 'The ratio between actual boat speed and polar chart boat speed for current TWS and TWA.'
-        })
-        if (typeof perfObj.velocityMadeGood !== 'undefined') {
-          addValue('performance.velocityMadeGood', perfObj.velocityMadeGood, {
-            units: 'm/s',
-            description: 'The actual Velocity Made Good based on current heading and boat speed.'
-          })
-          addValue('performance.polarVelocityMadeGood', perfObj.polarVelocityMadeGood, {
-            units: 'm/s',
-            description: 'The polar chart Velocity Made Good indicated in the polar for current TWS and TWA.'
-          })
-          addValue('performance.polarVelocityMadeGoodRatio', perfObj.polarVelocityMadeGoodRatio, {
-            units: 'ratio',
-            description: 'The ratio between actual Velocity Made Good and polar chart indicated Velocity Made Good for current TWS and TWA.'
-          })
-        }
-      }
-
-      if (typeof perfObj.maxSpeed !== 'undefined') {
-        addValue('performance.maxSpeed', perfObj.maxSpeed, { 
-          units: 'm/s',
-          description: 'Maximum boat speed as per polar chart.'
-        })
-        addValue('performance.maxSpeedAngle', perfObj.maxSpeedAngle, {
-          units: 'rad',
-          description: 'The angle to achieve maximum boat speed (not the VMG), based on current TWS, negative to port.'
-        })
-      }
-
-      if (options.tackTrue === true) {
-        if (typeof perfObj.tackTrue !== 'undefined') {
-          addValue('performance.tackTrue', perfObj.tackTrue, {
-            units: 'rad',
-            description: 'The Opposite Tack\'s heading relative to True North, based on current TWS.'
-          })
-        }
-      }
-
-      if (firstUpdate) {
-        // Send meta updates
-        app.handleMessage(plugin.id, {
-          updates: [
-            {
-              meta: metas
-            }
-          ]
-        })
-        firstUpdate = false
-      }
-
-      // Send values updates
-      app.handleMessage(plugin.id, {
-        updates: [
-          {
-            values: values
-          }
-        ]
       })
-    }
+    },
 
-    function getPerformanceData (TWS, TWA, BSP) {
-      var performance = {}
-      // Use windspeed to find nearest speeds
-      for (let indexTWS = 0; indexTWS < polar.length - 1; indexTWS++) {
-        let lower = polar[indexTWS].tws
-        let upper = polar[indexTWS + 1].tws
-        if (indexTWS == polar.length - 1 && TWS > upper) {
-          // North of polar
-          TWS = upper
-        }
-        if (TWS >= lower && TWS <= upper) {
-          //app.debug('TWS between %d and %d', lower, upper)
-          // Calculate gap ratio
-          let gap = upper - lower
-          let twsGapRatio = (1 / gap) * (TWS - lower)
-          //app.debug('twsGapRatio: %d', twsGapRatio)
-          // Calculate beat/run angle
-          if (TWA < halfPi) {
-            // app.debug('Upwind')
-            // Take beat angle
-            if (typeof polar[indexTWS]['Beat angle'] != 'undefined') {
-              let beatLower = polar[indexTWS]['Beat angle']
-              let beatUpper = polar[indexTWS + 1]['Beat angle']
-              //app.debug('beatLower: %s beatUpper: %s', beatLower, beatUpper)
-              performance.beatAngle =
-                beatLower + (beatUpper - beatLower) * twsGapRatio
-              targetTWA = performance.beatAngle
-            }
-            // Calculate optimum wind angle (B&G thing)
-            if (options.optimumWindAngle == true) {
-              if (typeof performance.beatAngle != 'undefined') {
-                performance.optimumWindAngle =
-                  (TWA - performance.beatAngle) * port
-              }
-            }
-            // Calculate beat VMG
-            if (typeof polar[indexTWS]['Beat VMG'] != 'undefined') {
-              let VMGLower = polar[indexTWS]['Beat VMG']
-              let VMGUpper = polar[indexTWS + 1]['Beat VMG']
-              //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
-              performance.beatVMG =
-                VMGLower + (VMGUpper - VMGLower) * twsGapRatio
-              performance.targetVMG = performance.beatVMG
-              performance.targetSpeed =
-                performance.beatVMG / Math.cos(targetTWA)
-            }
-          } else {
-            // app.debug('Downwind')
-            if (typeof polar[indexTWS]['Run angle'] != 'undefined') {
-              // Calculate run angle
-              let runLower = polar[indexTWS]['Run angle']
-              let runUpper = polar[indexTWS + 1]['Run angle']
-              //app.debug('runLower: %s runUpper: %s', runLower, runUpper)
-              performance.runAngle =
-                runLower + (runUpper - runLower) * twsGapRatio
-              targetTWA = performance.runAngle
-            }
-            if (options.optimumWindAngle == true) {
-              if (typeof performance.runAngle != 'undefined') {
-                // Calculate optimum wind angle
-                performance.optimumWindAngle =
-                  (performance.runAngle - TWA) * port * -1
-              }
-            }
-            // Calculate run VMG
-            if (typeof polar[indexTWS]['Run VMG'] != 'undefined') {
-              let VMGLower = polar[indexTWS]['Run VMG']
-              let VMGUpper = polar[indexTWS + 1]['Run VMG']
-              //app.debug('VMGLower: %s VMGUpper: %s', VMGLower, VMGUpper)
-              performance.runVMG =
-                VMGLower + (VMGUpper - VMGLower) * twsGapRatio
-              performance.targetVMG = performance.runVMG
-              performance.targetSpeed =
-                performance.runVMG / Math.abs(Math.cos(targetTWA))
-            }
-          }
-          // Calculate opposite Tack True
-          // app.debug('tackTrue: port: %d HDG: %d targetTWA: %d', port, radToDeg(HDG), radToDeg(targetTWA))
-          if (port < 0) {
-            let tackTrue = HDG - targetTWA
-            if (tackTrue < 0) {
-              tackTrue = tackTrue + 2 * Math.PI
-            }
-            performance.tackTrue = tackTrue
-          } else {
-            let tackTrue = HDG + targetTWA
-            if (tackTrue > 2 * Math.PI) {
-              tackTrue = tackTrue - 2 * Math.PI
-            }
-            performance.tackTrue = tackTrue
-          }
-          // Calculate polar target boat speed
+    start(options) {
+      metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
 
-          // Interpolate Define the 4 near data points
-          let lowerTWA = polar[indexTWS].twa
-          let upperTWA = polar[indexTWS + 1].twa
-          // app.debug('lowerTWA: %s', JSON.stringify(lowerTWA))
-          // First find lowerTWA
-          for (let indexTWA = 0; indexTWA < lowerTWA.length - 1; indexTWA++) {
-            let lowerTWAlower = lowerTWA[indexTWA]
-            let lowerTWAupper = lowerTWA[indexTWA + 1]
-            if (TWA >= lowerTWAlower.twa && TWA <= lowerTWAupper.twa) {
-              // app.debug('lowerTWAlower: %s lowerTWAupper: %s', JSON.stringify(lowerTWAlower), JSON.stringify(lowerTWAupper))
-              // Now find upperTWA
-              for (
-                let indexTWA = 0;
-                indexTWA < upperTWA.length - 1;
-                indexTWA++
-              ) {
-                let upperTWAlower = upperTWA[indexTWA]
-                let upperTWAupper = upperTWA[indexTWA + 1]
-                if (TWA >= upperTWAlower.twa && TWA <= upperTWAupper.twa) {
-                  // Found the 4 points
-                  // app.debug('lowerTWAlower: %d TWA: %d lowerTWAupper: %d', radToDeg(lowerTWAlower.twa), radToDeg(TWA), radToDeg(lowerTWAupper.twa))
-                  // Calculate gap ratio
-                  let gap = lowerTWAupper.twa - lowerTWAlower.twa
-                  let twaGapRatio = (1 / gap) * (TWA - lowerTWAlower.twa)
-                  // app.debug('twaGapRatio: %d', twaGapRatio)
-                  // Calculate lower tws boat speed
-                  let lowerTBS =
-                    lowerTWAlower.tbs +
-                    (lowerTWAupper.tbs - lowerTWAlower.tbs) * twaGapRatio
-                  // Calculate upper tws boat speed
-                  let upperTBS =
-                    upperTWAlower.tbs +
-                    (upperTWAupper.tbs - upperTWAlower.tbs) * twaGapRatio
-                  // Calculate polar boat speed
-                  performance.polarSpeed =
-                    lowerTBS + (upperTBS - lowerTBS) * twsGapRatio
-                  // app.debug('lowerTBS: %d TBS: %d upperTBS: %d', msToKts(lowerTBS), performance.polarSpeed, msToKts(upperTBS))
-                  break
-                }
-              }
-              break
-            }
-          }
-          if (typeof performance.polarSpeed == 'undefined') {
-            if (TWA < performance.beatAngle) {
-              // In case TWA < lowest polar angle
-              app.debug('Low angle %d not present in table', radToDeg(TWA))
-              // performance.polarSpeed =
-            } else if (TWA > performance.runAngle) {
-              // In case TWA > highest polar angle
-              app.debug('High angle %d not present in table', radToDeg(TWA))
-              // performance.polarSpeed =
-            }
-          }
+      // Store must be initialised before migrateSettings so the CSV migration
+      // can write the legacy polar to a file during the v0 → v1 upgrade.
+      store = new PolarFileStore(app.getDataDirPath())
 
-          if (options.maxSpeed == true) {
-            let lowerMax = polar[indexTWS]['Max speed']
-            let upperMax = polar[indexTWS + 1]['Max speed']
-            let maxSpeed = lowerMax + (upperMax - lowerMax) * twsGapRatio
-            performance.maxSpeed = maxSpeed
-            let lowerMaxAngle = polar[indexTWS]['Max speed angle']
-            let upperMaxAngle = polar[indexTWS + 1]['Max speed angle']
-            let maxSpeedAngle =
-              lowerMaxAngle + (upperMaxAngle - lowerMaxAngle) * twsGapRatio
-            performance.maxSpeedAngle = maxSpeedAngle
-          }
-        } else if (indexTWS == 0 && TWS < lower) {
-          app.debug('No data for low wind speed (%d kts)', msToKts(TWS))
-        } else if (indexTWS == polar.length - 1 && TWS > upper) {
-          app.debug('No data for high wind speed (%d kts)', msToKts(TWS))
-        }
-      }
-      // Calculate polar performance ratio
-      if (typeof performance.polarSpeed != 'undefined') {
-        // app.debug('performance.polarSpeedRatio = BSP (%s)/ performance.polarSpeed (%s)', msToKts(BSP).toFixed(2), msToKts(performance.polarSpeed).toFixed(2))
-        performance.polarSpeedRatio = BSP / performance.polarSpeed
-        app.debug('performance.polarSpeedRatio = %s', performance.polarSpeedRatio.toFixed(2))
-        if (options.VMG == true) {
-          performance.velocityMadeGood = Math.abs(BSP * Math.cos(TWA))
-          performance.polarVelocityMadeGood = performance.targetVMG
-          performance.polarVelocityMadeGoodRatio =
-            performance.velocityMadeGood / performance.polarVelocityMadeGood
+      // Treat missing settingsVersion as v0 — must override after spreading DEFAULT_SETTINGS
+      // (which has settingsVersion: 1) so migration triggers correctly for legacy installs.
+      settings = migrateSettings({ ...DEFAULT_SETTINGS, ...options, settingsVersion: options.settingsVersion ?? 0 })
+
+      const SmootherClass = getSmootherClass(settings.smootherType)
+      const smootherOptions = getSmootherOptions(settings.smootherType, settings)
+
+      // Load the active polar table
+      if (settings.activePolar) {
+        try {
+          polarTable = store.load(settings.activePolar)
+          polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
+          app.setPluginStatus(`Polar '${settings.activePolar}' loaded`)
+        } catch (e) {
+          // File missing or corrupt — run without a polar rather than crashing.
+          // Keep settings.activePolar so the user can see which file is broken
+          // and re-upload it without reconfiguring. Nullify any stale SK values.
+          polarTable = null
+          nullifyOutputs()
+          app.setPluginError(`Polar '${settings.activePolar}' could not be loaded: ${e.message}`)
+          app.debug('Polar load error: %s', e.message)
         }
       } else {
-        // No value would create stale values
-        performance.polarSpeed = 0
-        performance.polarSpeedRatio = 0
-        if (options.VMG == true) {
-          performance.velocityMadeGood = 0
-          performance.polarVelocityMadeGood = 0
-          performance.polarVelocityMadeGoodRatio = 0
-        }
-      }
-      return performance
-    }
-
-    function csvToPolarObject (csv) {
-      var csvArray = []
-      var polar = {}
-      var beat = false
-
-      function upsertTwa (polarIndex, twaObj, angleDeg) {
-        const twaArray = polar[polarIndex].twa
-        const existingIndex = twaArray.findIndex(entry => entry.twa === twaObj.twa)
-        if (existingIndex >= 0) {
-          app.error(
-            'Duplicate TWA %s deg for TWS %s kts, keeping last value',
-            angleDeg,
-            msToKts(polar[polarIndex].tws).toFixed(1)
-          )
-          twaArray[existingIndex] = twaObj
-        } else {
-          twaArray.push(twaObj)
-        }
+        app.setPluginStatus('No polar configured — set activePolar or upload a CSV file')
       }
 
-      // Create array of arrays from csv
-      csv.split('\n').forEach(row => {
-        const trimmedRow = row.trim()
-        if (!trimmedRow) {
-          return
-        }
-        const cells = trimmedRow.split(';').map(cell => cell.trim())
-        if (!cells[0]) {
-          return
-        }
-        csvArray.push(cells)
-      })
-      // app.debug('csvArray: %s', JSON.stringify(csvArray))
-
-      // Populate the polar object from CSV rows
-      csvArray.forEach(row => {
-        const rowKey = row[0].trim().toLowerCase()
-        if (rowKey == 'twa/tws') {
-          // The row with TWS columns
-          // Create empty TWS objects in polar object
-          app.debug('First row with TWS columns')
-          polar = []
-          for (let index = 1; index < row.length; index++) {
-            let twsObj = { tws: ktsToMs(row[index]) } // CSV kts to internal m/s
-            polar.push(twsObj)
-          }
-          app.debug('polar: %s', JSON.stringify(polar))
-        } else if (row.filter(i => i === '0').length > 1) {
-          app.debug('beat and run angles are included')
-          // Beat / Run angle
-          let angleDeg = Number(row[0])
-          let angle = degToRad(angleDeg)
-          let angleName
-          let VMGName
-          app.debug('angle < halfPi   %d < %d', angle, halfPi)
-          if (angle < halfPi) {
-            angleName = 'Beat angle'
-            VMGName = 'Beat VMG'
-            app.debug('cvsToPolar: row includes Beat angle: %s', row.join(';'))
-          } else {
-            angleName = 'Run angle'
-            VMGName = 'Run VMG'
-            app.debug('cvsToPolar: row includes Run angle: %s', row.join(';'))
-          }
-
-          for (let index = 0; index < row.length - 1; index++) {
-            if (!row[index + 1]) {
-              continue
-            }
-            const tbsCell = Number(row[index + 1])
-            if (Number.isNaN(tbsCell) || tbsCell === 0) {
-              continue
-            }
-            if (tbsCell != 0) {
-              polar[index][angleName] = angle
-              let tbs = ktsToMs(tbsCell) * (options.perfAdjust || 1)
-              let vmg = tbs * Math.abs(Math.cos(angle))
-              polar[index][VMGName] = roundDec(vmg)
-              if (typeof polar[index]['twa'] == 'undefined') {
-                polar[index]['twa'] = []
-              }
-              let Obj = { twa: angle, tbs: tbs, vmg: vmg }
-              upsertTwa(index, Obj, angleDeg)
-              app.debug('Finding max speed')
-              if (
-                typeof polar[index]['Max speed'] == 'undefined' ||
-                tbs > polar[index]['Max speed']
-              ) {
-                polar[index]['Max speed'] = tbs
-                polar[index]['Max speed angle'] = angle
-                app.debug('Found max speed: %s', JSON.stringify(polar[index]))
-              }
-            }
-          }
-        } else {
-          // Normal line
-          let angleDeg = Number(row[0])
-          let angle = degToRad(angleDeg) // CSV deg to internal rad
-          for (let index = 0; index < row.length - 1; index++) {
-            if (typeof polar[index].twa == 'undefined') {
-              polar[index].twa = []
-            }
-            if (!row[index + 1]) {
-              continue
-            }
-            const tbsCell = Number(row[index + 1])
-            if (Number.isNaN(tbsCell)) {
-              continue
-            }
-            let tbs = ktsToMs(tbsCell) * (options.perfAdjust || 1)
-            let vmg = tbs * Math.abs(Math.cos(angle))
-            let Obj = { twa: angle, tbs: tbs, vmg: vmg }
-            // app.debug('Adding Obj: %s', JSON.stringify(Obj))
-            upsertTwa(index, Obj, angleDeg)
-            // See if we need to set/overwrite beat/run angle
-
-            // See if this a new Max speed
-            if (
-              typeof polar[index]['Max speed'] == 'undefined' ||
-              tbs > polar[index]['Max speed']
-            ) {
-              polar[index]['Max speed'] = tbs
-              polar[index]['Max speed angle'] = angle
-              app.debug('Found max speed: %s', JSON.stringify(polar[index]))
-            }
-          }
-        }
+      // Wind vector smoother (TWS + TWA combined as a Cartesian vector —
+      // avoids ±π wraparound discontinuity during smoothing)
+      windSmoother = createSmoothedPolar({
+        id: 'wind',
+        pathMagnitude: 'environment.wind.speedTrue',
+        pathAngle: 'environment.wind.angleTrueWater',
+        subscribe: true,
+        app,
+        pluginId: plugin.id,
+        SmootherClass,
+        smootherOptions
       })
 
-      // Sort the twa arrays by angle
-      polar.forEach(tws => {
-        let twaArray = tws.twa
-        twaArray = twaArray.sort((a, b) => a.twa - b.twa)
-        // app.debug('twaArray sorted: %s', JSON.stringify(twaArray))
-        tws.twa = twaArray
+      // Boat speed (STW or SOG depending on settings)
+      bspSmoother = createSmoothedHandler({
+        id: 'bsp',
+        path: settings.useSOG
+          ? 'navigation.speedOverGround'
+          : 'navigation.speedThroughWater',
+        subscribe: true,
+        app,
+        pluginId: plugin.id,
+        SmootherClass,
+        smootherOptions
       })
 
-      // Find the beat/run angle if not set yet.
-      for (let index = 0; index < polar.length; index++) {
-        let tws = polar[index].tws
-        app.debug(
-          'Beat angle for TWS %s is %s',
-          msToKts(tws).toFixed(0),
-          polar[index]['Beat angle']
-        )
-        // app.debug(polar[index]['Beat angle'])
-        if (typeof polar[index]['Beat angle'] == 'undefined') {
-          app.debug('Finding beat angle for TWS %s')
-          let beatVMG = 0
-          let beatElement = 0
-          let runVMG = 0
-          let runElement = 0
-
-          let twaArray = polar[index].twa
-          for (let element = 0; element < twaArray.length; element++) {
-            let Obj = twaArray[element]
-            if (Obj.twa < halfPi) {
-              // Beat
-              if (Obj.vmg > beatVMG) {
-                beatElement = element
-              }
-            } else {
-              // Run
-              if (Obj.vmg > runVMG) {
-                runElement = element
-              }
-            }
-          }
-          app.debug(
-            'beatVMG for %s is %s (angle %s)',
-            msToKts(tws).toFixed(0),
-            msToKts(twaArray[beatElement].vmg).toFixed(2),
-            radToDeg(twaArray[beatElement].twa).toFixed(1)
-          )
-          app.debug(
-            'runVMG for %s is %s (angle %s)',
-            msToKts(tws).toFixed(0),
-            msToKts(twaArray[runElement].vmg).toFixed(2),
-            radToDeg(twaArray[runElement].twa).toFixed(1)
-          )
-          polar[index]['Beat angle'] = twaArray[beatElement].twa
-          polar[index]['Beat VMG'] = twaArray[beatElement].vmg
-          polar[index]['Run angle'] = twaArray[runElement].twa
-          polar[index]['Run VMG'] = twaArray[runElement].vmg
-        }
-      }
-
-      // And now fill in some missing ends to avoid doing expensive calculations in the main loop
-      if (polar[0].tws > 0) {
-        // Add a 0 line to allow interpolation at very low wind speeds
-        app.debug('Add a 0 line to allow interpolation at very low wind speeds')
-        let Obj = {
-          tws: 0.0001,
-          'Beat angle': polar[0]['Beat angle'],
-          'Beat VMG': polar[0]['Beat VMG'],
-          'Run angle': polar[0]['Run angle'],
-          'Run VMG': polar[0]['Run VMG'],
-          'Max speed': 0,
-          'Max speed angle': polar[0]['Max speed angle'],
-          twa: []
-        }
-        Object.values(polar[0].twa).forEach(twaObj => {
-          Obj.twa.push({ twa: twaObj.twa, tbs: 0, vmg: 0 })
+      // Optional heading handler for opposite-tack computation.
+      // Uses SmoothedAngle (vector-based) to avoid the 0/2π wraparound
+      // discontinuity that scalar smoothing would produce near north.
+      if (settings.tackTrue) {
+        hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
+          angleRange: '0to2pi',
+          SmootherClass,
+          smootherOptions
         })
-        polar.unshift(Obj)
       }
 
-      for (let index = 0; index < polar.length; index++) {
-        // Sorted on angle, so first is lowest
-        let tws = polar[index].tws
-        let twaArray = polar[index].twa
-        let lowTBS = twaArray[0].tbs
-        let lowTWA = twaArray[0].twa
+      // Trigger performance computation whenever a new smoothed wind value is ready
+      windSmoother.onChange = computeAndSend
 
-        // app.debug('Padding polar for %s from 0 to first given angle (%d deg, %d kts)', msToKts(tws).toFixed(0), radToDeg(lowTWA), msToKts(lowTBS))
+      isRunning = true
+      app.debug('Plugin started')
+    },
 
-        // Now put some extra values at the beginning
-        var topArray = []
-        for (let angle = 0; angle < lowTWA; angle = angle + degToRad(5)) {
-          app.debug(
-            'Padding for angle %d (< lowTWA)',
-            radToDeg(angle).toFixed(1),
-            radToDeg(lowTWA).toFixed(1)
-          )
-          let tbs =
-            (angle / lowTWA) *
-            Math.pow(Math.cos((-1 * lowTWA + angle) * 2), 2) *
-            lowTBS
-          if (tbs < 0) {
-            tbs = 0
-          }
-          let Obj = { twa: angle, tbs: tbs }
-          topArray.push(Obj)
-        }
-        // app.debug('Adding values: %s', JSON.stringify(topArray))
-        polar[index].twa = topArray.concat(twaArray)
-      }
-
-      for (let index = 0; index < polar.length; index++) {
-        let tws = polar[index].tws
-        let twaArray = polar[index].twa
-        let highTBS = twaArray[twaArray.length - 1].tbs
-        let highTWA = twaArray[twaArray.length - 1].twa
-
-        app.debug(
-          'Padding polar for %s from highTWA to last given angle (%d, %d kts)',
-          msToKts(tws).toFixed(0),
-          highTWA,
-          msToKts(highTBS)
-        )
-
-        // Now put some extra values at the beginning
-        var tailArray = []
-        for (
-          let angle = Math.PI;
-          angle > highTWA;
-          angle = angle - degToRad(5)
-        ) {
-          let tbs = Math.pow(highTWA / angle, 2) * highTBS
-          let Obj = { twa: angle, tbs: tbs }
-          tailArray.unshift(Obj)
-        }
-        // app.debug('Adding values: %s', JSON.stringify(tailArray))
-        polar[index].twa = twaArray.concat(tailArray)
-      }
-
-      // app.debug(JSON.stringify(polar))
-      return polar
+    stop() {
+      isRunning = false
+      nullifyOutputs()
+      if (windSmoother) { windSmoother.terminate(); windSmoother = null }
+      if (bspSmoother)  { bspSmoother.terminate();  bspSmoother = null  }
+      if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }
+      app.debug('Plugin stopped')
     }
-
-    function getChartData () {
-      var backgroundColor = []
-      var borderColor = []
-      for (let c = 0; c < 20; c++) {
-        let r = 0 + c * 10
-        let g = 130 + ((c * 20) % 100)
-        let b = 80 + ((c * 30) % 120)
-        let color = r + ', ' + g + ', ' + b
-        backgroundColor.push('rgba(' + color + ', 1)')
-        borderColor.push('rgba(' + color + ', 0.8)')
-      }
-      app.debug(backgroundColor)
-      app.debug(borderColor)
-
-      var data = {
-        labels: [],
-        datasets: []
-      }
-      for (let angle = 0; angle <= 180; angle += 5) {
-        data.labels.push(angle)
-      }
-      for (let index = 0; index < polar.length; index++) {
-        // Add x axis label TWS
-        let tws = msToKts(polar[index].tws).toFixed(0)
-        let twaArray = polar[index].twa
-        data.datasets[index] = {
-          data: [],
-          pointRadius: [],
-          backgroundColor: backgroundColor[index],
-          borderColor: borderColor[index],
-          fill: false,
-          label: tws + ' kts'
-        }
-        for (let twaIndex = 0; twaIndex <= twaArray.length - 1; twaIndex++) {
-          let twaObj = twaArray[twaIndex]
-          let radius = 2
-          if (
-            twaObj.twa == polar[index]['Beat angle'] ||
-            twaObj.twa == polar[index]['Run angle']
-          ) {
-            radius = 5
-          }
-          data.datasets[index].data.push({
-            x: Number(radToDeg(twaObj.twa).toFixed(1)),
-            y: Number(msToKts(twaObj.tbs).toFixed(2))
-          })
-          data.datasets[index].pointRadius.push(radius)
-        }
-      }
-      // Remove 0 kts line
-      data.datasets.shift()
-      return data
-    }
-
-    function applyDamping (Xn, unit, RC) {
-      if (RC == 0) {
-        return Xn
-      } else {
-        if (typeof damping[unit] == 'undefined') {
-          // Doesn't exist yet, make obj for unit
-          damping[unit] = { Yn: Xn, dt: Date.now() }
-        }
-        // Edge case when hovering around -pi and +pi for TWA
-        if (unit == 'TWA') {
-          if (Xn > halfPi && damping[unit].Yn < halfPi * -1) {
-            // app.debug('applyDamping: unit: %s Xn: %d > %d   Yn: %d  < %d  -2Pi', unit, Xn, halfPi, damping[unit].Yn, halfPi * -1)
-            Xn = Xn - 2 * Math.PI
-          } else if (Xn < halfPi * -1 && damping[unit].Yn > halfPi) {
-            // app.debug('applyDamping: unit: %s Xn: %d < %d   Yn: %d  > %d  +2Pi', unit, Xn, halfPi * -1, damping[unit].Yn, halfPi)
-            Xn = Xn + 2 * Math.PI
-          }
-        }
-
-        // app.debug('applyDamping: unit: %s Xn: %d Yn: %d ', unit, Xn, damping[unit].Yn)
-        // Calculate a
-        let dt = (Date.now() - damping[unit].dt) / 1000
-        damping[unit].dt = Date.now()
-        let a = dt / (RC + dt)
-        // Yn = (1-a) * Yn-1 + a * Xn
-        let Yn = (1 - a) * (damping[unit].Yn || Xn) + a * Xn
-
-        // Fix if we go outside -pi to pi
-        if (unit == 'TWA') {
-          if (Yn > Math.PI) {
-            Yn = Yn - 2 * Math.PI
-          } else if (Yn < Math.PI * -1) {
-            Yn = Yn + 2 * Math.PI
-          }
-        }
-
-        // Remember Yn
-        damping[unit].Yn = Yn
-        // app.debug('Unit: %s  dt: %d  a: %d  obj: %s', unit, dt, a, JSON.stringify(damping[unit]))
-        // app.debug('applyDamping: unit: %s new Yn: %d ', unit, damping[unit].Yn)
-        return Yn
-      }
-    }
-  }
-
-  plugin.stop = function () {
-    // Here we put logic we need when the plugin stops
-    app.debug('Plugin stopped')
-    unsubscribes.forEach(f => f())
-    unsubscribes = []
-    timers.forEach(timer => {
-      clearInterval(timer)
-    })
   }
 
   return plugin
-}
-
-function radToDeg (radians) {
-  return (radians * 180) / Math.PI
-}
-
-function degToRad (degrees) {
-  return degrees * (Math.PI / 180.0)
-}
-
-function ktsToMs (knots) {
-  return knots / 1.94384
-}
-
-function msToKts (ms) {
-  return ms * 1.94384
-}
-
-function roundDec (value) {
-  if (typeof value == 'undefined') {
-    return undefined
-  } else {
-    value = Number(value.toFixed(3))
-    return value
-  }
 }

@@ -4,7 +4,7 @@
     {
       "label": "Link plugin to SignalK",
       "type": "shell",
-      "command": "npm link; npm link signalk-polar-performance-plugin",
+      "command": "npm link; cd C:\\signalk\\signalkhome\\.signalk; npm link signalk-polar-performance-plugin",
       "args": [],
       "isBackground": false,
       "problemMatcher": [],

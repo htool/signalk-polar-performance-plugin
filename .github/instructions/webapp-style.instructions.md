@@ -281,7 +281,58 @@ h.textContent = text;
 
 ---
 
-## 11. What to Keep in `main.css`
+## 11. SI Units in Plugin Endpoints — Mandatory Rule
+
+### Backend: always return SI
+All plugin REST endpoints (except explicitly flagged legacy ones) **must return SI units**:
+- Speeds → `m/s`
+- Angles → `rad` (signed where direction matters)
+- Distances → `m`
+- Time → `s`
+
+Never return knots, degrees, or other display units from an endpoint. The `tws`, `twa`, `bsp`, `polarSpeed` fields in `/live` and the `tbs`, `vmg` fields in `/polar/curve` must all be `m/s` or `rad`.
+
+### Backend: expose a `/meta` endpoint
+The plugin must provide a `GET /meta` endpoint that describes every field returned by the plugin's data endpoints, using the same shape as SK server path metadata. For each field, fetch the display preferences from the SK server (`/signalk/v1/api/vessels/self/<path>/meta`) and merge with safe defaults. Return:
+
+```json
+{
+  "tws":        { "units": "m/s",  "displayUnits": { "formula": "value * 1.94384", "symbol": "kn", "displayFormat": "0.0" } },
+  "twa":        { "units": "rad",  "displayUnits": { "formula": "value * 57.2958",  "symbol": "°",  "displayFormat": "0.0" } },
+  "bsp":        { "units": "m/s",  "displayUnits": { ... } },
+  "polarSpeed": { "units": "m/s",  "displayUnits": { ... } }
+}
+```
+
+The displayUnits object shape follows the SK server convention: `{ formula, inverseFormula?, symbol, displayFormat, targetUnit?, category? }`.
+
+### Frontend: use `_formatUnit(value, displayUnits, rawUnits)` for all display
+Copy the `_formatUnit` pattern from advancedwind verbatim. It:
+1. Applies safe defaults: `m/s → kn`, `rad → °`
+2. Merges in server-side `displayUnits` from `/meta` (user unit preferences from SK server override the defaults)
+3. Caches compiled formula functions to avoid allocating `new Function` on every render
+
+```js
+const _formulaCache = new Map();
+
+function _formatUnit(value, displayUnits, rawUnits) {
+  if (typeof value !== 'number') return '—';
+  const defaults =
+    rawUnits === 'm/s'               ? { formula: 'value * 1.943844',      symbol: 'kn', displayFormat: '0.0' } :
+    (!rawUnits || rawUnits === 'rad') ? { formula: 'value * 180 / Math.PI', symbol: '°',  displayFormat: '0.1' } :
+                                        { formula: 'value',                 symbol: rawUnits, displayFormat: '0.2' };
+  const du = { ...defaults, ...displayUnits };
+  let fn = _formulaCache.get(du.formula);
+  if (!fn) { fn = new Function('value', 'return ' + du.formula); _formulaCache.set(du.formula, fn); }
+  return fn(value).toFixed(_parseDecimals(du.displayFormat)) + '\u00a0' + du.symbol;
+}
+```
+
+Load `/meta` once at startup (after the SK stylesheet injection), store as a module-level `let meta = {}`, and pass `meta.<field>.displayUnits` and `meta.<field>.units` to `_formatUnit` at render time.
+
+---
+
+## 12. What to Keep in `main.css`
 
 After the migration, `main.css` should contain **only**:
 

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Polar</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; }
+    canvas { display: block; width: 100vw; height: 100vh; --polar-bg: #0d1117; --polar-dot-bg: #0d1117; --polar-live-curve: rgba(255,255,255,0.9); --polar-dot-polar: #facc15; --polar-dot-bsp: #f97316; --polar-grid: #2e3f55; --polar-grid-dash: #3a4f66; --polar-label: #6b7a8d; --polar-unit: #8090a0; }
+  </style>
+</head>
+<body>
+  <canvas id="polar"></canvas>
+  <script src="polar-canvas.js"></script>
+  <script>
+    (function () {
+      'use strict'
+
+      const BASE = '/plugins/signalk-polar-performance-plugin'
+      const STEP = (2 * Math.PI / 180).toFixed(6)   // ~2° in radians
+
+      const canvas = document.getElementById('polar')
+      const polar  = new PolarCanvas(canvas)
+
+      // -----------------------------------------------------------------------
+      // Resize
+      // -----------------------------------------------------------------------
+
+      function resize() {
+        canvas.width  = canvas.offsetWidth
+        canvas.height = canvas.offsetHeight
+        polar.resize()
+      }
+
+      window.addEventListener('resize', resize)
+      resize()
+
+      // -----------------------------------------------------------------------
+      // State
+      // -----------------------------------------------------------------------
+
+      let twsList        = []     // current TWS columns (knots)
+      let curves         = {}     // twsKnots → curve response
+      let libraryVersion = ''     // JSON string of twsList — change detector
+      let liveTws        = null   // last fetched live TWS (knots)
+      let liveCurve      = null   // interpolated curve for liveTws
+
+      // -----------------------------------------------------------------------
+      // Fetch helpers
+      // -----------------------------------------------------------------------
+
+      async function fetchJSON(url) {
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(res.status + ' ' + url)
+        return res.json()
+      }
+
+      // -----------------------------------------------------------------------
+      // Library — refetch when the polar changes
+      // -----------------------------------------------------------------------
+
+      async function refreshLibrary() {
+        let newList
+        try {
+          newList = await fetchJSON(BASE + '/polar/tws')
+        } catch (_) {
+          return  // polar not yet loaded — try again on next cycle
+        }
+
+        const version = JSON.stringify(newList)
+        if (version === libraryVersion) return  // no change
+
+        libraryVersion = version
+        twsList = newList
+        curves  = {}
+
+        // Fetch all library curves in parallel
+        await Promise.all(twsList.map(async (tws) => {
+          try {
+            curves[tws] = await fetchJSON(
+              BASE + '/polar/curve?tws=' + tws + '&step=' + STEP
+            )
+          } catch (_) { /* skip individual failure */ }
+        }))
+        liveCurve = await fetchCurveForTws(liveTws)
+        polar.setLibraryData(twsList, curves, liveCurve)
+      }
+
+      // -----------------------------------------------------------------------
+      // Meta — fetched once; drives display unit labels on the canvas
+      // -----------------------------------------------------------------------
+
+      async function loadMeta() {
+        try {
+          const meta = await fetchJSON(BASE + '/meta')
+          polar.setMeta(meta)
+        } catch (_) { /* use canvas defaults (m/s → kn, rad → °) */ }
+      }
+
+      // -----------------------------------------------------------------------
+      // Live curve — re-fetched when live TWS shifts by > 0.05 m/s (~0.1 kt)
+      // -----------------------------------------------------------------------
+
+      async function fetchCurveForTws(tws) {
+        if (!Number.isFinite(tws) || tws <= 0) return null
+        try {
+          return await fetchJSON(
+            BASE + '/polar/curve?tws=' + tws.toFixed(5) + '&step=' + STEP
+          )
+        } catch (_) {
+          return null
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // Live poll — 1 Hz
+      // -----------------------------------------------------------------------
+
+      async function pollLive() {
+        let live
+        try {
+          live = await fetchJSON(BASE + '/live')
+        } catch (_) {
+          return
+        }
+
+        // Refresh live curve when TWS changes by more than 0.05 m/s (~0.1 kt)
+        const newTws = live.tws
+        if (Number.isFinite(newTws) && Math.abs((newTws || 0) - (liveTws || 0)) > 0.05) {
+          liveTws   = newTws
+          liveCurve = await fetchCurveForTws(newTws)
+        }
+
+        polar.setLiveData(live, liveCurve)
+      }
+
+      // -----------------------------------------------------------------------
+      // Start
+      // -----------------------------------------------------------------------
+
+      refreshLibrary().then(() => {
+        setInterval(refreshLibrary, 5000)   // check for polar changes every 5 s
+        setInterval(pollLive, 1000)         // live data every 1 s
+        loadMeta()                          // display units (once)
+        pollLive()                          // immediate first live fetch
+      })
+
+    })()
+  </script>
+</body>
+</html>

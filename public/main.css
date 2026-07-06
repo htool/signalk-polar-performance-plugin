@@ -1,0 +1,72 @@
+/* ─── Suppress SignalK navbar-brand logo/text injected by CoreUI ────────────── */
+.app-header .navbar-brand {
+  background-image: none !important;
+  width: auto !important;
+}
+.app-header .navbar-brand::before,
+.app-header .navbar-brand::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* ─── App title ────────────────────────────────────────────────────────────── */
+.app-title {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: #29363D;
+  white-space: nowrap;
+}
+
+/* ─── Sidebar active link accent ───────────────────────────────────────────── */
+.sidebar .nav-link.active { border-left-color: #1a73e8 !important; }
+
+/* ─── Stable two-column tables throughout all pages ───────────────────────── */
+.card-body .table {
+  table-layout: fixed;
+  width: 100%;
+}
+.card-body .table td:first-child {
+  width: 58%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-body .table td:first-child small {
+  white-space: normal;
+  overflow: visible;
+  text-ext-overflow: clip;
+  display: block;
+}
+.card-body .table td:last-child { width: 42%; }
+
+/* ─── Stale / not-ready data rows ──────────────────────────────────────────── */
+tr.stale td { color: #aaa; font-style: italic; }
+
+/* ─── Polar canvas ──────────────────────────────────────────────────────────── */
+.polar-canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 4px;
+  --polar-bg: transparent;
+  --polar-grid:      #ccc;
+  --polar-grid-dash: #bbb;
+  --polar-label:     #888;
+  --polar-unit:      #aaa;
+  --polar-live-curve: rgba(0,0,0,0.8);
+  --polar-dot-bg:    #fff;
+  --polar-dot-polar: #555;  /* polar target speed — dark gray */
+  --polar-dot-bsp:   #999;  /* actual boat speed — mid gray */
+}
+
+/* ─── Polar page: give the card body less horizontal padding so the canvas
+   has more room on smaller screens ─────────────────────────────────────────── */
+#card-body.polar-layout {
+  padding: 0.75rem;
+}
+
+/* ─── Polars page action buttons — keep right-aligned, no wrapping ─────────── */
+.polar-actions { white-space: nowrap; text-align: right; }
+
+/* ─── ORC search results spacing ───────────────────────────────────────────── */
+#orc-results { max-height: 360px; overflow-y: auto; }
