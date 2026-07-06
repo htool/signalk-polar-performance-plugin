@@ -819,6 +819,66 @@ class PolarTable {
     this.table = polar
     return this
   }
+
+  /**
+   * Loads polar table data directly from an ORC VPP JSON object.
+   *
+   * Avoids the CSV intermediate step: speeds and angles are converted once
+   * from knots/degrees to m/s/radians. Beat/run angle points are added to each
+   * TWS entry's twa array (required by _computeExtrapolationCoefficients) and
+   * their metadata properties are set via _addSpeedData so _sortAndOptimizePolar
+   * skips its fallback detection.
+   *
+   * @param {Object} vpp - The VPP object from an ORC data entry.
+   * @returns {PolarTable} Returns this instance for method chaining.
+   */
+  loadFromOrcVpp(vpp) {
+    const polar = vpp.speeds.map(twsKn => ({ tws: SI.fromKnots(twsKn), twa: [] }))
+
+    // Standard speed points
+    for (const angleDeg of vpp.angles) {
+      const twaRad = SI.fromDegrees(angleDeg)
+      const speeds = vpp[String(angleDeg)]
+      if (!speeds) continue
+      for (let i = 0; i < polar.length; i++) {
+        const bspKn = speeds[i]
+        if (!Number.isFinite(bspKn) || bspKn <= 0) continue
+        const tbs = SI.fromKnots(bspKn)
+        const vmg = tbs * Math.abs(Math.cos(twaRad))
+        this._addSpeedData(polar[i], twaRad, tbs, vmg, null, null, null)
+      }
+    }
+
+    // Beat angle points — ORC provides VMG; convert to BSP for storage in twa array
+    if (vpp.beat_angle && vpp.beat_vmg) {
+      const n = Math.min(polar.length, vpp.beat_angle.length)
+      for (let i = 0; i < n; i++) {
+        const twaRad = SI.fromDegrees(vpp.beat_angle[i])
+        const vmg    = SI.fromKnots(vpp.beat_vmg[i])
+        const tbs    = vmg / Math.cos(twaRad)
+        if (!Number.isFinite(tbs) || tbs <= 0) continue
+        this._addSpeedData(polar[i], twaRad, tbs, vmg, 'Beat angle', 'Beat VMG', null)
+      }
+    }
+
+    // Run angle points
+    if (vpp.run_angle && vpp.run_vmg) {
+      const n = Math.min(polar.length, vpp.run_angle.length)
+      for (let i = 0; i < n; i++) {
+        const twaRad = SI.fromDegrees(vpp.run_angle[i])
+        const vmg    = SI.fromKnots(vpp.run_vmg[i])
+        const tbs    = vmg / Math.abs(Math.cos(twaRad))
+        if (!Number.isFinite(tbs) || tbs <= 0) continue
+        this._addSpeedData(polar[i], twaRad, tbs, vmg, 'Run angle', 'Run VMG', null)
+      }
+    }
+
+    this._sortAndOptimizePolar(polar, null)
+    this._computeExtrapolationCoefficients(polar, null)
+    this._addPolarPadding(polar, null)
+    this.table = polar
+    return this
+  }
 }
 
 /**

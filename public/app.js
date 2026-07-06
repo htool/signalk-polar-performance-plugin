@@ -507,7 +507,7 @@ function _tickOverview() {
   if (d?.tws        == null) warns.push('True wind speed — no data (environment.wind.speedTrue)')
   if (d?.twa        == null) warns.push('True wind angle — no data (environment.wind.angleTrueWater)')
   if (d?.bsp        == null) warns.push('Boat speed — no data')
-  if (d?.polarSpeed == null && d?.tws != null) warns.push('No polar loaded — configure in Polars')
+  if (d?.tws != null && d?.polarState == null) warns.push('No polar loaded — configure in Polars')
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
 }
@@ -515,6 +515,13 @@ function _tickOverview() {
 // ── PAGE: Inputs ──────────────────────────────────────────────────────────────
 function _buildInputsPage() {
   const wrap = document.createElement('div'); wrap.id = 'inputs-wrap'
+
+  // Smoother settings (top)
+  wrap.appendChild(sectionHeading('Smoother'))
+  const smRows = [{ label: 'Smoother type', control: _smootherSelector() }]
+  const pm = SMOOTHER_PARAMS[settings?.smootherType || 'Exponential']
+  if (pm) smRows.push({ label: pm.label, control: createNumberInput(pm.key, settings?.[pm.key], pm, true) })
+  wrap.appendChild(_settingsTable(smRows))
 
   wrap.appendChild(sectionHeading('True Wind Speed'))
   wrap.appendChild(buildTable([
@@ -529,6 +536,13 @@ function _buildInputsPage() {
   ]))
 
   wrap.appendChild(sectionHeading('Boat Speed'))
+  // SOG toggle sits above the data paths
+  wrap.appendChild(_settingsTable([
+    { label: 'Use speed over ground (SOG)', desc: 'Off = navigation.speedThroughWater',
+      control: createToggle(!!settings?.useSOG, v =>
+        apiPut('/settings', { useSOG: v }).then(s => { if (s) { settings = s; switchPage('inputs') } })
+      )},
+  ]))
   // Row labels updated on tick to reflect useSOG setting
   wrap.appendChild(buildTable([
     { label: 'Raw', id: 'in-bsp-raw' },
@@ -610,6 +624,15 @@ function _buildSettingsPage() {
 
   // Polar
   right.appendChild(sectionHeading('Polar'))
+
+  // Resolve metadata for the currently active polar
+  const activeMeta = (() => {
+    const a = settings?.activePolar
+    if (!a) return {}
+    const entry = polarsList.find(p => (typeof p === 'string' ? p : p.name) === a)
+    return (entry && typeof entry === 'object') ? entry : {}
+  })()
+
   right.appendChild(_settingsTable([
     { label: 'Active polar',
       control: _polarSelector() },
@@ -619,23 +642,16 @@ function _buildSettingsPage() {
         await refreshLibrary()
         if (activePage === 'settings') switchPage('settings')
       }) },
+    { label: 'Boat name',    control: _metaDisplay(activeMeta.boatName)   },
+    { label: 'Boat type',    control: _metaDisplay(activeMeta.boatType)   },
+    { label: 'Sail number',  control: _metaDisplay(activeMeta.sailnumber) },
   ]))
 
   // Smoother
-  right.appendChild(sectionHeading('Smoother'))
-  const smRows = [{ label: 'Smoother type', control: _smootherSelector() }]
-  const pm = SMOOTHER_PARAMS[settings.smootherType || 'Exponential']
-  if (pm) smRows.push({ label: pm.label, control: createNumberInput(pm.key, settings[pm.key], pm, true) })
-  right.appendChild(_settingsTable(smRows))
+  // (moved to Inputs page)
 
   // Speed source
-  right.appendChild(sectionHeading('Speed Source'))
-  right.appendChild(_settingsTable([
-    { label: 'Use speed over ground (SOG)', desc: 'Off = navigation.speedThroughWater',
-      control: createToggle(!!settings.useSOG, v =>
-        apiPut('/settings', { useSOG: v }).then(s => { if (s) settings = s })
-      )},
-  ]))
+  // (moved to Inputs page)
 
   row.appendChild(right)
 
@@ -705,6 +721,14 @@ function _settingsTable(rows) {
   tbl.appendChild(tbody); return tbl
 }
 
+/** Read-only display span for polar metadata fields. */
+function _metaDisplay(value) {
+  const span = document.createElement('span')
+  span.className = value ? 'small' : 'small text-muted'
+  span.textContent = value || '—'
+  return span
+}
+
 function _polarSelector() {
   const sel = document.createElement('select')
   sel.className = 'form-select form-select-sm'; sel.style.width = '100%'
@@ -722,6 +746,7 @@ function _polarSelector() {
     apiPut('/settings', { activePolar: sel.value }).then(async s => {
       if (!s) return
       settings = s
+      libraryVersion = ''   // force full reload — new polar may share the same TWS list
       await refreshLibrary()
       if (activePage === 'settings') switchPage('settings')
     })
@@ -738,7 +763,7 @@ function _smootherSelector() {
   sel.value = settings?.smootherType || 'Exponential'
   sel.addEventListener('change', () => {
     apiPut('/settings', { smootherType: sel.value }).then(s => {
-      if (s) { settings = s; switchPage('settings') }
+      if (s) { settings = s; switchPage('inputs') }
     })
   })
   return sel
@@ -796,6 +821,7 @@ function _tickOutputs() {
 
 // ── PAGE: Polars ───────────────────────────────────────────────────────────────
 let _orcResults = []
+let _orcLastQuery = null
 
 function _buildPolarsPage() {
   const wrap = document.createElement('div'); wrap.id = 'polars-wrap'
@@ -809,7 +835,7 @@ function _buildPolarsPage() {
   // Upload CSV
   wrap.appendChild(sectionHeading('Upload CSV'))
 
-  // Meta fields
+  // Meta fields row
   const metaGrid = document.createElement('div')
   metaGrid.className = 'd-flex flex-wrap gap-2 mb-2'
   const mkInp = (ph, w) => {
@@ -825,30 +851,20 @@ function _buildPolarsPage() {
   metaGrid.appendChild(boatTypeInp); metaGrid.appendChild(sailNumInp)
   wrap.appendChild(metaGrid)
 
-  // Custom file picker — hides the OS-locale "Browse"/"Bladeren" button
-  const fileRow = document.createElement('div')
-  fileRow.className = 'd-flex flex-wrap gap-2 align-items-center mb-3'
-  const fileInp = document.createElement('input')
-  fileInp.type = 'file'; fileInp.accept = '.csv,text/plain'; fileInp.style.display = 'none'
-  const fileNameSpan = document.createElement('span')
-  fileNameSpan.className = 'form-control form-control-sm text-muted'
-  fileNameSpan.style.width = '240px'; fileNameSpan.textContent = 'No file selected'
-  const browseBtn = document.createElement('button')
-  browseBtn.className = 'btn btn-sm btn-outline-secondary'; browseBtn.textContent = 'Browse…'
-  browseBtn.addEventListener('click', () => fileInp.click())
-  fileInp.addEventListener('change', () => {
-    fileNameSpan.textContent = fileInp.files[0]?.name || 'No file selected'
-    fileNameSpan.classList.toggle('text-muted', !fileInp.files[0])
-    if (fileInp.files[0] && !nameInp.value.trim())
-      nameInp.value = fileInp.files[0].name.replace(/\.csv$/i, '')
-  })
-  const uploadBtn = document.createElement('button')
-  uploadBtn.className = 'btn btn-sm btn-primary'; uploadBtn.textContent = 'Upload'
-  uploadBtn.addEventListener('click', async () => {
+  // CSV textarea + Save button
+  const csvArea = document.createElement('textarea')
+  csvArea.className = 'form-control form-control-sm mb-2'
+  csvArea.rows = 6; csvArea.placeholder = 'Paste CSV here (semicolon-separated, speeds in knots)'
+  csvArea.style.fontFamily = 'monospace'; csvArea.style.fontSize = '0.8rem'
+  wrap.appendChild(csvArea)
+
+  const saveBtn = document.createElement('button')
+  saveBtn.className = 'btn btn-sm btn-primary mb-3'; saveBtn.textContent = 'Save'
+  saveBtn.addEventListener('click', async () => {
     const name = nameInp.value.trim()
-    if (!name)             { showMessage('Enter a polar name'); return }
-    if (!fileInp.files[0]) { showMessage('Select a CSV file'); return }
-    const csv = await fileInp.files[0].text()
+    const csv  = csvArea.value.trim()
+    if (!name) { showMessage('Enter a polar name'); return }
+    if (!csv)  { showMessage('Paste CSV text first'); return }
     const body = { csv,
       boatName:   boatNameInp.value.trim() || undefined,
       boatType:   boatTypeInp.value.trim() || undefined,
@@ -856,15 +872,13 @@ function _buildPolarsPage() {
     }
     const ok = await apiPostJSON('/polars/' + encodeURIComponent(name), body)
     if (ok) {
-      showMessage('"' + name + '" uploaded')
-      nameInp.value = ''; boatNameInp.value = ''; boatTypeInp.value = ''; sailNumInp.value = ''
-      fileInp.value = ''; fileNameSpan.textContent = 'No file selected'; fileNameSpan.classList.add('text-muted')
+      showMessage('"' + name + '" saved')
+      nameInp.value = ''; boatNameInp.value = ''; boatTypeInp.value = ''
+      sailNumInp.value = ''; csvArea.value = ''
       await refreshPolars(); _renderPolarsList(document.getElementById('polars-list'))
     }
   })
-  fileRow.appendChild(fileInp); fileRow.appendChild(fileNameSpan)
-  fileRow.appendChild(browseBtn); fileRow.appendChild(uploadBtn)
-  wrap.appendChild(fileRow)
+  wrap.appendChild(saveBtn)
 
   // ORC import
   const orcSection = document.createElement('div'); orcSection.id = 'orc-section'
@@ -903,8 +917,13 @@ function _buildOrcSection(container) {
     searchBtn.disabled = true; searchBtn.textContent = 'Searching…'
     const res = await apiGet('/polars/import/search?q=' + encodeURIComponent(searchInp.value.trim()))
     searchBtn.disabled = false; searchBtn.textContent = 'Search'
-    if (!res) return
-    _orcResults = res; _renderOrcResults(resultsDiv)
+    if (!res) {
+      resultsDiv.innerHTML = '<p class="text-danger small">Failed to load ORC database — check server logs.</p>'
+      return
+    }
+    _orcResults = res
+    _orcLastQuery = searchInp.value.trim()
+    _renderOrcResults(resultsDiv)
   }
   searchBtn.addEventListener('click', doSearch)
   searchInp.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch() })
@@ -940,8 +959,14 @@ function _renderPolarsList(el) {
     const isActive = name === settings?.activePolar
     const tr = document.createElement('tr')
     const tdN = document.createElement('td')
-    const label = entry.boatName || name
-    tdN.textContent = label
+    const labelSpan = document.createElement('span')
+    labelSpan.textContent = entry.boatName || name
+    tdN.appendChild(labelSpan)
+    if (isActive) {
+      const badge = document.createElement('span')
+      badge.className = 'badge bg-success ms-2'; badge.textContent = 'active'
+      tdN.appendChild(badge)
+    }
     const sub = []
     if (entry.boatType)   sub.push(entry.boatType)
     if (entry.sailnumber) sub.push(entry.sailnumber)
@@ -951,18 +976,20 @@ function _renderPolarsList(el) {
       sm.textContent = sub.join(' \u00b7 ')
       tdN.appendChild(sm)
     }
-    if (isActive) {
-      const badge = document.createElement('span')
-      badge.className = 'badge bg-success ms-2'; badge.textContent = 'active'
-      tdN.appendChild(badge)
-    }
     const tdA = document.createElement('td'); tdA.className = 'polar-actions'
     if (!isActive) {
       const actBtn = document.createElement('button')
       actBtn.className = 'btn btn-sm btn-outline-primary me-1'; actBtn.textContent = 'Activate'
       actBtn.addEventListener('click', async () => {
         const s = await apiPut('/settings', { activePolar: name })
-        if (s) { settings = s; await refreshLibrary(); await refreshPolars(); _renderPolarsList(el) }
+        if (s) {
+          settings = s
+          libraryVersion = ''   // force full reload — new polar may share same TWS list
+          await refreshLibrary()
+          await refreshPolars()
+          _renderPolarsList(el)
+          if (activePage === 'settings') switchPage('settings')
+        }
       })
       tdA.appendChild(actBtn)
     }
@@ -982,13 +1009,17 @@ function _renderPolarsList(el) {
 function _renderOrcResults(el) {
   el.innerHTML = ''
   if (!_orcResults.length) {
-    const p = document.createElement('p'); p.className = 'text-muted small'
-    p.textContent = 'No results.'; el.appendChild(p); return
+    if (_orcLastQuery !== null) {
+      const p = document.createElement('p'); p.className = 'text-muted small'
+      p.textContent = `No results for "${_orcLastQuery}" — try a partial name, boat type, or sail number.`
+      el.appendChild(p)
+    }
+    return
   }
   const tbl = document.createElement('table')
   tbl.className = 'table table-sm table-borderless mb-0'
   const tbody = document.createElement('tbody')
-  _orcResults.slice(0, 25).forEach(boat => {
+  _orcResults.slice(0, 50).forEach(boat => {
     const tr = document.createElement('tr')
     const tdN = document.createElement('td')
     tdN.textContent = boat.name + (boat.type ? ' (' + boat.type + ')' : '')
@@ -1017,11 +1048,11 @@ function _renderOrcResults(el) {
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 const PAGES = {
-  overview: { title: 'Overview', build: _buildOverviewPage },
-  inputs:   { title: 'Inputs',   build: _buildInputsPage   },
-  settings: { title: 'Settings', build: _buildSettingsPage },
-  outputs:  { title: 'Outputs',  build: _buildOutputsPage  },
-  polars:   { title: 'Polars',   build: _buildPolarsPage   },
+  overview: { title: 'Overview',          build: _buildOverviewPage  },
+  inputs:   { title: 'Inputs',             build: _buildInputsPage   },
+  settings: { title: 'Polar',              build: _buildSettingsPage },
+  outputs:  { title: 'Outputs',            build: _buildOutputsPage  },
+  polars:   { title: 'Polar management',   build: _buildPolarsPage   },
 }
 
 let _currentPageEl = null

@@ -11,14 +11,15 @@
     "prepublishOnly": "npm test"
   },
   "dependencies": {
-    "signalkutilities": "*"
+    "signalkutilities": "^2.0.1"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/htool/signalk-polar-performance-plugin.git"
   },
   "author": "hans@defect.org",
-  "license": "ISC",
+  "license": "Apache-2.0",
+  "signalk-plugin-enabled-by-default": false,
   "bugs": {
     "url": "https://github.com/htool/signalk-polar-performance-plugin/issues"
   },

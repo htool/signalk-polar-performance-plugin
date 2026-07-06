@@ -465,89 +465,14 @@ module.exports = (app) => {
     description: 'Calculates sailing performance metrics from a polar diagram.',
 
     schema: () => ({
-      type: 'object',
-      properties: {
-        settingsVersion: {
-          type: 'integer',
-          default: CURRENT_SETTINGS_VERSION
-        },
-        activePolar: {
-          type: 'string',
-          title: 'Active polar (filename without .csv extension)',
-          default: ''
-        },
-        perfAdjust: {
-          type: 'number',
-          title: 'Performance adjustment ratio (1 = 100%, 0.9 = 90%)',
-          default: 1
-        },
-        smootherType: {
-          type: 'string',
-          title: 'Smoother type',
-          enum: ['None', 'Exponential', 'MovingAverage', 'Kalman'],
-          default: 'Exponential'
-        },
-        smootherParamExponential: {
-          type: 'number',
-          title: 'Exponential smoother: time constant tau (seconds)',
-          default: 1
-        },
-        smootherParamMovingAverage: {
-          type: 'number',
-          title: 'Moving average smoother: window size (seconds)',
-          default: 10
-        },
-        smootherParamKalman: {
-          type: 'number',
-          title: 'Kalman smoother: steady-state gain (0–1)',
-          default: 0.1
-        },
-        beatAngle: {
-          type: 'boolean',
-          title: 'Output beat and run angles (performance.beatAngle, performance.gybeAngle)'
-        },
-        beatVMG: {
-          type: 'boolean',
-          title: 'Output beat and run VMG'
-        },
-        targetTWA: {
-          type: 'boolean',
-          title: 'Output target TWA and VMG (auto-switches beat/run)'
-        },
-        optimumWindAngle: {
-          type: 'boolean',
-          title: 'Output optimum wind angle (TWA relative to optimal)'
-        },
-        VMG: {
-          type: 'boolean',
-          title: 'Output VMG, polarVMG, and polarVMG ratio'
-        },
-        maxSpeed: {
-          type: 'boolean',
-          title: 'Output maximum polar speed and angle for current TWS'
-        },
-        polarSpeed: {
-          type: 'boolean',
-          title: 'Output polar target speed, target boat speed, and polar speed ratio'
-        },
-        useSOG: {
-          type: 'boolean',
-          title: 'Use speed over ground (SOG) instead of speed through water'
-        },
-        tackTrue: {
-          type: 'boolean',
-          title: 'Output opposite tack true heading (performance.tackTrue)'
-        },
-        smoothedInputs: {
-          type: 'boolean',
-          title: 'Output smoothed wind angle and boat speed (environment.wind.angleTrueWaterDamped, performance.boatSpeedDamped)'
-        }
-      }
-    }),
+      type: "object",
+      description: "The plugin is configured through its webapp. Open it from the Signal K app list (Webapps → Advanced Wind) to set sources, enable corrections and adjust parameters.",
+      properties: {}
+}),
 
-    uiSchema: () => ({
-      settingsVersion: { 'ui:widget': 'hidden' }
-    }),
+    uiSchema: () => ({}),
+
+    getOpenApi: () => require('../openApi.json'),
 
     // registerWithRouter is defined outside start() — runs once at plugin load
     registerWithRouter(router) {
@@ -733,37 +658,20 @@ module.exports = (app) => {
       // returned by /live and /polar/curve. displayUnits are fetched from the
       // SK server's path metadata so user unit preferences (kn vs m/s etc.) are
       // respected. Falls back to safe defaults when SK metadata is unavailable.
-      router.get('/meta', async (req, res) => {
-        // Fetch displayUnits for a SK path; returns null on failure.
-        async function skMeta(path) {
-          try {
-            const url = `http://localhost:${app.config?.port ?? 3000}/signalk/v1/api/vessels/self/${path}/meta`
-            const r = await fetch(url)
-            if (!r.ok) return null
-            const j = await r.json()
-            return j.displayUnits ?? null
-          } catch (_) { return null }
-        }
-
-        const [twsDU, twaDU, bspDU] = await Promise.all([
-          skMeta('environment/wind/speedTrue'),
-          skMeta('environment/wind/angleTrueWater'),
-          skMeta('navigation/speedThroughWater')
-        ])
-
-        const speedDefault = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
-        const angleDefault = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
-        const ratioDefault = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
+      router.get('/meta', (req, res) => {
+        const speed = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
+        const angle = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
+        const ratio = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
 
         res.json({
-          tws:         { units: 'm/s', displayUnits: twsDU ?? speedDefault },
-          twa:         { units: 'rad', displayUnits: twaDU ?? angleDefault },
-          bsp:         { units: 'm/s', displayUnits: bspDU ?? speedDefault },
-          polarSpeed:  { units: 'm/s', displayUnits: twsDU ?? speedDefault },
-          performance: { units: 'ratio', displayUnits: ratioDefault },
-          'curve.tbs': { units: 'm/s', displayUnits: twsDU ?? speedDefault },
-          'curve.vmg': { units: 'm/s', displayUnits: twsDU ?? speedDefault },
-          'curve.twa': { units: 'rad', displayUnits: twaDU ?? angleDefault }
+          tws:         { units: 'm/s', displayUnits: speed },
+          twa:         { units: 'rad', displayUnits: angle },
+          bsp:         { units: 'm/s', displayUnits: speed },
+          polarSpeed:  { units: 'm/s', displayUnits: speed },
+          performance: { units: 'ratio', displayUnits: ratio },
+          'curve.tbs': { units: 'm/s', displayUnits: speed },
+          'curve.vmg': { units: 'm/s', displayUnits: speed },
+          'curve.twa': { units: 'rad', displayUnits: angle }
         })
       })
 
@@ -816,17 +724,22 @@ module.exports = (app) => {
         const q = (req.query.q || '').toLowerCase()
         try {
           if (!orcIndex) orcIndex = await PolarFileStore.fetchOrcIndex()
+          const lq = q
           const results = orcIndex
-            .filter(b => !q ||
-              (b.name || '').toLowerCase().includes(q) ||
-              (b.sailnumber || '').toLowerCase().includes(q) ||
-              (b.boat?.type || '').toLowerCase().includes(q))
+            .filter(b => !lq ||
+              String(b.name     || '').toLowerCase().includes(lq) ||
+              String(b.sailnumber || '').toLowerCase().includes(lq) ||
+              String(b.type || '').toLowerCase().includes(lq))
             .map(b => ({
               name: b.name,
               sailnumber: b.sailnumber,
-              type: b.boat && b.boat.type,
-              year: b.boat && b.boat.year
+              type: b.type,
+              // sort priority: name match first, sailnumber second, type last
+              _p: String(b.name || '').toLowerCase().includes(lq) ? 0
+                : String(b.sailnumber || '').toLowerCase().includes(lq) ? 1 : 2
             }))
+            .sort((a, b) => a._p - b._p)
+            .map(({ _p, ...rest }) => rest)
           res.json(results)
         } catch (e) {
           orcIndex = null // allow retry after failure
@@ -837,10 +750,12 @@ module.exports = (app) => {
       router.post('/polars/import/:sailnumber', async (req, res) => {
         const sn = req.params.sailnumber
         try {
-          if (!orcIndex) orcIndex = await PolarFileStore.fetchOrcIndex()
-          const boat = orcIndex.find(b => b.sailnumber === sn)
-          if (!boat) {
-            return res.status(404).json({ error: `Sail number '${sn}' not found in ORC data` })
+          // Fetch the full boat entry (VPP + metadata) directly from the ORC site.
+          // The compact orcIndex only has {sailnumber, name, type}; the full entry
+          // is always fetched on import so we don’t need to load the entire index first.
+          const boat = await PolarFileStore.fetchBoat(sn)
+          if (!boat || !boat.vpp) {
+            return res.status(404).json({ error: `No VPP data found for sail number '${sn}'` })
           }
           const name = store.importFromORC(boat.vpp, sn, {
             boatName: boat.name,
@@ -849,7 +764,8 @@ module.exports = (app) => {
           })
           res.json({ ok: true, name })
         } catch (e) {
-          res.status(500).json({ error: e.message })
+          res.status(e.message?.includes('fetch failed') ? 404 : 500)
+            .json({ error: e.message })
         }
       })
 
@@ -867,7 +783,8 @@ module.exports = (app) => {
 
       router.get('/polars/:name', (req, res) => {
         try {
-          res.type('text/plain').send(store.read(req.params.name))
+          const content = store.read(req.params.name)
+          res.type(store.isJson(req.params.name) ? 'application/json' : 'text/plain').send(content)
         } catch (e) {
           res.status(404).json({ error: e.message })
         }

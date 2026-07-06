@@ -1,0 +1,558 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Polar Performance Plugin API",
+    "version": "1.0.0",
+    "description": "REST API exposed by the signalk-polar-performance-plugin. All speed values are in m/s, all angles in radians."
+  },
+  "servers": [
+    { "url": "/plugins/signalk-polar-performance-plugin" }
+  ],
+  "tags": [
+    {
+      "name": "polar-data",
+      "description": "Polar file management and interpolated polar data. Suitable for use by other plugins, instruments, or external tools."
+    },
+    {
+      "name": "plugin-internal",
+      "description": "Plugin runtime state and webapp configuration. Intended for use by the bundled webapp; structure may change between versions."
+    }
+  ],
+  "paths": {
+
+    "/live": {
+      "get": {
+        "tags": ["plugin-internal"],
+        "summary": "Current live performance values",
+        "description": "Returns the current smoothed wind, boat speed, polar speed, and performance ratio. Any field that is not yet available (plugin not running, no BSP source, polar not loaded) is returned as null.",
+        "responses": {
+          "200": {
+            "description": "Live values snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tws":         { "type": ["number", "null"], "description": "Smoothed true wind speed (m/s)" },
+                    "twa":         { "type": ["number", "null"], "description": "Smoothed true wind angle (rad, negative = port)" },
+                    "bsp":         { "type": ["number", "null"], "description": "Smoothed boat speed (m/s)" },
+                    "polarSpeed":  { "type": ["number", "null"], "description": "Polar target speed at current TWS/TWA (m/s)" },
+                    "performance": { "type": ["number", "null"], "description": "BSP / polarSpeed ratio" },
+                    "polarState":  { "description": "Interpolation quality indicator from the polar table", "nullable": true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/status": {
+      "get": {
+        "tags": ["plugin-internal"],
+        "summary": "Comprehensive plugin state snapshot",
+        "description": "Returns raw and smoothed input values, all enabled SK output paths with their last computed values, and the polar interpolation state.",
+        "responses": {
+          "200": {
+            "description": "Status snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "inputs": {
+                      "type": "object",
+                      "properties": {
+                        "raw":     { "type": "object", "description": "Last raw values from instruments (m/s, rad)" },
+                        "smoothed":{ "type": "object", "description": "Smoothed values used for computation (m/s, rad)" },
+                        "paths":   { "type": "object", "description": "Signal K paths being subscribed to" }
+                      }
+                    },
+                    "outputs":    { "type": "object", "description": "Map of enabled SK path → last computed value (null if not yet computed)" },
+                    "polarState": { "description": "Interpolation quality indicator", "nullable": true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/meta": {
+      "get": {
+        "tags": ["plugin-internal"],
+        "summary": "Display unit metadata",
+        "description": "Returns preferred display units for each field in /live and /polar/curve, resolved from the Signal K server's own path metadata where available.",
+        "responses": {
+          "200": {
+            "description": "Unit metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "units":        { "type": "string" },
+                      "displayUnits": { "type": "object" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/polar": {
+      "get": {
+        "tags": ["polar-data"],
+        "summary": "Raw polar table",
+        "description": "Returns the full internal polar table structure for the active polar. Empty array when no polar is loaded.",
+        "responses": {
+          "200": {
+            "description": "Polar table entries",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/polar/tws": {
+      "get": {
+        "tags": ["polar-data"],
+        "summary": "Available TWS values in the active polar",
+        "description": "Returns an array of true wind speed values (m/s) for which the polar has data rows, excluding the zero-padding entry.",
+        "responses": {
+          "200": {
+            "description": "TWS values in m/s",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "number" } }
+              }
+            }
+          },
+          "503": {
+            "description": "No polar loaded",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polar/curve": {
+      "get": {
+        "tags": ["polar-data"],
+        "summary": "Interpolated polar curve for a given TWS",
+        "description": "Returns a sampled polar curve at the requested TWS, using the same interpolation as the live computation. Also returns beat and run angle/VMG markers.",
+        "parameters": [
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "required": false,
+            "description": "Angular sampling step in radians (default ≈ 0.035 rad = 2°)",
+            "schema": { "type": "number", "minimum": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Polar curve data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tws":    { "type": "number", "description": "Requested TWS (m/s)" },
+                    "points": {
+                      "type": "array",
+                      "description": "Sampled points from 0 to π",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "twa": { "type": "number", "description": "True wind angle (rad)" },
+                          "tbs": { "type": "number", "description": "Boat speed (m/s)" }
+                        }
+                      }
+                    },
+                    "beat": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "twa": { "type": "number" },
+                        "tbs": { "type": "number" },
+                        "vmg": { "type": ["number", "null"] }
+                      }
+                    },
+                    "run": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "twa": { "type": "number" },
+                        "tbs": { "type": "number" },
+                        "vmg": { "type": ["number", "null"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "503": {
+            "description": "No polar loaded",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/settings": {
+      "get": {
+        "tags": ["plugin-internal"],
+        "summary": "Get current plugin settings",
+        "description": "Returns the current active settings merged with any staged-but-not-yet-applied changes, plus a `_defaults` map for reference.",
+        "responses": {
+          "200": {
+            "description": "Current settings",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Settings" } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["plugin-internal"],
+        "summary": "Update plugin settings",
+        "description": "Merges the supplied properties into the current settings. Only the provided keys are changed; omitted keys are left unchanged. Changes are applied immediately.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Settings" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Settings" } } }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars": {
+      "get": {
+        "tags": ["polar-data"],
+        "summary": "List stored polar files",
+        "description": "Returns a list of all polar CSV files stored in the plugin data directory, with metadata (boat name, type, sail number) where available.",
+        "responses": {
+          "200": {
+            "description": "List of polars",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name":       { "type": "string", "description": "Bare filename (without .csv)" },
+                      "boatName":   { "type": "string" },
+                      "boatType":   { "type": "string" },
+                      "sailnumber": { "type": "string" }
+                    },
+                    "required": ["name"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/polars/import/search": {
+      "get": {
+        "tags": ["polar-data"],
+        "summary": "Search the ORC database for a polar",
+        "description": "Fetches the ORC (Offshore Racing Congress) polar index and filters it by the given query. Requires internet access. Results are cached in memory for the session.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Search term matched against boat name, sail number, and type",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching boats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name":       { "type": "string" },
+                      "sailnumber": { "type": "string" },
+                      "type":       { "type": "string" },
+                      "year":       { "type": "integer" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Failed to fetch ORC data (network error)",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/import/{sailnumber}": {
+      "post": {
+        "tags": ["polar-data"],
+        "summary": "Import a polar from the ORC database",
+        "description": "Downloads the VPP data for the given sail number from the ORC database and saves it as a CSV polar file. Requires internet access.",
+        "parameters": [
+          {
+            "name": "sailnumber",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Polar imported successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok":   { "type": "boolean" },
+                    "name": { "type": "string", "description": "Saved polar name (same as sail number)" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sail number not found in ORC data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "500": {
+            "description": "Import or save failed",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/active/{name}": {
+      "put": {
+        "tags": ["polar-data"],
+        "summary": "Set the active polar",
+        "description": "Loads the named polar file and makes it the active polar for live computation. Also persists the change to plugin settings.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bare polar name (without .csv extension)",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active polar updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok":          { "type": "boolean" },
+                    "activePolar": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Polar file could not be loaded",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{name}": {
+      "get": {
+        "tags": ["polar-data"],
+        "summary": "Download a polar CSV file",
+        "description": "Returns the raw CSV content of the named polar file.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bare polar name (without .csv extension)",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV content",
+            "content": { "text/plain": { "schema": { "type": "string" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "post": {
+        "tags": ["polar-data"],
+        "summary": "Upload or replace a polar CSV file",
+        "description": "Saves the supplied CSV content as a named polar file. Accepts either a JSON body `{ csv, boatName?, boatType?, sailnumber? }` or plain `text/plain` CSV.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bare polar name (without .csv extension)",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["csv"],
+                "properties": {
+                  "csv":        { "type": "string", "description": "CSV content in Jieter format" },
+                  "boatName":   { "type": "string" },
+                  "boatType":   { "type": "string" },
+                  "sailnumber": { "type": "string" }
+                }
+              }
+            },
+            "text/plain": {
+              "schema": { "type": "string", "description": "Raw CSV content" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Polar saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "ok": { "type": "boolean" } }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "500": {
+            "description": "Save failed",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["polar-data"],
+        "summary": "Delete a polar file",
+        "description": "Permanently removes the named polar CSV file from the data directory.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "Bare polar name (without .csv extension)",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Polar deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "ok": { "type": "boolean" } }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Delete failed",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    }
+  },
+
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        },
+        "required": ["error"]
+      },
+      "Settings": {
+        "type": "object",
+        "properties": {
+          "activePolar":               { "type": "string", "description": "Bare polar filename (without .csv)" },
+          "perfAdjust":                { "type": "number", "description": "Performance adjustment ratio (1 = 100%)" },
+          "smootherType":              { "type": "string", "enum": ["None", "Exponential", "MovingAverage", "Kalman"] },
+          "smootherParamExponential":  { "type": "number", "description": "Exponential time constant tau (s)" },
+          "smootherParamMovingAverage":{ "type": "number", "description": "Moving average window size (s)" },
+          "smootherParamKalman":       { "type": "number", "description": "Kalman steady-state gain (0–1)" },
+          "beatAngle":                 { "type": "boolean" },
+          "beatVMG":                   { "type": "boolean" },
+          "targetTWA":                 { "type": "boolean" },
+          "optimumWindAngle":          { "type": "boolean" },
+          "VMG":                       { "type": "boolean" },
+          "maxSpeed":                  { "type": "boolean" },
+          "polarSpeed":                { "type": "boolean" },
+          "useSOG":                    { "type": "boolean" },
+          "tackTrue":                  { "type": "boolean" },
+          "smoothedInputs":            { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

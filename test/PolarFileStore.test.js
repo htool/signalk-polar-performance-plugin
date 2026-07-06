@@ -168,9 +168,9 @@ describe('PolarFileStore — importFromORC()', () => {
     fs.rmdirSync(dir)
   })
 
-  it('creates a .csv file with the given name', () => {
+  it('creates a .json file with the given name', () => {
     store.importFromORC(SAMPLE_VPP, 'orc-import')
-    assert.ok(fs.existsSync(path.join(dir, 'orc-import.csv')))
+    assert.ok(fs.existsSync(path.join(dir, 'orc-import.json')))
   })
 
   it('returns the name that was saved', () => {
@@ -178,43 +178,22 @@ describe('PolarFileStore — importFromORC()', () => {
     assert.equal(name, 'orc-return')
   })
 
-  it('generated CSV has correct header row', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-header')
-    const csv = store.read('orc-header')
-    const header = csv.split('\n')[0]
-    assert.equal(header, 'twa/tws;6;10;14')
+  it('stored JSON contains the original vpp', () => {
+    store.importFromORC(SAMPLE_VPP, 'orc-vpp')
+    const stored = JSON.parse(fs.readFileSync(path.join(dir, 'orc-vpp.json'), 'utf8'))
+    assert.deepStrictEqual(stored.vpp.speeds, SAMPLE_VPP.speeds)
+    assert.deepStrictEqual(stored.vpp.angles, SAMPLE_VPP.angles)
   })
 
-  it('generated CSV contains a speed row for each angle', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-rows')
-    const csv = store.read('orc-rows')
-    const lines = csv.split('\n')
-    assert.ok(lines.some(l => l.startsWith('52;')), 'Missing row for angle 52')
-    assert.ok(lines.some(l => l.startsWith('90;')), 'Missing row for angle 90')
+  it('stored JSON embeds boat metadata', () => {
+    store.importFromORC(SAMPLE_VPP, 'orc-meta', { boatName: 'TestBoat', boatType: 'J/24', sailnumber: 'NED42' })
+    const stored = JSON.parse(fs.readFileSync(path.join(dir, 'orc-meta.json'), 'utf8'))
+    assert.equal(stored.name, 'TestBoat')
+    assert.equal(stored.boat.type, 'J/24')
+    assert.equal(stored.sailnumber, 'NED42')
   })
 
-  it('generated CSV speed values match vpp data', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-values')
-    const csv = store.read('orc-values')
-    const row52 = csv.split('\n').find(l => l.startsWith('52;'))
-    assert.equal(row52, '52;4.87;6.16;6.55')
-  })
-
-  it('generated CSV contains beat/run rows', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-beatrun')
-    const csv = store.read('orc-beatrun')
-    const lines = csv.split('\n')
-    // Beat rows: 3 TWS columns → 3 beat rows with one non-zero each
-    const beatRows = lines.filter(l => {
-      const cells = l.split(';')
-      return cells.slice(1).filter(c => parseFloat(c) > 0).length === 1 &&
-             parseFloat(cells[0]) < 90
-    })
-    assert.ok(beatRows.length >= SAMPLE_VPP.speeds.length,
-      `Expected ${SAMPLE_VPP.speeds.length} beat rows, found ${beatRows.length}`)
-  })
-
-  it('generated CSV can be loaded into a PolarTable without error', () => {
+  it('stored JSON can be loaded into a PolarTable without error', () => {
     store.importFromORC(SAMPLE_VPP, 'orc-loadable')
     assert.doesNotThrow(() => {
       const pt = store.load('orc-loadable')

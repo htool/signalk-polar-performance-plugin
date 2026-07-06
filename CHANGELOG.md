@@ -4,10 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.60] - 2026-06-30
+## [0.0.60] - 2026-07-06
 
 ### Added
+- Added runtime configuration of the plugin via the webapp.
+- Added support for managing multiple polar  files —  switch between polars directly from the webapp.
+- Added runtime inspection of the plugin via the webapp.
+- Added ability to import polars from the ORC (Offshore Racing Congress) database by searching on sail number, boat name or boat type.
+- Added extrapolation of the polar beyond the boundaries of the polar file.
+- Added comprehensive warnings in the webapp.
+- Added a full-screen polar diagram plotter page for a clean, chart-plotter-style view of your polar.
+- Added new smoother types for sensor input smoothing: Moving Average and Kalman filter, in addition to the existing Exponential smoother.
 - Added GitHub Actions CI workflow for automated testing across multiple platforms and Node.js versions.
+- Added support for display units. Polar data and polar diagrams now use the preferred units.
+
+### Changed
+- Polar diagram changed to a rader style diagram.
+- The separate damping settings for True Wind Speed, True Wind Angle, and Boat Speed have been replaced by a single smoother type with one tuning parameter. Existing settings are migrated automatically on first start.
+- source selection replaced by source priorities.
 
 ## [0.0.59] - 2026-06-03
 
@@ -104,7 +118,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-[0.0.60]: https://github.com/htool/signalk-polar-performance-plugin/compare/3593e2b...HEAD
+[0.0.60]: https://github.com/htool/signalk-polar-performance-plugin/compare/3593e2b...d051c34
 [0.0.59]: https://github.com/htool/signalk-polar-performance-plugin/compare/c0a8958...3593e2b
 [0.0.58]: https://github.com/htool/signalk-polar-performance-plugin/compare/ad9c8b5...c0a8958
 [0.0.57]: https://github.com/htool/signalk-polar-performance-plugin/compare/ed1217d...ad9c8b5

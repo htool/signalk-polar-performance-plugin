@@ -4,7 +4,18 @@ const fs = require('fs')
 const path = require('path')
 const { PolarTable } = require('./PolarTable')
 
-const ORC_DATA_URL = 'https://raw.githubusercontent.com/jieter/orc-data/master/orc-data.json'
+// ── ORC data provider ───────────────────────────────────────────────────────
+// Switch ORC_PROVIDER to 'jieter' to fall back to the original jieter site
+// (currently AUS-only index). Both sites expose the same two-stage API:
+//   index.json          — compact [[sailnumber, name, type], ...] search index
+//   data/<sn>.json      — full boat entry including VPP
+const ORC_PROVIDER = 'dakk'
+const ORC_BASE_URLS = {
+  dakk:   'https://dakk.github.io/orc-data/site',
+  jieter: 'https://jieter.github.io/orc-data/site',
+}
+const ORC_BASE = ORC_BASE_URLS[ORC_PROVIDER] || ORC_BASE_URLS.dakk
+// ---------------------------------------------------------------------------
 
 /**
  * PolarFileStore — manages polar CSV files stored in the plugin data directory.
@@ -23,44 +34,65 @@ class PolarFileStore {
     }
   }
 
-  /** Resolves a bare name to its full file path. */
+  /** Resolves a bare name to its full CSV file path. */
   _filePath(name) {
     // Prevent path traversal
     const safe = path.basename(name)
     return path.join(this.dataDir, `${safe}.csv`)
   }
 
-  /**
-   * List all polar files in the data directory.
-   * @returns {string[]} Array of bare names (without .csv extension), sorted alphabetically.
-   */
-  list() {
-    return fs.readdirSync(this.dataDir)
-      .filter(f => f.endsWith('.csv'))
-      .map(f => f.slice(0, -4))
-      .sort()
+  /** Resolves a bare name to its full JSON file path. */
+  _jsonPath(name) {
+    const safe = path.basename(name)
+    return path.join(this.dataDir, `${safe}.json`)
   }
 
   /**
-   * Read the raw CSV content of a polar file.
+   * List all polar files in the data directory (both .json and .csv).
+   * @returns {string[]} Array of bare names, sorted alphabetically.
+   */
+  list() {
+    const names = new Set()
+    fs.readdirSync(this.dataDir).forEach(f => {
+      if (f.endsWith('.json')) names.add(f.slice(0, -5))
+      else if (f.endsWith('.csv')) names.add(f.slice(0, -4))
+    })
+    return [...names].sort()
+  }
+
+  /**
+   * Read the raw content of a polar file (.json or .csv).
    * @param {string} name - Bare name of the polar.
-   * @returns {string} CSV content.
-   * @throws {Error} If the file does not exist.
+   * @returns {string} Raw file content.
+   * @throws {Error} If neither file exists.
    */
   read(name) {
+    const jp = this._jsonPath(name)
+    if (fs.existsSync(jp)) return fs.readFileSync(jp, 'utf8')
     const fp = this._filePath(name)
-    if (!fs.existsSync(fp)) throw new Error(`Polar file not found: ${name}.csv`)
+    if (!fs.existsSync(fp)) throw new Error(`Polar not found: ${name}`)
     return fs.readFileSync(fp, 'utf8')
+  }
+
+  /** Returns true if this polar is stored as JSON (ORC format). */
+  isJson(name) {
+    return fs.existsSync(this._jsonPath(name))
   }
 
   /**
    * Load a polar file and return a populated PolarTable.
+   * Tries .json (ORC format) first, falls back to .csv (Jieter format).
    * @param {string} name - Bare name of the polar.
    * @returns {PolarTable}
-   * @throws {Error} If the file does not exist or cannot be parsed.
+   * @throws {Error} If neither file exists or cannot be parsed.
    */
   load(name) {
-    const csv = this.read(name)
+    const jp = this._jsonPath(name)
+    if (fs.existsSync(jp)) {
+      const stored = JSON.parse(fs.readFileSync(jp, 'utf8'))
+      return new PolarTable().loadFromOrcVpp(stored.vpp)
+    }
+    const csv = this.read(name)   // throws if .csv also missing
     return new PolarTable().loadFromJieter(csv)
   }
 
@@ -84,11 +116,26 @@ class PolarFileStore {
   }
 
   /**
-   * Read metadata from the first line of a stored polar file.
-   * @param {string} name - Bare name of the polar.
-   * @returns {{ boatName?: string, boatType?: string, sailnumber?: string }}
+   * Read metadata for a polar.
+   * For JSON polars reads from the stored object; for CSV reads the # polar: comment.
    */
   readMeta(name) {
+    const jp = this._jsonPath(name)
+    if (fs.existsSync(jp)) {
+      try {
+        const stored = JSON.parse(fs.readFileSync(jp, 'utf8'))
+        return {
+          ...(stored.name            ? { boatName:   stored.name          } : {}),
+          ...(stored.boat?.type     ? { boatType:   stored.boat.type     } : {}),
+          ...(stored.sailnumber     ? { sailnumber: stored.sailnumber    } : {}),
+        }
+      } catch (_) { return {} }
+    }
+    return this._readCsvMeta(name)
+  }
+
+  /** Read metadata from the # polar: comment in a CSV file. */
+  _readCsvMeta(name) {
     try {
       const fp = this._filePath(name)
       if (!fs.existsSync(fp)) return {}
@@ -128,79 +175,81 @@ class PolarFileStore {
   }
 
   /**
-   * Copy a polar file to a new name.
-   * @param {string} srcName - Source bare name.
-   * @param {string} dstName - Destination bare name.
-   * @throws {Error} If the source file does not exist.
+   * Copy a polar file to a new name (supports both .json and .csv).
    */
   copy(srcName, dstName) {
-    const src = this._filePath(srcName)
-    if (!fs.existsSync(src)) throw new Error(`Polar file not found: ${srcName}.csv`)
-    fs.copyFileSync(src, this._filePath(dstName))
+    const srcJson = this._jsonPath(srcName)
+    if (fs.existsSync(srcJson)) {
+      fs.copyFileSync(srcJson, this._jsonPath(dstName))
+      return
+    }
+    const srcCsv = this._filePath(srcName)
+    if (!fs.existsSync(srcCsv)) throw new Error(`Polar not found: ${srcName}`)
+    fs.copyFileSync(srcCsv, this._filePath(dstName))
   }
 
   /**
-   * Delete a polar file.
+   * Delete a polar file (.json or .csv, whichever exists).
    * @param {string} name - Bare name of the polar to delete.
-   * @throws {Error} If the file does not exist.
+   * @throws {Error} If neither file exists.
    */
   delete(name) {
-    const fp = this._filePath(name)
-    if (!fs.existsSync(fp)) throw new Error(`Polar file not found: ${name}.csv`)
-    fs.unlinkSync(fp)
+    const jp = this._jsonPath(name)
+    const cp = this._filePath(name)
+    let deleted = false
+    if (fs.existsSync(jp)) { fs.unlinkSync(jp); deleted = true }
+    if (fs.existsSync(cp)) { fs.unlinkSync(cp); deleted = true }
+    if (!deleted) throw new Error(`Polar not found: ${name}`)
   }
 
   /**
-   * Convert an ORC vpp object to Jieter CSV format and save it as a polar file.
-   *
-   * Beat/run rows use the "one non-zero per TWS column" format that PolarTable.loadFromJieter
-   * expects: each beat/run row contains the optimal angle for one TWS column, with the
-   * corresponding VMG as the single non-zero speed value.
+   * Convert an ORC vpp object to JSON and save it directly (no CSV conversion).
+   * The stored object contains the full vpp plus boat metadata.
    *
    * @param {Object} vpp - The vpp object from an ORC data entry.
    * @param {string} name - Bare name to save the file as.
+   * @param {{ boatName?, boatType?, sailnumber? }} [meta]
    * @returns {string} The saved file name.
    */
   importFromORC(vpp, name, meta = {}) {
-    const rows = []
-
-    // Header row
-    rows.push(['twa/tws', ...vpp.speeds].join(';'))
-
-    // Speed rows — one per TWA angle
-    for (const angle of vpp.angles) {
-      const speeds = vpp[String(angle)]
-      rows.push([angle, ...speeds].join(';'))
+    const stored = {
+      sailnumber: meta.sailnumber || name,
+      name:       meta.boatName  || null,
+      boat:       { type: meta.boatType || null },
+      vpp
     }
-
-    // Beat rows — one per TWS column so each column gets its own optimal beat angle
-    for (let i = 0; i < vpp.speeds.length; i++) {
-      const row = new Array(vpp.speeds.length).fill(0)
-      row[i] = vpp.beat_vmg[i]
-      rows.push([vpp.beat_angle[i], ...row].join(';'))
-    }
-
-    // Run rows — same pattern
-    for (let i = 0; i < vpp.speeds.length; i++) {
-      const row = new Array(vpp.speeds.length).fill(0)
-      row[i] = vpp.run_vmg[i]
-      rows.push([vpp.run_angle[i], ...row].join(';'))
-    }
-
-    this.save(name, rows.join('\n'), meta)
+    fs.writeFileSync(this._jsonPath(name), JSON.stringify(stored, null, 2), 'utf8')
     return name
   }
 
   /**
-   * Fetch the full ORC data index from GitHub.
-   * This is a static method — callers are responsible for caching the result.
+   * Fetch the compact search index from the ORC provider site.
+   * Format on the site: [[sailnumber, name, type], ...]
+   * Returns: [{sailnumber, name, type}, ...]
    *
-   * @returns {Promise<Object[]>} Array of ORC boat objects.
+   * @returns {Promise<{sailnumber: string, name: string, type: string}[]>}
    */
   static async fetchOrcIndex() {
-    const response = await fetch(ORC_DATA_URL)
+    const response = await fetch(`${ORC_BASE}/index.json`)
     if (!response.ok) {
-      throw new Error(`ORC data fetch failed: HTTP ${response.status}`)
+      throw new Error(`ORC index fetch failed: HTTP ${response.status}`)
+    }
+    const tuples = await response.json()
+    return tuples.map(([sailnumber, name, type]) => ({ sailnumber, name, type }))
+  }
+
+  /**
+   * Fetch the full boat entry (including VPP) for a given sail number.
+   * URL pattern: <ORC_BASE>/data/<sailnumber>.json
+   * The sailnumber slash acts as a path separator: e.g. AUS/10001 → data/AUS/10001.json
+   *
+   * @param {string} sailnumber
+   * @returns {Promise<Object>} Full ORC boat object with .vpp, .name, .boat, etc.
+   */
+  static async fetchBoat(sailnumber) {
+    const response = await fetch(`${ORC_BASE}/data/${sailnumber}.json`)
+    if (!response.ok) {
+      throw new Error(`ORC boat fetch failed: HTTP ${response.status}`)
     }
     return response.json()
   }
