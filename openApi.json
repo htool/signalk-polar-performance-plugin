@@ -107,24 +107,6 @@
       }
     },
 
-    "/polar": {
-      "get": {
-        "tags": ["polar-data"],
-        "summary": "Raw polar table",
-        "description": "Returns the full internal polar table structure for the active polar. Empty array when no polar is loaded.",
-        "responses": {
-          "200": {
-            "description": "Polar table entries",
-            "content": {
-              "application/json": {
-                "schema": { "type": "array" }
-              }
-            }
-          }
-        }
-      }
-    },
-
     "/polar/tws": {
       "get": {
         "tags": ["polar-data"],

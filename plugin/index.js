@@ -413,49 +413,6 @@ module.exports = (app) => {
   }
 
   // ---------------------------------------------------------------------------
-  // Chart data — builds the Chart.js dataset from the loaded polar table
-  // ---------------------------------------------------------------------------
-
-  function getChartData() {
-    if (!polarTable || !polarTable.table || polarTable.table.length === 0) return null
-
-    const polar = polarTable.table
-    const backgroundColor = []
-    const borderColor = []
-    for (let c = 0; c < 20; c++) {
-      const color = `${c * 10}, ${130 + (c * 20) % 100}, ${80 + (c * 30) % 120}`
-      backgroundColor.push(`rgba(${color}, 1)`)
-      borderColor.push(`rgba(${color}, 0.8)`)
-    }
-
-    const data = { labels: [], datasets: [] }
-    for (let a = 0; a <= 180; a += 5) data.labels.push(a)
-
-    for (let i = 0; i < polar.length; i++) {
-      const tws = (polar[i].tws * 1.94384).toFixed(0)
-      const twaArray = polar[i].twa
-      data.datasets[i] = {
-        data: [],
-        pointRadius: [],
-        backgroundColor: backgroundColor[i],
-        borderColor: borderColor[i],
-        fill: false,
-        label: `${tws} kts`
-      }
-      for (const pt of twaArray) {
-        const isOptimal = pt.twa === polar[i]['Beat angle'] || pt.twa === polar[i]['Run angle']
-        data.datasets[i].data.push({
-          x: Number((pt.twa * 180 / Math.PI).toFixed(1)),
-          y: Number((pt.tbs * 1.94384).toFixed(2))
-        })
-        data.datasets[i].pointRadius.push(isOptimal ? 5 : 2)
-      }
-    }
-    data.datasets.shift() // remove the 0-kts padding row
-    return data
-  }
-
-  // ---------------------------------------------------------------------------
   // Plugin object
   // ---------------------------------------------------------------------------
 
@@ -481,11 +438,6 @@ module.exports = (app) => {
       router.use((req, res, next) => {
         res.set('Origin-Agent-Cluster', '?1')
         next()
-      })
-
-      // Legacy endpoint — returns the raw polar table structure
-      router.get('/polar', (req, res) => {
-        res.json(polarTable ? polarTable.table : [])
       })
 
       // List of TWS values in the loaded polar, in m/s (excludes zero-padding entry).
@@ -673,18 +625,6 @@ module.exports = (app) => {
           'curve.vmg': { units: 'm/s', displayUnits: speed },
           'curve.twa': { units: 'rad', displayUnits: angle }
         })
-      })
-
-      // Chart data for the webapp
-      router.get('/chartData', (req, res) => {
-        const chart = getChartData()
-        if (!chart) {
-          return res.status(503).json({
-            error: 'No polar loaded',
-            reason: 'Configure activePolar in plugin settings or upload a CSV via /polars/:name'
-          })
-        }
-        res.json(chart)
       })
 
       // ---- Runtime settings ------------------------------------------------
