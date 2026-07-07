@@ -150,9 +150,77 @@ describe('PolarTable — interpolation', () => {
       `Expected interpolated speed between 0 and beat speed, got ${speed}`)
   })
 
-  it('getBoatSpeed handles 180° (dead downwind)', () => {
-    const speed = polar.getBoatSpeed(SI.fromKnots(12), Math.PI)
-    assert.ok(speed !== null)
+})
+
+describe('PolarTable — interpolation state', () => {
+  // Test CSV at 12 kt: beat angle ≈ 39.6°, last tabulated TWA = 162.4° (run angle row),
+  // extrapLimit = 162.4 + (180−162.4)×0.3 ≈ 167.7°
+  let polar
+
+  before(() => { polar = new PolarTable().loadFromJieter(CSV) })
+
+  it('returns null for an empty table', () => {
+    assert.equal(new PolarTable().getInterpolationState(SI.fromKnots(12), SI.fromDegrees(90)), null)
+  })
+
+  // ── TWS axis ──────────────────────────────────────────────────────────────
+  it('TWS below_range (2 kt — below polar minimum of 4 kt)', () => {
+    const { tws } = polar.getInterpolationState(SI.fromKnots(2), SI.fromDegrees(90))
+    assert.equal(tws, 'below_range')
+  })
+
+  it('TWS in_range (12 kt)', () => {
+    const { tws } = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(90))
+    assert.equal(tws, 'in_range')
+  })
+
+  it('TWS above_range (30 kt — above polar maximum of 24 kt)', () => {
+    const { tws } = polar.getInterpolationState(SI.fromKnots(30), SI.fromDegrees(90))
+    assert.equal(tws, 'above_range')
+  })
+
+  // ── TWA axis at 12 kt ─────────────────────────────────────────────────────
+  it('TWA in_irons (10° — below 90 % of beat angle ≈ 35.6°)', () => {
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(10))
+    assert.equal(twa, 'in_irons')
+  })
+
+  it('TWA pinching (95 % of beat angle — between pinch and beat)', () => {
+    const beatAngle = polar.getBeatAngle(SI.fromKnots(12))
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), 0.95 * beatAngle)
+    assert.equal(twa, 'pinching')
+  })
+
+  it('TWA in_range (90°)', () => {
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(90))
+    assert.equal(twa, 'in_range')
+  })
+
+  it('TWA in_range at last tabulated angle (162° — just inside run angle 162.4°)', () => {
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(162))
+    assert.equal(twa, 'in_range')
+  })
+
+  it('TWA extrapolated (165° — between run angle 162.4° and extrap limit ≈ 167.7°)', () => {
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(165))
+    assert.equal(twa, 'extrapolated')
+  })
+
+  it('TWA above_range (170° — beyond extrap limit ≈ 167.7°)', () => {
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(170))
+    assert.equal(twa, 'above_range')
+  })
+
+  it('dead downwind (180°) is above_range at 12 kt', () => {
+    const { twa } = polar.getInterpolationState(SI.fromKnots(12), Math.PI)
+    assert.equal(twa, 'above_range')
+  })
+
+  it('port tack (-90°) gives the same state as starboard (+90°)', () => {
+    const port = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(-90))
+    const stbd = polar.getInterpolationState(SI.fromKnots(12), SI.fromDegrees(90))
+    assert.equal(port.twa, stbd.twa)
+    assert.equal(port.tws, stbd.tws)
   })
 })
 
