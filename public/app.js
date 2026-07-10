@@ -1087,16 +1087,25 @@ function startPolling() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  const isMobile = () => window.matchMedia('(max-width: 767.98px)').matches
   document.querySelectorAll('#main-nav .nav-link').forEach(link =>
-    link.addEventListener('click', e => { e.preventDefault(); switchPage(link.dataset.page) })
+    link.addEventListener('click', e => {
+      e.preventDefault()
+      switchPage(link.dataset.page)
+      if (isMobile()) document.body.classList.remove('sidebar-mobile-show')
+    })
   )
   document.getElementById('sidebarMinimizer')?.addEventListener('click', () => {
     document.body.classList.toggle('sidebar-minimized')
     document.body.classList.toggle('brand-minimized')
   })
-  document.getElementById('sidebarToggler')?.addEventListener('click', () =>
-    document.body.classList.toggle('sidebar-hidden')
-  )
+  document.getElementById('sidebarToggler')?.addEventListener('click', () => {
+    if (isMobile()) {
+      document.body.classList.toggle('sidebar-mobile-show')
+    } else {
+      document.body.classList.toggle('sidebar-hidden')
+    }
+  })
 
   await Promise.all([refreshSettings(), refreshPolars()])
   await loadMeta()
