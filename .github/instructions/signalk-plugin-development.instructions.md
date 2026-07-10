@@ -67,7 +67,8 @@ my-plugin/
   "author": "Your Name <you@example.com>",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "signalk-server": ">=2.28.0"
   },
   "signalk-plugin-enabled-by-default": false,
   "signalk": {
