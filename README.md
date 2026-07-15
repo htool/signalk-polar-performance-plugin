@@ -20,7 +20,7 @@ Then restart Signal K and enable the plugin in **Server → Plugin Config → Po
 ## Quick start
 
 1. Open the webapp from **Webapps → Polar Performance**.
-2. Go to the **Polars** tab and either import a polar from the ORC database or upload your own CSV file.
+2. Go to the **Polars** tab and either import a polar from the ORC database or import a text polar.
 3. Go to the **Settings** tab and select the polar you just added as the active polar.
 4. The **Overview** tab now shows live performance numbers and a polar diagram.
 5. Enable the outputs you want in the **Outputs** tab.
@@ -49,7 +49,7 @@ Lets you alter the settings of the plugin. Polar selection, performance adjustme
 
 ### Polars
 
-Manage stored polar files, import polars from the ORC database, and upload your own CSV. 
+Manage stored polars, import polars from the ORC database, and import text polars in supported formats.
 ---
 
 ## Configuration
@@ -164,15 +164,15 @@ Useful when you want downstream instruments to use the same smoothed values that
 
 ### Importing from ORC
 
-The plugin can search the [ORC sailboat data](https://jieter.github.io/orc-data/site/) database directly. Go to **Polars → Import from ORC**, type part of the boat name, type, or sail number and click Search. When you find your boat, click Import. The polar is saved and immediately available for selection.
+The plugin can search the official ORC active certificate source directly. Go to **Polars → Import ORC Certificate**, type part of the certificate RefNo, boat name, class, or sail number and click Search. When you find your boat, click Import. The polar is saved locally and immediately available for selection.
 
-An internet connection is required for the initial search. After import the polar is stored locally and no further internet access is needed.
+Internet access is required only while searching or importing from ORC. In an isolated Signal K installation the ORC source is simply shown as unavailable; that is not treated as a plugin error. After import the polar is stored locally and no further internet access is needed.
 
-### Uploading a CSV
+### Importing text polars
 
-If you have a polar in Jieter/ORC CSV format (as exported from the ORC site or many routing tools), you can upload it directly. Go to **Polars → Upload CSV**, fill in the file name and optionally the boat name, type, and sail number for display purposes, then browse to the file and click Upload.
+If you have a polar in a supported text format, you can import it directly from the **Polars** tab. The plugin currently supports Jieter-style semicolon CSV and Expedition-style delimited text. Optional metadata such as display name, sail number, boat type, year, source label, and notes can be added during text import.
 
-The CSV format uses semicolons as separators. The first row is a header with `twa/tws` in the first column followed by wind speeds in knots. Each subsequent row is a TWA in degrees followed by boat speeds in knots. Beat and run angles appear as separate rows with one non-zero speed per row (the VMG for that wind speed column).
+The Jieter CSV format uses semicolons as separators. The first row is a header with `twa/tws` in the first column followed by wind speeds in knots. Each subsequent row is a TWA in degrees followed by boat speeds in knots. Beat and run angles appear as separate rows with one non-zero speed per row (the VMG for that wind speed column).
 
 **Example:**
 ```
@@ -269,120 +269,19 @@ Performance calculations are only as good as the inputs. A few things are worth 
 
 ---
 
-## Canonical polar format
+## For integrators and API users
 
-The plugin stores polars as canonical JSON `polarTable` resources. This is the only supported management format for the webapp and the REST API.
+If you want to automate polar management or consume the plugin as a canonical polar provider, use the developer reference:
 
-Required structure:
-
-- `kind` must be `polarTable`.
-- `schemaVersion` is a version string for the canonical resource format.
-- `units` currently must be SI only: `tws = m/s`, `twa = rad`, `boatSpeed = m/s`.
-- `symmetry.portStarboardSymmetric` currently must be `true`.
-- `axes.tws` is a non-empty sorted array of true wind speeds in m/s.
-- `axes.twa` is a non-empty sorted array of true wind angles in radians over the range `0..pi`.
-- `values.boatSpeedMatrix` is a 2D array of boat speeds in m/s, indexed as `[twsRow][twaColumn]`.
-- The number of matrix rows must match `axes.tws.length`.
-- Each matrix row length must match `axes.twa.length`.
-
-Optional metadata:
-
-- `name`
-- `sailnumber`
-- `boatType`
-- `year`
-- `source`
-- `notes`
-
-Optional derived data:
-
-- `derived.rows` can provide precomputed beat/run/max-speed targets for each TWS row.
-- Each derived row uses the same TWS unit conventions as the main table.
-- `beat` and `run` entries contain `twa`, `tbs`, and `vmg`, all in SI units.
-
-Example:
-
-```json
-{
-	"kind": "polarTable",
-	"schemaVersion": "1.0.0",
-	"name": "Example Boat",
-	"sailnumber": "EX-1",
-	"boatType": "Example 36",
-	"year": 2025,
-	"source": "custom",
-	"notes": "Minimal canonical example",
-	"units": {
-		"tws": "m/s",
-		"twa": "rad",
-		"boatSpeed": "m/s"
-	},
-	"symmetry": {
-		"portStarboardSymmetric": true
-	},
-	"axes": {
-		"tws": [3.0864, 5.144],
-		"twa": [0.75398, 1.5708, 2.65465]
-	},
-	"values": {
-		"boatSpeedMatrix": [
-			[2.5051, 2.65465, 2.23368],
-			[3.16888, 3.34861, 2.74799]
-		]
-	},
-	"derived": {
-		"rows": [
-			{
-				"tws": 3.0864,
-				"beat": { "twa": 0.75398, "tbs": 2.5051, "vmg": 1.82652 },
-				"run": { "twa": 2.65465, "tbs": 2.23368, "vmg": 1.97371 },
-				"maxSpeed": 2.65465,
-				"maxSpeedAngle": 1.5708
-			}
-		]
-	}
-}
-```
-
-Notes:
-
-- The resource `id` is not part of the `PUT /polars/:id` body; it comes from the URL path.
-- If `derived` is omitted, the plugin can still load and query the polar from the axis and matrix data alone.
-- The authoritative machine-readable schema is in `openApi.json` under `PolarResource` and `PolarResourceBody`.
-
----
-
-## API endpoints
-
-The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`. Authentication follows Signal K server rules — the same session cookie used by the webapp works for direct API calls.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/live` | Current smoothed TWS, TWA, BSP, polar speed, and polar state. |
-| `GET` | `/status` | Full snapshot: raw inputs, smoothed inputs, and all enabled output values. |
-| `GET` | `/meta` | Display unit metadata for all fields. |
-| `GET` | `/settings` | Current plugin settings. |
-| `PUT` | `/settings` | Update settings. Body: JSON object with changed keys only. |
-| `GET` | `/polars` | List stored canonical polar resources with metadata. |
-| `GET` | `/polars/active` | Get the active polar id. |
-| `PUT` | `/polars/active` | Set the active polar. Body: JSON `{ id }`. |
-| `DELETE` | `/polars/active` | Clear the active polar. |
-| `GET` | `/polars/:id` | Get a stored canonical `polarTable` resource. |
-| `PUT` | `/polars/:id` | Create or replace a canonical `polarTable` resource. |
-| `DELETE` | `/polars/:id` | Delete a stored polar. |
-| `GET` | `/polars/:id/meta` | Read stored metadata and TWS range for a polar. |
-| `GET` | `/polars/:id/axes/tws` | Array of TWS values (m/s) in a stored polar. |
-| `GET` | `/polars/:id/queries/curve?tws=<m/s>&step=<rad>` | Interpolated polar curve for a given TWS, with beat and run markers. |
-| `GET` | `/polars/:id/queries/speed?tws=<m/s>&twa=<rad>` | Interpolated boat speed and interpolation state for a single TWS/TWA point. |
-| `GET` | `/polars/:id/queries/targets?tws=<m/s>` | Optimal beat and run targets for a given TWS. |
-| `GET` | `/polars/:id/queries/performance?tws=<m/s>&twa=<rad>&bsp=<m/s>` | Speed and VMG performance ratios against the polar. |
+- [Developer reference](docs/developer-reference.md) for the canonical `polarTable` structure and the plugin REST API.
+- [openApi.json](openApi.json) for the authoritative machine-readable contract.
 
 ---
 
 ## Known limitations
 
 - Heel angle is not taken into account in the polar lookup. Most ORC polars are upright polars.
-- Polar storage is canonical-only. The management API and webapp accept canonical `polarTable` JSON resources, not CSV or ORC imports.
+- Polar storage is canonical-only. Text and ORC imports are conversion inputs; they are stored internally as canonical `polarTable` resources.
 
 
  ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Laylines_Target_TWA_to_Active.png)
