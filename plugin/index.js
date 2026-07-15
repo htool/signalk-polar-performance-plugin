@@ -2,6 +2,8 @@
 
 const { PolarTable } = require('./PolarTable')
 const PolarFileStore = require('./PolarFileStore')
+const { ImportService, ImportError, createTimestampedId } = require('./import/ImportService')
+const canonical = require('./import/canonical')
 const {
   createSmoothedPolar,
   createSmoothedHandler,
@@ -43,7 +45,7 @@ module.exports = (app) => {
   let isRunning = false
   let polarTable = null
   let store = null
-  let orcIndex = null     // cached in-memory for the session after first fetch
+  let importService = null
   let windSmoother = null
   let bspSmoother = null
   let hdgSmoother = null
@@ -103,22 +105,7 @@ module.exports = (app) => {
       delete s.dampingBSP
       delete s.useTWSsource
       delete s.useSOGsource
-
-      // Migrate embedded CSV polar to a file in the data directory.
-      // Only advance settingsVersion if the CSV is successfully written —
-      // if it fails, keep csvTable in settings so the migration retries on next start.
-      if (s.csvTable && s.csvTable.trim()) {
-        try {
-          store.save('default_v06', s.csvTable)
-          s.activePolar = 'default_v06'
-          delete s.csvTable
-          app.debug('Legacy csvTable migrated to default_v06.csv')
-        } catch (e) {
-          app.setPluginError('Migration failed — could not save legacy CSV: ' + e.message)
-          app.debug('CSV migration error: %s', e.message)
-          return s  // abort migration; csvTable kept so next start retries
-        }
-      }
+      delete s.csvTable
 
       s.settingsVersion = 1
       app.debug('Settings migrated from v0 to v1')
@@ -435,75 +422,369 @@ module.exports = (app) => {
     registerWithRouter(router) {
       app.debug('registerWithRouter')
 
+      function getStore() {
+        if (!store) {
+          store = new PolarFileStore(app.getDataDirPath())
+        }
+        return store
+      }
+
+      function loadStoredPolar(id) {
+        return getStore().load(id)
+      }
+
+      function getImportService() {
+        if (!importService) {
+          importService = new ImportService(getStore())
+        }
+        return importService
+      }
+
+      function errorStatus(error) {
+        return /Polar not found/i.test(error.message) ? 404 : 500
+      }
+
+      function toFixedNumber(value, digits) {
+        return Number.isFinite(value) ? parseFloat(value.toFixed(digits)) : null
+      }
+
+      function getPolarTwsValues(table) {
+        return table.table
+          .filter(entry => entry.tws > 0.001)
+          .map(entry => parseFloat(entry.tws.toFixed(4)))
+      }
+
+      function buildCurveResult(table, tws, stepRad) {
+        const points = []
+        for (let twa = 0; twa <= Math.PI + 1e-9; twa += stepRad) {
+          const tbs = table.getBoatSpeed(tws, twa)
+          if (Number.isFinite(tbs) && tbs > 0) {
+            points.push({
+              twa: toFixedNumber(twa, 5),
+              tbs: toFixedNumber(tbs, 4)
+            })
+          }
+        }
+
+        const beatAngle = table.getBeatAngle(tws)
+        const beatVMG = table.getBeatVMG(tws)
+        const runAngle = table.getRunAngle(tws)
+        const runVMG = table.getRunVMG(tws)
+        const beatTbs = Number.isFinite(beatAngle) ? table.getBoatSpeed(tws, beatAngle) : null
+        const runTbs = Number.isFinite(runAngle) ? table.getBoatSpeed(tws, runAngle) : null
+
+        return {
+          tws,
+          points,
+          beat: (Number.isFinite(beatAngle) && Number.isFinite(beatTbs)) ? {
+            twa: toFixedNumber(beatAngle, 5),
+            tbs: toFixedNumber(beatTbs, 4),
+            vmg: toFixedNumber(beatVMG, 4)
+          } : null,
+          run: (Number.isFinite(runAngle) && Number.isFinite(runTbs)) ? {
+            twa: toFixedNumber(runAngle, 5),
+            tbs: toFixedNumber(runTbs, 4),
+            vmg: toFixedNumber(runVMG, 4)
+          } : null
+        }
+      }
+
+      function buildSpeedResult(table, tws, twa) {
+        const tbs = table.getBoatSpeed(tws, twa)
+        return {
+          tws,
+          twa,
+          tbs: toFixedNumber(tbs, 4),
+          state: table.getInterpolationState(tws, twa)
+        }
+      }
+
+      function buildTargetsResult(table, tws) {
+        const beatAngle = table.getBeatAngle(tws)
+        const runAngle = table.getRunAngle(tws)
+        const beatVMG = table.getBeatVMG(tws)
+        const runVMG = table.getRunVMG(tws)
+        const beatTbs = Number.isFinite(beatAngle) ? table.getBoatSpeed(tws, beatAngle) : null
+        const runTbs = Number.isFinite(runAngle) ? table.getBoatSpeed(tws, runAngle) : null
+
+        return {
+          tws,
+          beat: (Number.isFinite(beatAngle) && Number.isFinite(beatTbs)) ? {
+            twa: toFixedNumber(beatAngle, 5),
+            tbs: toFixedNumber(beatTbs, 4),
+            vmg: toFixedNumber(beatVMG, 4)
+          } : null,
+          run: (Number.isFinite(runAngle) && Number.isFinite(runTbs)) ? {
+            twa: toFixedNumber(runAngle, 5),
+            tbs: toFixedNumber(runTbs, 4),
+            vmg: toFixedNumber(runVMG, 4)
+          } : null
+        }
+      }
+
+      function buildPerformanceMetric(polarValue, actualValue) {
+        if (!Number.isFinite(polarValue) || polarValue <= 0 || !Number.isFinite(actualValue)) {
+          return null
+        }
+        return {
+          polar: toFixedNumber(polarValue, 4),
+          actual: toFixedNumber(actualValue, 4),
+          ratio: toFixedNumber(actualValue / polarValue, 5)
+        }
+      }
+
+      function buildPerformanceResult(table, tws, twa, bsp) {
+        const polarSpeed = table.getBoatSpeed(tws, twa)
+        const upwindLimit = Math.PI / 3
+        const downwindLimit = 2 * Math.PI / 3
+
+        let direction = 'reaching'
+        let polarVmg = null
+        let actualVmg = null
+        if (twa < upwindLimit) {
+          direction = 'upwind'
+          polarVmg = table.getBeatVMG(tws)
+          actualVmg = bsp * Math.cos(twa)
+        } else if (twa > downwindLimit) {
+          direction = 'downwind'
+          polarVmg = table.getRunVMG(tws)
+          actualVmg = Math.abs(bsp * Math.cos(twa))
+        }
+
+        return {
+          tws,
+          twa,
+          bsp,
+          direction,
+          speed: buildPerformanceMetric(polarSpeed, bsp),
+          vmg: direction === 'reaching' ? null : buildPerformanceMetric(polarVmg, actualVmg)
+        }
+      }
+
+      function validatePolarResourceBody(resource) {
+        return canonical.validateCanonicalPolarResourceBody(resource)
+      }
+
+      function generateCanonicalPolarId(resource) {
+        return createTimestampedId(
+          resource?.sailnumber || resource?.name || 'polar',
+          'polar',
+          (candidate) => getStore().exists(candidate),
+          Date.now
+        )
+      }
+
       router.use((req, res, next) => {
         res.set('Origin-Agent-Cluster', '?1')
         next()
       })
 
-      // List of TWS values in the loaded polar, in m/s (excludes zero-padding entry).
-      // Useful for iterating all available library curves.
-      router.get('/polar/tws', (req, res) => {
-        if (!polarTable || !polarTable.table || polarTable.table.length === 0) {
-          return res.status(503).json({ error: 'No polar loaded' })
+      router.get('/polars/active', (req, res) => {
+        if (!settings.activePolar) {
+          return res.status(404).json({ error: 'No polar is currently active' })
         }
-        const tws = polarTable.table
-          .filter(entry => entry.tws > 0.001)
-          .map(entry => parseFloat(entry.tws.toFixed(4)))
-        res.json(tws)
+        res.json({ id: settings.activePolar })
       })
 
-      // Interpolated polar curve for a given TWS.
-      // Query params:
-      //   tws  (required) – true wind speed in m/s
-      //   step (optional) – angular sampling step in radians, default 0.035 (~2°)
-      // Returns points from 0–π using getBoatSpeed() — same interpolation as
-      // the live performance computation — plus beat/run markers. All values in SI.
-      router.get('/polar/curve', (req, res) => {
-        if (!polarTable || !polarTable.table || polarTable.table.length === 0) {
-          return res.status(503).json({ error: 'No polar loaded' })
-        }
-        const tws = parseFloat(req.query.tws)
-        if (!Number.isFinite(tws) || tws < 0) {
-          return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
-        }
-        const stepRad = parseFloat(req.query.step) || (2 * Math.PI / 180)
-        if (!Number.isFinite(stepRad) || stepRad <= 0 || stepRad > Math.PI / 2) {
-          return res.status(400).json({ error: "'step' must be between 0 and π/2 radians" })
+      router.put('/polars/active', (req, res) => {
+        const id = req.body?.id
+        if (typeof id !== 'string') {
+          return res.status(400).json({ error: "Expected JSON body with string 'id'" })
         }
 
-        const points = []
-        for (let twa = 0; twa <= Math.PI + 1e-9; twa += stepRad) {
-          const tbs = polarTable.getBoatSpeed(tws, twa)
-          if (Number.isFinite(tbs) && tbs > 0) {
-            points.push({
-              twa: parseFloat(twa.toFixed(5)),
-              tbs: parseFloat(tbs.toFixed(4))
-            })
-          }
+        if (!id) {
+          polarTable = null
+          settings.activePolar = ''
+          app.savePluginOptions(settings, (err) => {
+            if (err) app.error('Failed to save settings: ' + err.message)
+          })
+          nullifyOutputs()
+          app.setPluginStatus('No polar configured — set activePolar or upload a CSV file')
+          return res.json({ id: '' })
         }
 
-        const beatAngle = polarTable.getBeatAngle(tws)
-        const beatVMG   = polarTable.getBeatVMG(tws)
-        const runAngle  = polarTable.getRunAngle(tws)
-        const runVMG    = polarTable.getRunVMG(tws)
+        try {
+          polarTable = loadStoredPolar(id)
+          polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
+          settings.activePolar = id
+          app.savePluginOptions(settings, (err) => {
+            if (err) app.error('Failed to save settings: ' + err.message)
+          })
+          app.setPluginStatus(`Polar '${id}' loaded`)
+          res.json({ id })
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
+      })
 
-        const beatTbs = Number.isFinite(beatAngle) ? polarTable.getBoatSpeed(tws, beatAngle) : null
-        const runTbs  = Number.isFinite(runAngle)  ? polarTable.getBoatSpeed(tws, runAngle)  : null
-
-        res.json({
-          tws,
-          points,
-          beat: (Number.isFinite(beatAngle) && Number.isFinite(beatTbs)) ? {
-            twa: parseFloat(beatAngle.toFixed(5)),
-            tbs: parseFloat(beatTbs.toFixed(4)),
-            vmg: Number.isFinite(beatVMG) ? parseFloat(beatVMG.toFixed(4)) : null
-          } : null,
-          run: (Number.isFinite(runAngle) && Number.isFinite(runTbs)) ? {
-            twa: parseFloat(runAngle.toFixed(5)),
-            tbs: parseFloat(runTbs.toFixed(4)),
-            vmg: Number.isFinite(runVMG) ? parseFloat(runVMG.toFixed(4)) : null
-          } : null
+      router.delete('/polars/active', (_req, res) => {
+        polarTable = null
+        settings.activePolar = ''
+        app.savePluginOptions(settings, (err) => {
+          if (err) app.error('Failed to save settings: ' + err.message)
         })
+        nullifyOutputs()
+        app.setPluginStatus('No polar configured — set activePolar or upload a CSV file')
+        res.json({ id: '' })
+      })
+
+      router.get('/imports/formats', (_req, res) => {
+        res.json(getImportService().listFormats())
+      })
+
+      router.post('/polars', (req, res) => {
+        const validationError = validatePolarResourceBody(req.body)
+        if (validationError) {
+          return res.status(400).json({ error: validationError })
+        }
+
+        try {
+          const id = generateCanonicalPolarId(req.body)
+          getStore().saveCanonical(id, {
+            ...req.body,
+            name: req.body.name || id
+          })
+          res.status(201).json({ id })
+        } catch (e) {
+          res.status(500).json({ error: e.message })
+        }
+      })
+
+      router.post('/imports/text/:format', (req, res) => {
+        try {
+          const result = getImportService().importText(req.params.format, req.body)
+          res.status(201).json({ id: result.id })
+        } catch (error) {
+          if (error instanceof ImportError) {
+            return res.status(error.status).json({ error: error.message })
+          }
+          res.status(500).json({ error: error.message })
+        }
+      })
+
+      router.get('/imports/sources', async (_req, res) => {
+        try {
+          res.json(await getImportService().listSources())
+        } catch (error) {
+          if (error instanceof ImportError) {
+            return res.status(error.status).json({ error: error.message })
+          }
+          res.status(500).json({ error: error.message })
+        }
+      })
+
+      router.get('/imports/sources/:source/search', async (req, res) => {
+        try {
+          const results = await getImportService().searchSource(req.params.source, req.query?.q)
+          res.json(results)
+        } catch (error) {
+          if (error instanceof ImportError) {
+            return res.status(error.status).json({ error: error.message })
+          }
+          res.status(500).json({ error: error.message })
+        }
+      })
+
+      router.post('/imports/sources/:source/items/:externalId', async (req, res) => {
+        try {
+          const result = await getImportService().importSource(req.params.source, req.params.externalId, req.body)
+          res.status(201).json({ id: result.id })
+        } catch (error) {
+          if (error instanceof ImportError) {
+            return res.status(error.status).json({ error: error.message })
+          }
+          res.status(500).json({ error: error.message })
+        }
+      })
+
+      router.get('/polars/:id/axes/tws', (req, res) => {
+        try {
+          const table = loadStoredPolar(req.params.id)
+          res.json(getPolarTwsValues(table))
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:id/queries/curve', (req, res) => {
+        try {
+          const table = loadStoredPolar(req.params.id)
+          const tws = parseFloat(req.query.tws)
+          if (!Number.isFinite(tws) || tws < 0) {
+            return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
+          }
+          const stepRad = parseFloat(req.query.step) || (2 * Math.PI / 180)
+          if (!Number.isFinite(stepRad) || stepRad <= 0 || stepRad > Math.PI / 2) {
+            return res.status(400).json({ error: "'step' must be between 0 and π/2 radians" })
+          }
+          res.json(buildCurveResult(table, tws, stepRad))
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:id/queries/speed', (req, res) => {
+        try {
+          const table = loadStoredPolar(req.params.id)
+          const tws = parseFloat(req.query.tws)
+          const twa = parseFloat(req.query.twa)
+          if (!Number.isFinite(tws) || tws < 0 || !Number.isFinite(twa) || twa < 0) {
+            return res.status(400).json({ error: "'tws' and 'twa' query parameters are required" })
+          }
+          res.json(buildSpeedResult(table, tws, twa))
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:id/queries/targets', (req, res) => {
+        try {
+          const table = loadStoredPolar(req.params.id)
+          const tws = parseFloat(req.query.tws)
+          if (!Number.isFinite(tws) || tws < 0) {
+            return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
+          }
+          res.json(buildTargetsResult(table, tws))
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:id/queries/performance', (req, res) => {
+        try {
+          const table = loadStoredPolar(req.params.id)
+          const tws = parseFloat(req.query.tws)
+          const twa = parseFloat(req.query.twa)
+          const bsp = parseFloat(req.query.bsp)
+          if (!Number.isFinite(tws) || tws < 0 || !Number.isFinite(twa) || twa < 0 || !Number.isFinite(bsp) || bsp < 0) {
+            return res.status(400).json({ error: "'tws', 'twa', and 'bsp' query parameters are required" })
+          }
+          res.json(buildPerformanceResult(table, tws, twa, bsp))
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:id/meta', (req, res) => {
+        try {
+          const polarStore = getStore()
+          const table = polarStore.load(req.params.id)
+          const meta = polarStore.readMeta(req.params.id)
+          const twsValues = getPolarTwsValues(table)
+          res.json({
+            id: req.params.id,
+            name: meta.boatName || req.params.id,
+            sailnumber: meta.sailnumber,
+            boatType: meta.boatType,
+            year: meta.year,
+            source: meta.source,
+            notes: meta.notes,
+            twsMin: twsValues.length ? twsValues[0] : null,
+            twsMax: twsValues.length ? twsValues[twsValues.length - 1] : null
+          })
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
+        }
       })
 
       // Current smoothed live values from the plugin's own smoothers. All SI units.
@@ -607,7 +888,7 @@ module.exports = (app) => {
       })
 
       // Metadata describing the units and display preferences for each field
-      // returned by /live and /polar/curve. displayUnits are fetched from the
+      // returned by /live and the canonical curve query endpoints. displayUnits are fetched from the
       // SK server's path metadata so user unit preferences (kn vs m/s etc.) are
       // respected. Falls back to safe defaults when SK metadata is unavailable.
       router.get('/meta', (req, res) => {
@@ -653,109 +934,68 @@ module.exports = (app) => {
 
       router.get('/polars', (req, res) => {
         try {
-          res.json(store ? store.listWithMeta() : [])
-        } catch (e) {
-          res.status(500).json({ error: e.message })
-        }
-      })
-
-      // NOTE: specific routes must come before the parameterised :name routes
-      router.get('/polars/import/search', async (req, res) => {
-        const q = (req.query.q || '').toLowerCase()
-        try {
-          if (!orcIndex) orcIndex = await PolarFileStore.fetchOrcIndex()
-          const lq = q
-          const results = orcIndex
-            .filter(b => !lq ||
-              String(b.name     || '').toLowerCase().includes(lq) ||
-              String(b.sailnumber || '').toLowerCase().includes(lq) ||
-              String(b.type || '').toLowerCase().includes(lq))
-            .map(b => ({
-              name: b.name,
-              sailnumber: b.sailnumber,
-              type: b.type,
-              // sort priority: name match first, sailnumber second, type last
-              _p: String(b.name || '').toLowerCase().includes(lq) ? 0
-                : String(b.sailnumber || '').toLowerCase().includes(lq) ? 1 : 2
-            }))
-            .sort((a, b) => a._p - b._p)
-            .map(({ _p, ...rest }) => rest)
-          res.json(results)
-        } catch (e) {
-          orcIndex = null // allow retry after failure
-          res.status(502).json({ error: `Failed to fetch ORC data: ${e.message}` })
-        }
-      })
-
-      router.post('/polars/import/:sailnumber', async (req, res) => {
-        const sn = req.params.sailnumber
-        try {
-          // Fetch the full boat entry (VPP + metadata) directly from the ORC site.
-          // The compact orcIndex only has {sailnumber, name, type}; the full entry
-          // is always fetched on import so we don’t need to load the entire index first.
-          const boat = await PolarFileStore.fetchBoat(sn)
-          if (!boat || !boat.vpp) {
-            return res.status(404).json({ error: `No VPP data found for sail number '${sn}'` })
-          }
-          const name = store.importFromORC(boat.vpp, sn, {
-            boatName: boat.name,
-            boatType: boat.boat?.type,
-            sailnumber: sn
+          const polarStore = getStore()
+          const polars = polarStore.list().map((id) => {
+            const meta = polarStore.readMeta(id)
+            return {
+              id,
+              name: meta.boatName || id,
+              sailnumber: meta.sailnumber,
+              boatType: meta.boatType,
+              year: meta.year,
+              source: meta.source
+            }
           })
-          res.json({ ok: true, name })
-        } catch (e) {
-          res.status(e.message?.includes('fetch failed') ? 404 : 500)
-            .json({ error: e.message })
-        }
-      })
-
-      router.put('/polars/active/:name', (req, res) => {
-        try {
-          polarTable = store.load(req.params.name)
-          polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
-          settings.activePolar = req.params.name
-          app.setPluginStatus(`Polar '${req.params.name}' loaded`)
-          res.json({ ok: true, activePolar: req.params.name })
+          res.json(polars)
         } catch (e) {
           res.status(500).json({ error: e.message })
         }
       })
 
-      router.get('/polars/:name', (req, res) => {
+      router.get('/polars/:id', (req, res) => {
         try {
-          const content = store.read(req.params.name)
-          res.type(store.isJson(req.params.name) ? 'application/json' : 'text/plain').send(content)
+          const stored = getStore().readObject(req.params.id)
+          res.json({ ...stored, id: req.params.id })
         } catch (e) {
           res.status(404).json({ error: e.message })
         }
       })
 
-      router.post('/polars/:name', (req, res) => {
+      router.put('/polars/:id', (req, res) => {
+        const validationError = validatePolarResourceBody(req.body)
+        if (validationError) {
+          return res.status(400).json({ error: validationError })
+        }
+
         try {
-          // Accept JSON { csv, boatName, boatType, sailnumber } or plain text CSV
-          let csv, meta = null
-          if (req.body && typeof req.body === 'object' && req.body.csv) {
-            csv = req.body.csv
-            const { boatName, boatType, sailnumber } = req.body
-            if (boatName || boatType || sailnumber) meta = { boatName, boatType, sailnumber }
-          } else if (typeof req.body === 'string') {
-            csv = req.body
-          } else {
-            return res.status(400).json({ error: 'Expected JSON { csv } or text/plain' })
+          getStore().saveCanonical(req.params.id, {
+            ...req.body,
+            name: req.body.name || req.params.id
+          })
+          if (settings.activePolar === req.params.id) {
+            polarTable = loadStoredPolar(req.params.id)
+            polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
           }
-          store.save(req.params.name, csv, meta)
-          res.json({ ok: true })
+          res.json({ id: req.params.id })
         } catch (e) {
           res.status(500).json({ error: e.message })
         }
       })
 
-      router.delete('/polars/:name', (req, res) => {
+      router.delete('/polars/:id', (req, res) => {
         try {
-          store.delete(req.params.name)
-          res.json({ ok: true })
+          getStore().delete(req.params.id)
+          if (settings.activePolar === req.params.id) {
+            settings.activePolar = ''
+            polarTable = null
+            nullifyOutputs()
+            app.savePluginOptions(settings, (err) => {
+              if (err) app.error('Failed to save settings: ' + err.message)
+            })
+          }
+          res.json({ id: req.params.id })
         } catch (e) {
-          res.status(500).json({ error: e.message })
+          res.status(errorStatus(e)).json({ error: e.message })
         }
       })
     },
@@ -763,12 +1003,9 @@ module.exports = (app) => {
     start(options) {
       metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
 
-      // Store must be initialised before migrateSettings so the CSV migration
-      // can write the legacy polar to a file during the v0 → v1 upgrade.
       store = new PolarFileStore(app.getDataDirPath())
+      importService = new ImportService(store)
 
-      // Treat missing settingsVersion as v0 — must override after spreading DEFAULT_SETTINGS
-      // (which has settingsVersion: 1) so migration triggers correctly for legacy installs.
       settings = migrateSettings({ ...DEFAULT_SETTINGS, ...options, settingsVersion: options.settingsVersion ?? 0 })
 
       const SmootherClass = getSmootherClass(settings.smootherType)
@@ -839,6 +1076,7 @@ module.exports = (app) => {
 
     stop() {
       isRunning = false
+      importService = null
       nullifyOutputs()
       if (windSmoother) { windSmoother.terminate(); windSmoother = null }
       if (bspSmoother)  { bspSmoother.terminate();  bspSmoother = null  }

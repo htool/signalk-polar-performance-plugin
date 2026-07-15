@@ -6,14 +6,6 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 
-const MINIMAL_CSV = `twa/tws;6;8
-52;4.94;5.75
-90;5.21;6.04
-43.2;4.47;0
-43.2;0;5.19
-147.5;3.90;0
-151;0;4.73`
-
 // Minimal v0 settings matching the real-world shape (no settingsVersion)
 const V0_SETTINGS = {
   useTWSsource: '',
@@ -28,7 +20,6 @@ const V0_SETTINGS = {
   dampingTWA: 2,
   dampingTWS: 1,
   dampingBSP: 3,
-  csvTable: MINIMAL_CSV,
   trueWindSpeedPath: 'environment.wind.speedTrue'
 }
 
@@ -73,26 +64,11 @@ describe('Settings migration v0 → v1', () => {
     delete require.cache[require.resolve('../plugin/index.js')]
   })
 
-  it('writes csvTable as default_v06.csv in the data directory', () => {
-    plugin.start({ ...V0_SETTINGS })
-    assert.ok(
-      fs.existsSync(path.join(dataDir, 'default_v06.csv')),
-      'default_v06.csv was not created in the data directory'
-    )
-  })
-
-  it('saved CSV content matches the original csvTable', () => {
-    plugin.start({ ...V0_SETTINGS })
-    const written = fs.readFileSync(path.join(dataDir, 'default_v06.csv'), 'utf8')
-    assert.equal(written.trim(), MINIMAL_CSV.trim())
-  })
-
   it('persists settings at v1 without csvTable', () => {
     plugin.start({ ...V0_SETTINGS })
     assert.ok(app._saved.length > 0, 'savePluginOptions was never called')
     const saved = app._saved[app._saved.length - 1]
     assert.equal(saved.settingsVersion, 1, 'settingsVersion should be 1 after migration')
-    assert.equal(saved.activePolar, 'default_v06', 'activePolar should point to the new file')
     assert.ok(!('csvTable' in saved), 'csvTable should be removed from saved settings')
   })
 

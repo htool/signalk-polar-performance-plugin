@@ -1,6 +1,6 @@
 'use strict'
 
-const { describe, it, before, after, beforeEach } = require('node:test')
+const { describe, it, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
@@ -8,24 +8,51 @@ const os = require('os')
 const PolarFileStore = require('../plugin/PolarFileStore')
 const { PolarTable } = require('../plugin/PolarTable')
 
-// Minimal but valid Jieter CSV
-const SAMPLE_CSV = `twa/tws;6;10;14
-52;4.87;6.16;6.55
-90;5.16;6.51;7.01
-135;4.34;6.13;6.94
-43.2;0;0;5.93
-152.1;0;5.34;0`
-
-// Minimal ORC vpp object (3 TWS columns, 2 angles)
-const SAMPLE_VPP = {
-  angles: [52, 90],
-  speeds: [6, 10, 14],
-  '52':  [4.87, 6.16, 6.55],
-  '90':  [5.16, 6.51, 7.01],
-  beat_angle: [43.2, 40.0, 39.6],
-  beat_vmg:   [2.49, 3.45, 4.21],
-  run_angle:  [152.1, 156.1, 162.4],
-  run_vmg:    [2.26, 3.28, 4.21]
+const SAMPLE_CANONICAL = {
+  kind: 'polarTable',
+  schemaVersion: '1.0.0',
+  name: 'Canonical Boat',
+  sailnumber: 'CAN42',
+  boatType: 'Test Sloop',
+  year: 2024,
+  source: 'custom',
+  notes: 'roundtrip',
+  units: {
+    tws: 'm/s',
+    twa: 'rad',
+    boatSpeed: 'm/s'
+  },
+  symmetry: {
+    portStarboardSymmetric: true
+  },
+  axes: {
+    tws: [3.0864, 5.144],
+    twa: [0.75398, 1.5708, 2.65465]
+  },
+  values: {
+    boatSpeedMatrix: [
+      [2.5051, 2.65465, 2.23368],
+      [3.16888, 3.34861, 2.74799]
+    ]
+  },
+  derived: {
+    rows: [
+      {
+        tws: 3.0864,
+        beat: { twa: 0.75398, tbs: 2.5051, vmg: 1.82652 },
+        run: { twa: 2.65465, tbs: 2.23368, vmg: 1.97371 },
+        maxSpeed: 2.65465,
+        maxSpeedAngle: 1.5708
+      },
+      {
+        tws: 5.144,
+        beat: { twa: 0.75398, tbs: 3.16888, vmg: 2.31042 },
+        run: { twa: 2.65465, tbs: 2.74799, vmg: 2.42813 },
+        maxSpeed: 3.34861,
+        maxSpeedAngle: 1.5708
+      }
+    ]
+  }
 }
 
 function makeTempDir() {
@@ -69,38 +96,39 @@ describe('PolarFileStore — file operations', () => {
     assert.deepEqual(store.list(), [])
   })
 
-  it('save() writes a file; list() returns its name', () => {
-    store.save('test1', SAMPLE_CSV)
-    assert.ok(fs.existsSync(path.join(dir, 'test1.csv')))
+  it('saveCanonical() writes a JSON file; list() returns its name', () => {
+    store.saveCanonical('test1', SAMPLE_CANONICAL)
+    assert.ok(fs.existsSync(path.join(dir, 'test1.json')))
     assert.deepEqual(store.list(), ['test1'])
   })
 
   it('list() returns multiple names sorted alphabetically', () => {
-    store.save('bravo', SAMPLE_CSV)
-    store.save('alpha', SAMPLE_CSV)
+    store.saveCanonical('bravo', SAMPLE_CANONICAL)
+    store.saveCanonical('alpha', SAMPLE_CANONICAL)
     const names = store.list()
     assert.deepEqual(names, ['alpha', 'bravo', 'test1'])
   })
 
-  it('read() returns the saved CSV content', () => {
-    store.save('readtest', SAMPLE_CSV)
-    assert.equal(store.read('readtest'), SAMPLE_CSV)
+  it('readObject() returns the saved canonical resource', () => {
+    store.saveCanonical('readtest', SAMPLE_CANONICAL)
+    assert.equal(store.readObject('readtest').kind, 'polarTable')
+    assert.equal(store.readObject('readtest').name, 'Canonical Boat')
   })
 
   it('read() throws for a non-existent file', () => {
-    assert.throws(() => store.read('does-not-exist'), /not found/)
+    assert.throws(() => store.readObject('does-not-exist'), /not found/)
   })
 
-  it('save() overwrites an existing file', () => {
-    store.save('overwrite', 'original')
-    store.save('overwrite', 'updated')
-    assert.equal(store.read('overwrite'), 'updated')
+  it('saveCanonical() overwrites an existing file', () => {
+    store.saveCanonical('overwrite', SAMPLE_CANONICAL)
+    store.saveCanonical('overwrite', { ...SAMPLE_CANONICAL, name: 'Updated Boat' })
+    assert.equal(store.readObject('overwrite').name, 'Updated Boat')
   })
 
   it('copy() creates a duplicate file with the new name', () => {
-    store.save('source', SAMPLE_CSV)
+    store.saveCanonical('source', SAMPLE_CANONICAL)
     store.copy('source', 'dest')
-    assert.equal(store.read('dest'), SAMPLE_CSV)
+    assert.deepEqual(store.readObject('dest').axes, SAMPLE_CANONICAL.axes)
   })
 
   it('copy() throws when source does not exist', () => {
@@ -108,20 +136,20 @@ describe('PolarFileStore — file operations', () => {
   })
 
   it('delete() removes the file', () => {
-    store.save('todelete', SAMPLE_CSV)
+    store.saveCanonical('todelete', SAMPLE_CANONICAL)
     store.delete('todelete')
-    assert.ok(!fs.existsSync(path.join(dir, 'todelete.csv')))
+    assert.ok(!fs.existsSync(path.join(dir, 'todelete.json')))
   })
 
   it('delete() throws for a non-existent file', () => {
     assert.throws(() => store.delete('ghost'), /not found/)
   })
 
-  it('save()/read() reject path traversal in the name', () => {
+  it('saveCanonical()/readObject() reject path traversal in the name', () => {
     // path.basename strips the directory part so '../escape' becomes 'escape'
-    store.save('../escape', SAMPLE_CSV)
-    assert.ok(fs.existsSync(path.join(dir, 'escape.csv')))
-    assert.doesNotThrow(() => store.read('../escape'))
+    store.saveCanonical('../escape', SAMPLE_CANONICAL)
+    assert.ok(fs.existsSync(path.join(dir, 'escape.json')))
+    assert.doesNotThrow(() => store.readObject('../escape'))
     store.delete('../escape')
   })
 })
@@ -132,7 +160,7 @@ describe('PolarFileStore — load()', () => {
   before(() => {
     dir = makeTempDir()
     store = new PolarFileStore(dir)
-    store.save('sample', SAMPLE_CSV)
+    store.saveCanonical('sample', SAMPLE_CANONICAL)
   })
 
   after(() => {
@@ -155,7 +183,7 @@ describe('PolarFileStore — load()', () => {
   })
 })
 
-describe('PolarFileStore — importFromORC()', () => {
+describe('PolarFileStore — saveCanonical()', () => {
   let dir, store
 
   before(() => {
@@ -168,36 +196,21 @@ describe('PolarFileStore — importFromORC()', () => {
     fs.rmdirSync(dir)
   })
 
-  it('creates a .json file with the given name', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-import')
-    assert.ok(fs.existsSync(path.join(dir, 'orc-import.json')))
+  it('stores canonical JSON and exposes its metadata', () => {
+    store.saveCanonical('canonical', SAMPLE_CANONICAL)
+    const meta = store.readMeta('canonical')
+    assert.equal(meta.boatName, 'Canonical Boat')
+    assert.equal(meta.boatType, 'Test Sloop')
+    assert.equal(meta.sailnumber, 'CAN42')
+    assert.equal(meta.year, 2024)
+    assert.equal(meta.source, 'custom')
+    assert.equal(meta.notes, 'roundtrip')
   })
 
-  it('returns the name that was saved', () => {
-    const name = store.importFromORC(SAMPLE_VPP, 'orc-return')
-    assert.equal(name, 'orc-return')
-  })
-
-  it('stored JSON contains the original vpp', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-vpp')
-    const stored = JSON.parse(fs.readFileSync(path.join(dir, 'orc-vpp.json'), 'utf8'))
-    assert.deepStrictEqual(stored.vpp.speeds, SAMPLE_VPP.speeds)
-    assert.deepStrictEqual(stored.vpp.angles, SAMPLE_VPP.angles)
-  })
-
-  it('stored JSON embeds boat metadata', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-meta', { boatName: 'TestBoat', boatType: 'J/24', sailnumber: 'NED42' })
-    const stored = JSON.parse(fs.readFileSync(path.join(dir, 'orc-meta.json'), 'utf8'))
-    assert.equal(stored.name, 'TestBoat')
-    assert.equal(stored.boat.type, 'J/24')
-    assert.equal(stored.sailnumber, 'NED42')
-  })
-
-  it('stored JSON can be loaded into a PolarTable without error', () => {
-    store.importFromORC(SAMPLE_VPP, 'orc-loadable')
-    assert.doesNotThrow(() => {
-      const pt = store.load('orc-loadable')
-      assert.ok(pt.table.length > 0)
-    })
+  it('loads a canonical resource into a PolarTable', () => {
+    store.saveCanonical('canonical-load', SAMPLE_CANONICAL)
+    const polar = store.load('canonical-load')
+    assert.ok(polar instanceof PolarTable)
+    assert.ok(polar.getBoatSpeed(3.0864, 1.5708) > 0)
   })
 })

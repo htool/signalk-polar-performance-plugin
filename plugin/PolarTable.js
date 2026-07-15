@@ -11,7 +11,7 @@ const SI = require('./SI');
  * 
  * @example
  * const polar = new PolarTable();
- * polar.loadFromJieter(csvData);
+ * polar.loadFromCanonical(resource);
  * polar.setPerformanceAdjustment(0.9); // 90% performance
  * 
  * const beatAngle = polar.getBeatAngle(SI.fromKnots(12)); // Get optimal beating angle
@@ -771,105 +771,79 @@ class PolarTable {
   }
 
   /**
-   * Loads polar table data from Jieter CSV format.
-   * 
-   * The Jieter format is a semicolon-separated CSV with:
-   * - Header row: 'twa/tws' followed by wind speeds in knots
-   * - Data rows: wind angle in degrees followed by boat speeds in knots
-   * - Special rows with multiple '0' values indicate optimal beat/run angles
-   * 
-   * The method converts all input units (knots/degrees) to internal units (m/s/radians)
-   * and builds an interpolatable polar table with padding for smooth performance.
-   * 
-   * @param {string} csv - CSV data string in Jieter format
-   * @param {Object} app - Optional debug logging object with debug() method
-   * @returns {PolarTable} Returns this instance for method chaining
-   * @example
-   * const csvData = `twa/tws;6;8;10;12;14;16;20;25
-   * 0;0;0;0;0;0;0;0;0
-   * 30;3.5;4.2;4.8;5.2;5.5;5.7;6.1;6.5
-   * 45;4.1;5.0;5.8;6.4;6.8;7.1;7.6;8.0`;
-   * 
-   * const polar = new PolarTable();
-   * polar.loadFromJieter(csvData);
-   */
-  loadFromJieter(csv, app = null) {
-    // Parse CSV into array of arrays
-    const csvArray = csv.split('\n').map(row => row.split(';'))
-    let polar = []
-
-    // Process each CSV row
-    csvArray.forEach(row => {
-      if (row[0] === 'twa/tws') {
-        polar = this._processTWSHeader(row, app)
-      } else if (row[0] && !isNaN(row[0])) {
-        this._processSpeedRow(row, polar, app)
-      }
-    })
-
-    // Sort TWA arrays and find optimal angles
-    this._sortAndOptimizePolar(polar, app)
-
-    // Compute quadratic extrapolation coefficients (needs sorted arrays + beat/run angles)
-    this._computeExtrapolationCoefficients(polar, app)
-
-    // Add padding and interpolation data
-    this._addPolarPadding(polar, app)
-
-    this.table = polar
-    return this
-  }
-
-  /**
-   * Loads polar table data directly from an ORC VPP JSON object.
+   * Loads polar table data from the canonical PolarResource representation.
    *
-   * Avoids the CSV intermediate step: speeds and angles are converted once
-   * from knots/degrees to m/s/radians. Beat/run angle points are added to each
-   * TWS entry's twa array (required by _computeExtrapolationCoefficients) and
-   * their metadata properties are set via _addSpeedData so _sortAndOptimizePolar
-   * skips its fallback detection.
-   *
-   * @param {Object} vpp - The VPP object from an ORC data entry.
+   * @param {Object} resource - Canonical polar resource with axes and boatSpeedMatrix in SI units.
    * @returns {PolarTable} Returns this instance for method chaining.
    */
-  loadFromOrcVpp(vpp) {
-    const polar = vpp.speeds.map(twsKn => ({ tws: SI.fromKnots(twsKn), twa: [] }))
+  loadFromCanonical(resource) {
+    const twsAxis = resource?.axes?.tws
+    const twaAxis = resource?.axes?.twa
+    const matrix = resource?.values?.boatSpeedMatrix
 
-    // Standard speed points
-    for (const angleDeg of vpp.angles) {
-      const twaRad = SI.fromDegrees(angleDeg)
-      const speeds = vpp[String(angleDeg)]
-      if (!speeds) continue
-      for (let i = 0; i < polar.length; i++) {
-        const bspKn = speeds[i]
-        if (!Number.isFinite(bspKn) || bspKn <= 0) continue
-        const tbs = SI.fromKnots(bspKn)
-        const vmg = tbs * Math.abs(Math.cos(twaRad))
-        this._addSpeedData(polar[i], twaRad, tbs, vmg, null, null, null)
-      }
+    if (!Array.isArray(twsAxis) || !Array.isArray(twaAxis) || !Array.isArray(matrix)) {
+      throw new Error('Invalid canonical polar resource')
+    }
+    if (matrix.length !== twsAxis.length) {
+      throw new Error('boatSpeedMatrix row count must match axes.tws length')
     }
 
-    // Beat angle points — ORC provides VMG; convert to BSP for storage in twa array
-    if (vpp.beat_angle && vpp.beat_vmg) {
-      const n = Math.min(polar.length, vpp.beat_angle.length)
-      for (let i = 0; i < n; i++) {
-        const twaRad = SI.fromDegrees(vpp.beat_angle[i])
-        const vmg    = SI.fromKnots(vpp.beat_vmg[i])
-        const tbs    = vmg / Math.cos(twaRad)
-        if (!Number.isFinite(tbs) || tbs <= 0) continue
-        this._addSpeedData(polar[i], twaRad, tbs, vmg, 'Beat angle', 'Beat VMG', null)
-      }
-    }
+    const derivedRows = Array.isArray(resource?.derived?.rows) ? resource.derived.rows : []
+    const polar = twsAxis.map(tws => ({ tws, twa: [] }))
 
-    // Run angle points
-    if (vpp.run_angle && vpp.run_vmg) {
-      const n = Math.min(polar.length, vpp.run_angle.length)
-      for (let i = 0; i < n; i++) {
-        const twaRad = SI.fromDegrees(vpp.run_angle[i])
-        const vmg    = SI.fromKnots(vpp.run_vmg[i])
-        const tbs    = vmg / Math.abs(Math.cos(twaRad))
+    for (let rowIndex = 0; rowIndex < twsAxis.length; rowIndex++) {
+      const row = matrix[rowIndex]
+      if (!Array.isArray(row) || row.length !== twaAxis.length) {
+        throw new Error('boatSpeedMatrix column count must match axes.twa length')
+      }
+
+      for (let colIndex = 0; colIndex < twaAxis.length; colIndex++) {
+        const angle = twaAxis[colIndex]
+        const tbs = row[colIndex]
+        if (!Number.isFinite(angle) || angle < 0 || angle > Math.PI) {
+          throw new Error('Invalid TWA axis value in canonical resource')
+        }
         if (!Number.isFinite(tbs) || tbs <= 0) continue
-        this._addSpeedData(polar[i], twaRad, tbs, vmg, 'Run angle', 'Run VMG', null)
+        const vmg = tbs * Math.abs(Math.cos(angle))
+        this._addSpeedData(polar[rowIndex], angle, tbs, vmg, null, null, null)
+      }
+
+      const derivedRow = derivedRows[rowIndex] && Math.abs(derivedRows[rowIndex].tws - twsAxis[rowIndex]) < 1e-6
+        ? derivedRows[rowIndex]
+        : derivedRows.find(candidate => Math.abs(candidate.tws - twsAxis[rowIndex]) < 1e-6)
+
+      if (derivedRow?.beat && Number.isFinite(derivedRow.beat.twa) && Number.isFinite(derivedRow.beat.tbs)) {
+        const beatVmg = Number.isFinite(derivedRow.beat.vmg)
+          ? derivedRow.beat.vmg
+          : derivedRow.beat.tbs * Math.abs(Math.cos(derivedRow.beat.twa))
+        this._addSpeedData(
+          polar[rowIndex],
+          derivedRow.beat.twa,
+          derivedRow.beat.tbs,
+          beatVmg,
+          'Beat angle',
+          'Beat VMG',
+          null
+        )
+      }
+
+      if (derivedRow?.run && Number.isFinite(derivedRow.run.twa) && Number.isFinite(derivedRow.run.tbs)) {
+        const runVmg = Number.isFinite(derivedRow.run.vmg)
+          ? derivedRow.run.vmg
+          : derivedRow.run.tbs * Math.abs(Math.cos(derivedRow.run.twa))
+        this._addSpeedData(
+          polar[rowIndex],
+          derivedRow.run.twa,
+          derivedRow.run.tbs,
+          runVmg,
+          'Run angle',
+          'Run VMG',
+          null
+        )
+      }
+
+      if (polar[rowIndex].twa.length === 0) {
+        throw new Error('Each canonical TWS row must contain at least one positive boat speed')
       }
     }
 
