@@ -251,7 +251,7 @@ The webapp shows warnings whenever something prevents accurate calculation:
 | *True wind speed — no data* | `environment.wind.speedTrue` is not arriving from Signal K.  |
 | *True wind angle — no data* | `environment.wind.angleTrueWater` is not arriving.  |
 | *Boat speed — no data* | `navigation.speedThroughWater` (or SOG) is not arriving.  |
-| *No polar loaded* | No active polar is configured. Select a polar from the settings tab. Or go to the Polars tab and import or upload one first. |
+| *No polar loaded* | No active polar is configured. Select a polar from the settings tab. Or go to the Polars tab and store a canonical polar resource first. |
 | *Sailing in irons* | TWA is below the minimum angle in the polar. No output is produced. |
 | *Pinching* | TWA is between the minimum polar angle and the beat angle. Values come from the extrapolated beat zone. |
 | *Extrapolated beyond run angle* | TWA is deeper than the run angle. Values come from the cosine-VMG extrapolation model. |
@@ -269,6 +269,89 @@ Performance calculations are only as good as the inputs. A few things are worth 
 
 ---
 
+## Canonical polar format
+
+The plugin stores polars as canonical JSON `polarTable` resources. This is the only supported management format for the webapp and the REST API.
+
+Required structure:
+
+- `kind` must be `polarTable`.
+- `schemaVersion` is a version string for the canonical resource format.
+- `units` currently must be SI only: `tws = m/s`, `twa = rad`, `boatSpeed = m/s`.
+- `symmetry.portStarboardSymmetric` currently must be `true`.
+- `axes.tws` is a non-empty sorted array of true wind speeds in m/s.
+- `axes.twa` is a non-empty sorted array of true wind angles in radians over the range `0..pi`.
+- `values.boatSpeedMatrix` is a 2D array of boat speeds in m/s, indexed as `[twsRow][twaColumn]`.
+- The number of matrix rows must match `axes.tws.length`.
+- Each matrix row length must match `axes.twa.length`.
+
+Optional metadata:
+
+- `name`
+- `sailnumber`
+- `boatType`
+- `year`
+- `source`
+- `notes`
+
+Optional derived data:
+
+- `derived.rows` can provide precomputed beat/run/max-speed targets for each TWS row.
+- Each derived row uses the same TWS unit conventions as the main table.
+- `beat` and `run` entries contain `twa`, `tbs`, and `vmg`, all in SI units.
+
+Example:
+
+```json
+{
+	"kind": "polarTable",
+	"schemaVersion": "1.0.0",
+	"name": "Example Boat",
+	"sailnumber": "EX-1",
+	"boatType": "Example 36",
+	"year": 2025,
+	"source": "custom",
+	"notes": "Minimal canonical example",
+	"units": {
+		"tws": "m/s",
+		"twa": "rad",
+		"boatSpeed": "m/s"
+	},
+	"symmetry": {
+		"portStarboardSymmetric": true
+	},
+	"axes": {
+		"tws": [3.0864, 5.144],
+		"twa": [0.75398, 1.5708, 2.65465]
+	},
+	"values": {
+		"boatSpeedMatrix": [
+			[2.5051, 2.65465, 2.23368],
+			[3.16888, 3.34861, 2.74799]
+		]
+	},
+	"derived": {
+		"rows": [
+			{
+				"tws": 3.0864,
+				"beat": { "twa": 0.75398, "tbs": 2.5051, "vmg": 1.82652 },
+				"run": { "twa": 2.65465, "tbs": 2.23368, "vmg": 1.97371 },
+				"maxSpeed": 2.65465,
+				"maxSpeedAngle": 1.5708
+			}
+		]
+	}
+}
+```
+
+Notes:
+
+- The resource `id` is not part of the `PUT /polars/:id` body; it comes from the URL path.
+- If `derived` is omitted, the plugin can still load and query the polar from the axis and matrix data alone.
+- The authoritative machine-readable schema is in `openApi.json` under `PolarResource` and `PolarResourceBody`.
+
+---
+
 ## API endpoints
 
 The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`. Authentication follows Signal K server rules — the same session cookie used by the webapp works for direct API calls.
@@ -280,22 +363,26 @@ The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`
 | `GET` | `/meta` | Display unit metadata for all fields. |
 | `GET` | `/settings` | Current plugin settings. |
 | `PUT` | `/settings` | Update settings. Body: JSON object with changed keys only. |
-| `GET` | `/polar/tws` | Array of TWS values (m/s) in the loaded polar. |
-| `GET` | `/polar/curve?tws=<m/s>&step=<rad>` | Interpolated polar curve for a given TWS, with beat and run markers. |
-| `GET` | `/polars` | List stored polars with metadata. |
-| `POST` | `/polars/:name` | Upload a polar. Body: JSON `{ csv, boatName?, boatType?, sailnumber? }`. |
-| `DELETE` | `/polars/:name` | Delete a stored polar. |
-| `GET` | `/polars/import/search?q=<query>` | Search the ORC database. |
-| `POST` | `/polars/import/:sailnumber` | Import a polar from ORC by sail number. |
-| `PUT` | `/polars/active/:name` | Set the active polar. |
+| `GET` | `/polars` | List stored canonical polar resources with metadata. |
+| `GET` | `/polars/active` | Get the active polar id. |
+| `PUT` | `/polars/active` | Set the active polar. Body: JSON `{ id }`. |
+| `DELETE` | `/polars/active` | Clear the active polar. |
+| `GET` | `/polars/:id` | Get a stored canonical `polarTable` resource. |
+| `PUT` | `/polars/:id` | Create or replace a canonical `polarTable` resource. |
+| `DELETE` | `/polars/:id` | Delete a stored polar. |
+| `GET` | `/polars/:id/meta` | Read stored metadata and TWS range for a polar. |
+| `GET` | `/polars/:id/axes/tws` | Array of TWS values (m/s) in a stored polar. |
+| `GET` | `/polars/:id/queries/curve?tws=<m/s>&step=<rad>` | Interpolated polar curve for a given TWS, with beat and run markers. |
+| `GET` | `/polars/:id/queries/speed?tws=<m/s>&twa=<rad>` | Interpolated boat speed and interpolation state for a single TWS/TWA point. |
+| `GET` | `/polars/:id/queries/targets?tws=<m/s>` | Optimal beat and run targets for a given TWS. |
+| `GET` | `/polars/:id/queries/performance?tws=<m/s>&twa=<rad>&bsp=<m/s>` | Speed and VMG performance ratios against the polar. |
 
 ---
 
 ## Known limitations
 
 - Heel angle is not taken into account in the polar lookup. Most ORC polars are upright polars.
-- The CSV format must use semicolons as separators and speeds in knots. Other formats are not supported.
-- ORC import requires an internet connection for the initial search. The ORC database covers a large number of one-design and handicap racing boats; it may not include your boat if it is a cruiser, older design, or custom build.
+- Polar storage is canonical-only. The management API and webapp accept canonical `polarTable` JSON resources, not CSV or ORC imports.
 
 
  ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Laylines_Target_TWA_to_Active.png)
