@@ -441,8 +441,8 @@
 
   /**
    * Replace all library curve data and rebuild the offscreen cache.
-   * @param {number[]} twsList   - TWS values in m/s (from GET /polar/tws)
-   * @param {Object}   curves    - twsMs → curve object (from GET /polar/curve?tws=...)
+    * @param {number[]} twsList   - TWS values in m/s (from GET /polars/{id}/axes/tws)
+    * @param {Object}   curves    - twsMs → curve object (from GET /polars/{id}/queries/curve?tws=...)
    * @param {Object}   liveCurve - optional pre-fetched live-TWS curve
    */
   PolarCanvas.prototype.setLibraryData = function (twsList, curves, liveCurve) {

@@ -66,15 +66,24 @@ async function apiPut(path, body) {
   } catch (e) { showMessage('Save failed: ' + e.message); return null }
 }
 
-async function apiPostJSON(path, body) {
+async function apiPost(path, body) {
   try {
     const res = await fetch(API + path, {
       method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     })
-    if (!res.ok) { showMessage('Upload failed: ' + res.status); return null }
+    if (!res.ok) {
+      let detail = ''
+      try {
+        const payload = await res.json()
+        if (payload?.error) detail = ': ' + payload.error
+      } catch (_) {}
+      showMessage('Import failed: ' + res.status + detail)
+      return null
+    }
     return res.json()
-  } catch (e) { showMessage('Upload failed: ' + e.message); return null }
+  } catch (e) { showMessage('Import failed: ' + e.message); return null }
 }
 
 async function apiDelete(path) {
@@ -102,6 +111,55 @@ function sectionHeading(text) {
   h.className = 'text-uppercase fw-bold text-muted border-bottom pb-1 mb-2 mt-3 small'
   h.textContent = text
   return h
+}
+
+function createCollapsibleCard(title, startOpen = false) {
+  const card = document.createElement('div')
+  card.className = 'card mb-3'
+
+  const header = document.createElement('div')
+  header.className = 'card-header p-0'
+
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'btn btn-link btn-block text-start text-decoration-none px-3 py-2'
+  button.style.textAlign = 'left'
+
+  const body = document.createElement('div')
+  body.className = 'card-body'
+  body.style.display = startOpen ? '' : 'none'
+
+  const syncLabel = () => {
+    button.textContent = (body.style.display === 'none' ? '+ ' : '- ') + title
+    button.setAttribute('aria-expanded', body.style.display === 'none' ? 'false' : 'true')
+  }
+
+  button.addEventListener('click', () => {
+    body.style.display = body.style.display === 'none' ? '' : 'none'
+    syncLabel()
+  })
+  syncLabel()
+
+  header.appendChild(button)
+  card.appendChild(header)
+  card.appendChild(body)
+  return { card, body }
+}
+
+function createPageCard(title) {
+  const card = document.createElement('div')
+  card.className = 'card mb-3'
+
+  const header = document.createElement('div')
+  header.className = 'card-header fw-bold text-uppercase'
+  header.textContent = title
+
+  const body = document.createElement('div')
+  body.className = 'card-body'
+
+  card.appendChild(header)
+  card.appendChild(body)
+  return { card, body }
 }
 
 // Set text of a span by id (fast in-place update, no DOM rebuild)
@@ -195,6 +253,38 @@ function createNumberInput(key, value, opts, showRevert, onSaved) {
   return wrap
 }
 
+function createPercentInput(key, value, opts, onSaved) {
+  const wrap = document.createElement('span')
+  const inp = document.createElement('input')
+  inp.type = 'number'
+  inp.className = 'form-control form-control-sm d-inline-block'
+  inp.style.width = '90px'
+  inp.value = Number.isFinite(value) ? (value * 100).toFixed(0) : (opts.defaultPercent ?? 100)
+  if (opts.minPercent !== undefined) inp.min = opts.minPercent
+  if (opts.maxPercent !== undefined) inp.max = opts.maxPercent
+  if (opts.stepPercent !== undefined) inp.step = opts.stepPercent
+
+  const suffix = document.createElement('span')
+  suffix.className = 'ms-1 small text-muted'
+  suffix.textContent = '%'
+
+  inp.addEventListener('change', () => {
+    const percent = Number(inp.value)
+    if (!Number.isFinite(percent)) return
+    apiPut('/settings', { [key]: percent / 100 }).then(s => {
+      if (s) {
+        settings = s
+        inp.value = Number.isFinite(s[key]) ? (s[key] * 100).toFixed(0) : inp.value
+        if (typeof onSaved === 'function') onSaved(s)
+      }
+    })
+  })
+
+  wrap.appendChild(inp)
+  wrap.appendChild(suffix)
+  return wrap
+}
+
 // Update warnings container in-place. Skips DOM write when content unchanged.
 function updateWarnings(el, items) {
   if (!el) return
@@ -217,7 +307,8 @@ let rawValues    = {}    // raw sensor values from /status, keyed by short name 
 let outputValues = {}    // computed output values from /status, keyed by SK path string
 let settings     = null
 let polarsList   = []
-let hasInternet  = null  // null = checking, true, false
+let importFormats = []
+let importSources = []
 
 // Canvas state
 let polar          = null
@@ -298,8 +389,27 @@ async function refreshPolars() {
   if (list) polarsList = list
 }
 
+async function refreshImportFormats() {
+  const formats = await apiGet('/imports/formats')
+  if (formats) importFormats = formats
+}
+
+async function refreshImportSources() {
+  const sources = await apiGet('/imports/sources')
+  if (sources) importSources = sources
+}
+
 async function refreshLibrary() {
-  const newList = await apiGet('/polar/tws', { silent503: true })
+  const activeId = settings?.activePolar
+  if (!activeId) {
+    if (libraryVersion !== '') {
+      libraryVersion = ''; twsList = []; curves = {}
+      if (polar) polar.setLibraryData([], {}, null)
+    }
+    return
+  }
+
+  const newList = await apiGet('/polars/' + encodeURIComponent(activeId) + '/axes/tws', { silent503: true })
   if (!newList) {
     // No polar loaded — clear any previously displayed curves
     if (libraryVersion !== '') {
@@ -308,12 +418,15 @@ async function refreshLibrary() {
     }
     return
   }
-  const version = JSON.stringify(newList)
+  const version = activeId + '|' + JSON.stringify(newList)
   if (version === libraryVersion) return
   libraryVersion = version; twsList = newList; curves = {}
   await Promise.all(twsList.map(async tws => {
     try {
-      const c = await apiGet('/polar/curve?tws=' + tws.toFixed(5) + '&step=' + STEP, { silent503: true })
+      const c = await apiGet(
+        '/polars/' + encodeURIComponent(activeId) + '/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP,
+        { silent503: true }
+      )
       if (c) curves[tws] = c
     } catch (_) {}
   }))
@@ -347,9 +460,14 @@ async function refreshLive() {
   // 3. Update live TWS curve for canvas
   if (liveData && polar) {
     const tws = liveData.tws
+    const activeId = settings?.activePolar
     if (tws !== null && (!liveTws || Math.abs(tws - liveTws) > 0.05)) {
       liveTws = tws
-      try { liveCurve = await apiGet('/polar/curve?tws=' + tws.toFixed(5) + '&step=' + STEP) }
+      try {
+        liveCurve = activeId
+          ? await apiGet('/polars/' + encodeURIComponent(activeId) + '/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP)
+          : null
+      }
       catch (_) {}
     }
     polar.setLiveData(liveData, liveCurve)
@@ -357,21 +475,6 @@ async function refreshLive() {
 
   // 4. Tick active page
   _tickActivePage()
-}
-
-async function checkInternet() {
-  try {
-    const controller = new AbortController()
-    const tid = setTimeout(() => controller.abort(), 5000)
-    await fetch('https://raw.githubusercontent.com/jieter/orc-data/master/orc-data.json', {
-      method: 'HEAD', cache: 'no-store', mode: 'no-cors', signal: controller.signal
-    })
-    clearTimeout(tid)
-    hasInternet = true
-  } catch (_) {
-    hasInternet = false
-  }
-  _updateOrcInternetState()
 }
 
 // ── Polar state warnings ──────────────────────────────────────────────────────
@@ -629,22 +732,24 @@ function _buildSettingsPage() {
   const activeMeta = (() => {
     const a = settings?.activePolar
     if (!a) return {}
-    const entry = polarsList.find(p => (typeof p === 'string' ? p : p.name) === a)
+    const entry = polarsList.find(p => (typeof p === 'string' ? p : p.id) === a)
     return (entry && typeof entry === 'object') ? entry : {}
   })()
 
   right.appendChild(_settingsTable([
     { label: 'Active polar',
       control: _polarSelector() },
-    { label: 'Performance adjust', desc: '1.0 = 100%, 0.9 = 90%',
-      control: createNumberInput('perfAdjust', settings.perfAdjust, { min: 0.1, max: 2, step: 0.05, default: 1 }, false, async () => {
+    { label: 'Performance adjust', desc: '100% = polar speed unchanged',
+      control: createPercentInput('perfAdjust', settings.perfAdjust, { minPercent: 10, maxPercent: 200, stepPercent: 5, defaultPercent: 100 }, async () => {
         libraryVersion = ''   // force full curve reload — perfAdjust changes speeds but not the TWS list
         await refreshLibrary()
         if (activePage === 'settings') switchPage('settings')
       }) },
-    { label: 'Boat name',    control: _metaDisplay(activeMeta.boatName)   },
+    { label: 'Boat name',    control: _metaDisplay(activeMeta.name)   },
     { label: 'Boat type',    control: _metaDisplay(activeMeta.boatType)   },
     { label: 'Sail number',  control: _metaDisplay(activeMeta.sailnumber) },
+    { label: 'Year',         control: _metaDisplay(activeMeta.year ? String(activeMeta.year) : '') },
+    { label: 'Source',       control: _metaDisplay(activeMeta.source) },
   ]))
 
   // Smoother
@@ -729,25 +834,36 @@ function _metaDisplay(value) {
   return span
 }
 
+function readOptionalIntegerInput(input) {
+  const text = String(input?.value || '').trim()
+  if (!text) return undefined
+  const value = Number(text)
+  return Number.isInteger(value) ? value : undefined
+}
+
 function _polarSelector() {
   const sel = document.createElement('select')
   sel.className = 'form-select form-select-sm'; sel.style.width = '100%'
   const none = document.createElement('option'); none.value = ''; none.textContent = '— none —'
   sel.appendChild(none)
   polarsList.forEach(raw => {
-    const p = typeof raw === 'string' ? { name: raw } : raw
-    const o = document.createElement('option'); o.value = p.name
-    o.textContent = p.boatName ? `${p.boatName} (${p.name})` : p.name
+    const p = typeof raw === 'string' ? { id: raw, name: raw } : raw
+    const o = document.createElement('option'); o.value = p.id
+    o.textContent = p.name && p.name !== p.id ? `${p.name} (${p.id})` : p.id
     sel.appendChild(o)
   })
   sel.value = settings?.activePolar || ''
   sel.addEventListener('change', () => {
-    if (!sel.value) return
-    apiPut('/settings', { activePolar: sel.value }).then(async s => {
+    const request = sel.value
+      ? apiPut('/polars/active', { id: sel.value })
+      : apiDelete('/polars/active')
+
+    request.then(async s => {
       if (!s) return
-      settings = s
+      settings = { ...(settings || {}), activePolar: s.id || '' }
       libraryVersion = ''   // force full reload — new polar may share the same TWS list
       await refreshLibrary()
+      await refreshPolars()
       if (activePage === 'settings') switchPage('settings')
     })
   })
@@ -820,171 +936,311 @@ function _tickOutputs() {
 }
 
 // ── PAGE: Polars ───────────────────────────────────────────────────────────────
-let _orcResults = []
-let _orcLastQuery = null
-
 function _buildPolarsPage() {
-  const wrap = document.createElement('div'); wrap.id = 'polars-wrap'
+  const wrap = document.createDocumentFragment()
 
-  // Stored polars
-  wrap.appendChild(sectionHeading('Stored Polars'))
+  const storedCard = createPageCard('Stored Polars')
+  wrap.appendChild(storedCard.card)
   const listDiv = document.createElement('div'); listDiv.id = 'polars-list'
   _renderPolarsList(listDiv)
-  wrap.appendChild(listDiv)
+  storedCard.body.appendChild(listDiv)
 
-  // Upload CSV
-  wrap.appendChild(sectionHeading('Upload CSV'))
+  const textCard = createCollapsibleCard('Import Text Polar', false)
+  wrap.appendChild(textCard.card)
+  const textWrap = textCard.body
 
-  // Meta fields row
-  const metaGrid = document.createElement('div')
-  metaGrid.className = 'd-flex flex-wrap gap-2 mb-2'
-  const mkInp = (ph, w) => {
-    const i = document.createElement('input')
-    i.type = 'text'; i.className = 'form-control form-control-sm'
-    i.style.width = w; i.placeholder = ph; return i
+  const importMetaTable = document.createElement('table')
+  importMetaTable.className = 'table table-sm table-borderless mb-2'
+  const importMetaBody = document.createElement('tbody')
+
+  const formatSel = document.createElement('select')
+  formatSel.className = 'form-select form-select-sm'
+  formatSel.style.width = '220px'
+  if (!importFormats.length) {
+    const opt = document.createElement('option')
+    opt.value = ''
+    opt.textContent = 'No formats available'
+    formatSel.appendChild(opt)
+    formatSel.disabled = true
+  } else {
+    importFormats.forEach(format => {
+      const opt = document.createElement('option')
+      opt.value = format.id
+      opt.textContent = format.name
+      formatSel.appendChild(opt)
+    })
   }
-  const nameInp     = mkInp('File name (required, no .csv)', '180px')
-  const boatNameInp = mkInp('Boat name (optional)', '160px')
-  const boatTypeInp = mkInp('Boat type (optional)', '140px')
-  const sailNumInp  = mkInp('Sail number (optional)', '140px')
-  metaGrid.appendChild(nameInp); metaGrid.appendChild(boatNameInp)
-  metaGrid.appendChild(boatTypeInp); metaGrid.appendChild(sailNumInp)
-  wrap.appendChild(metaGrid)
 
-  // CSV textarea + Save button
-  const csvArea = document.createElement('textarea')
-  csvArea.className = 'form-control form-control-sm mb-2'
-  csvArea.rows = 6; csvArea.placeholder = 'Paste CSV here (semicolon-separated, speeds in knots)'
-  csvArea.style.fontFamily = 'monospace'; csvArea.style.fontSize = '0.8rem'
-  wrap.appendChild(csvArea)
+  const makeTextInput = (placeholder, width) => {
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'form-control form-control-sm'
+    if (width) input.style.width = width
+    if (placeholder) input.placeholder = placeholder
+    return input
+  }
 
-  const saveBtn = document.createElement('button')
-  saveBtn.className = 'btn btn-sm btn-primary mb-3'; saveBtn.textContent = 'Save'
-  saveBtn.addEventListener('click', async () => {
-    const name = nameInp.value.trim()
-    const csv  = csvArea.value.trim()
-    if (!name) { showMessage('Enter a polar name'); return }
-    if (!csv)  { showMessage('Paste CSV text first'); return }
-    const body = { csv,
-      boatName:   boatNameInp.value.trim() || undefined,
-      boatType:   boatTypeInp.value.trim() || undefined,
-      sailnumber: sailNumInp.value.trim()  || undefined
+  const nameInp = makeTextInput('Optional display name')
+  const sailInp = makeTextInput('Optional sail number')
+  const typeInp = makeTextInput('Optional boat type')
+  const yearInp = document.createElement('input')
+  yearInp.type = 'number'
+  yearInp.className = 'form-control form-control-sm'
+  yearInp.style.width = '120px'
+  yearInp.placeholder = 'Optional year'
+  const sourceInp = makeTextInput('Defaults to format id')
+
+  const addFormRow = (label, control, desc) => {
+    const tr = document.createElement('tr')
+    const tdL = document.createElement('td')
+    tdL.textContent = label
+    if (desc) {
+      const sm = document.createElement('small')
+      sm.className = 'text-muted d-block'
+      sm.textContent = desc
+      tdL.appendChild(sm)
     }
-    const ok = await apiPostJSON('/polars/' + encodeURIComponent(name), body)
-    if (ok) {
-      showMessage('"' + name + '" saved')
-      nameInp.value = ''; boatNameInp.value = ''; boatTypeInp.value = ''
-      sailNumInp.value = ''; csvArea.value = ''
-      await refreshPolars(); _renderPolarsList(document.getElementById('polars-list'))
+    const tdV = document.createElement('td')
+    tdV.appendChild(control)
+    tr.appendChild(tdL)
+    tr.appendChild(tdV)
+    importMetaBody.appendChild(tr)
+  }
+
+  addFormRow('Format', formatSel, 'Text formats currently supported by the plugin.')
+  addFormRow('Name', nameInp)
+  addFormRow('Sail number', sailInp)
+  addFormRow('Boat type', typeInp)
+  addFormRow('Year', yearInp)
+  addFormRow('Source label', sourceInp, 'Optional metadata override stored with the canonical polar.')
+  importMetaTable.appendChild(importMetaBody)
+  textWrap.appendChild(importMetaTable)
+
+  const importTextArea = document.createElement('textarea')
+  importTextArea.className = 'form-control form-control-sm mb-2'
+  importTextArea.rows = 12
+  importTextArea.placeholder = 'Paste Jieter or Expedition polar text here'
+  importTextArea.style.fontFamily = 'monospace'
+  importTextArea.style.fontSize = '0.8rem'
+  textWrap.appendChild(importTextArea)
+
+  const notesArea = document.createElement('textarea')
+  notesArea.className = 'form-control form-control-sm mb-2'
+  notesArea.rows = 3
+  notesArea.placeholder = 'Optional notes stored with the imported polar'
+  textWrap.appendChild(notesArea)
+
+  const importBtn = document.createElement('button')
+  importBtn.className = 'btn btn-sm btn-primary mb-3'
+  importBtn.textContent = 'Import'
+  importBtn.disabled = !importFormats.length
+  importBtn.addEventListener('click', async () => {
+    const format = formatSel.value
+    const content = importTextArea.value.trim()
+    if (!format) { showMessage('Select an import format'); return }
+    if (!content) { showMessage('Paste polar text first'); return }
+
+    const body = {
+      content,
+      ...(nameInp.value.trim() ? { name: nameInp.value.trim() } : {}),
+      ...(sailInp.value.trim() ? { sailnumber: sailInp.value.trim() } : {}),
+      ...(typeInp.value.trim() ? { boatType: typeInp.value.trim() } : {}),
+      ...(readOptionalIntegerInput(yearInp) !== undefined ? { year: readOptionalIntegerInput(yearInp) } : {}),
+      ...(sourceInp.value.trim() ? { source: sourceInp.value.trim() } : {}),
+      ...(notesArea.value.trim() ? { notes: notesArea.value.trim() } : {})
+    }
+
+    const result = await apiPost('/imports/text/' + encodeURIComponent(format), body)
+    if (result) {
+      showMessage('Imported "' + result.id + '"')
+      nameInp.value = ''
+      sailInp.value = ''
+      typeInp.value = ''
+      yearInp.value = ''
+      sourceInp.value = ''
+      importTextArea.value = ''
+      notesArea.value = ''
+      await refreshPolars()
+      _renderPolarsList(document.getElementById('polars-list'))
     }
   })
-  wrap.appendChild(saveBtn)
+  textWrap.appendChild(importBtn)
 
-  // ORC import
-  const orcSection = document.createElement('div'); orcSection.id = 'orc-section'
-  _buildOrcSection(orcSection)
-  wrap.appendChild(orcSection)
+  const orcCard = createCollapsibleCard('Import ORC Certificate', false)
+  wrap.appendChild(orcCard.card)
+  const orcWrap = orcCard.body
 
-  checkInternet()
-  return wrap
-}
+  const orcSource = importSources.find(source => source.id === 'orc') || null
+  if (!orcSource) {
+    const unavailable = document.createElement('div')
+    unavailable.className = 'text-muted small mb-3'
+    unavailable.textContent = 'The plugin did not advertise an ORC source.'
+    orcWrap.appendChild(unavailable)
+  } else if (orcSource.available === false) {
+    const unavailable = document.createElement('div')
+    unavailable.className = 'text-muted small mb-3'
+    unavailable.textContent = orcSource.availabilityMessage || 'ORC source unavailable: internet access is required for external source imports.'
+    orcWrap.appendChild(unavailable)
+  } else {
+    const sourceBlurb = document.createElement('p')
+    sourceBlurb.className = 'text-muted small mb-2'
+    sourceBlurb.textContent = 'Search the official ORC active certificate index by RefNo, boat name, sail number, or class.'
+    orcWrap.appendChild(sourceBlurb)
 
-function _buildOrcSection(container) {
-  container.innerHTML = ''
-  container.appendChild(sectionHeading('Import from ORC'))
+    const searchRow = document.createElement('div')
+    searchRow.className = 'd-flex flex-wrap gap-2 align-items-center mb-2'
 
-  // Internet warning (hidden by default, shown when offline)
-  const warn = document.createElement('div'); warn.id = 'orc-internet-warn'
-  warn.className = 'alert alert-warning small py-1 px-2 mb-2'
-  warn.style.display = 'none'
-  warn.textContent = 'No internet connection detected — ORC import is unavailable.'
-  container.appendChild(warn)
+    const orcSearchInp = makeTextInput('RefNo, boat name, sail number, or class', '320px')
+    const orcSearchBtn = document.createElement('button')
+    orcSearchBtn.className = 'btn btn-sm btn-secondary'
+    orcSearchBtn.textContent = 'Search'
+    searchRow.appendChild(orcSearchInp)
+    searchRow.appendChild(orcSearchBtn)
+    orcWrap.appendChild(searchRow)
 
-  const searchRow = document.createElement('div')
-  searchRow.className = 'd-flex gap-2 align-items-center mb-2'
-  const searchInp = document.createElement('input')
-  searchInp.type = 'text'; searchInp.id = 'orc-search-inp'
-  searchInp.className = 'form-control form-control-sm'
-  searchInp.style.width = '240px'; searchInp.placeholder = 'Boat name, type or sail number'
-  const searchBtn = document.createElement('button')
-  searchBtn.id = 'orc-search-btn'
-  searchBtn.className = 'btn btn-sm btn-outline-secondary'; searchBtn.textContent = 'Search'
-  const resultsDiv = document.createElement('div'); resultsDiv.id = 'orc-results'
-  if (_orcResults.length) _renderOrcResults(resultsDiv)
+    const orcResults = document.createElement('div')
+    orcResults.id = 'orc-results'
+    orcResults.className = 'mb-3'
+    orcWrap.appendChild(orcResults)
 
-  async function doSearch() {
-    if (hasInternet === false) { showMessage('No internet connection'); return }
-    searchBtn.disabled = true; searchBtn.textContent = 'Searching…'
-    const res = await apiGet('/polars/import/search?q=' + encodeURIComponent(searchInp.value.trim()))
-    searchBtn.disabled = false; searchBtn.textContent = 'Search'
-    if (!res) {
-      resultsDiv.innerHTML = '<p class="text-danger small">Failed to load ORC database — check server logs.</p>'
-      return
+    const renderOrcResults = (items) => {
+      orcResults.innerHTML = ''
+
+      if (!items.length) {
+        const empty = document.createElement('div')
+        empty.className = 'text-muted small'
+        empty.textContent = 'No ORC certificates matched the current search.'
+        orcResults.appendChild(empty)
+        return
+      }
+
+      const table = document.createElement('table')
+      table.className = 'table table-sm table-hover mb-0'
+      const tbody = document.createElement('tbody')
+
+      items.forEach(item => {
+        const tr = document.createElement('tr')
+
+        const tdInfo = document.createElement('td')
+        const title = document.createElement('div')
+        title.className = 'fw-semibold'
+        title.textContent = item.name || item.externalId
+        tdInfo.appendChild(title)
+
+        const meta = document.createElement('small')
+        meta.className = 'text-muted d-block'
+        const metaParts = [
+          item.externalId,
+          item.sailnumber,
+          item.boatType,
+          item.certificateName,
+          item.familyName,
+          item.countryId,
+          Number.isInteger(item.year) ? String(item.year) : ''
+        ].filter(Boolean)
+        meta.textContent = metaParts.join(' | ')
+        tdInfo.appendChild(meta)
+
+        const tdAction = document.createElement('td')
+        tdAction.className = 'polar-actions'
+        const btn = document.createElement('button')
+        btn.className = 'btn btn-sm btn-primary'
+        btn.textContent = 'Import'
+        btn.addEventListener('click', async () => {
+          const result = await apiPost(
+            '/imports/sources/' + encodeURIComponent(orcSource.id) + '/items/' + encodeURIComponent(item.externalId)
+          )
+          if (result) {
+            showMessage('Imported "' + result.id + '" from ORC')
+            await refreshPolars()
+            _renderPolarsList(document.getElementById('polars-list'))
+          }
+        })
+        tdAction.appendChild(btn)
+
+        tr.appendChild(tdInfo)
+        tr.appendChild(tdAction)
+        tbody.appendChild(tr)
+      })
+
+      table.appendChild(tbody)
+      orcResults.appendChild(table)
     }
-    _orcResults = res
-    _orcLastQuery = searchInp.value.trim()
-    _renderOrcResults(resultsDiv)
-  }
-  searchBtn.addEventListener('click', doSearch)
-  searchInp.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch() })
-  searchRow.appendChild(searchInp); searchRow.appendChild(searchBtn)
-  container.appendChild(searchRow); container.appendChild(resultsDiv)
-  _updateOrcInternetState()
-}
 
-function _updateOrcInternetState() {
-  const warn = document.getElementById('orc-internet-warn')
-  const inp  = document.getElementById('orc-search-inp')
-  const btn  = document.getElementById('orc-search-btn')
-  if (!warn) return
-  const offline = hasInternet === false
-  warn.style.display = offline ? '' : 'none'
-  if (inp) inp.disabled = offline
-  if (btn) btn.disabled = offline
+    const runOrcSearch = async () => {
+      const q = orcSearchInp.value.trim()
+      if (!q) {
+        showMessage('Enter an ORC search term first')
+        return
+      }
+
+      const query = new URLSearchParams({ q })
+      const results = await apiGet('/imports/sources/' + encodeURIComponent(orcSource.id) + '/search?' + query.toString())
+      if (results) renderOrcResults(results)
+    }
+
+    orcSearchBtn.addEventListener('click', runOrcSearch)
+    orcSearchInp.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        runOrcSearch()
+      }
+    })
+  }
+
+  return wrap
 }
 
 function _renderPolarsList(el) {
   el.innerHTML = ''
   if (!polarsList.length) {
     const p = document.createElement('p'); p.className = 'text-muted small mb-3'
-    p.textContent = 'No polars stored. Upload a CSV or import from ORC below.'
-    el.appendChild(p); return
+    p.textContent = 'No canonical polars stored yet.'
+    el.appendChild(p)
+    return
   }
+
   const tbl = document.createElement('table')
   tbl.className = 'table table-sm table-borderless mb-2'
   const tbody = document.createElement('tbody')
+
   polarsList.forEach(raw => {
-    const entry = typeof raw === 'string' ? { name: raw } : raw
-    const name = entry.name
-    const isActive = name === settings?.activePolar
+    const entry = typeof raw === 'string' ? { id: raw, name: raw } : raw
+    const id = entry.id
+    const isActive = id === settings?.activePolar
     const tr = document.createElement('tr')
     const tdN = document.createElement('td')
     const labelSpan = document.createElement('span')
-    labelSpan.textContent = entry.boatName || name
+    labelSpan.textContent = entry.name || id
     tdN.appendChild(labelSpan)
     if (isActive) {
       const badge = document.createElement('span')
-      badge.className = 'badge bg-success ms-2'; badge.textContent = 'active'
+      badge.className = 'badge bg-success ms-2'
+      badge.textContent = 'active'
       tdN.appendChild(badge)
     }
+
     const sub = []
-    if (entry.boatType)   sub.push(entry.boatType)
+    if (entry.boatType) sub.push(entry.boatType)
     if (entry.sailnumber) sub.push(entry.sailnumber)
-    if (entry.boatName)   sub.push(name)
     if (sub.length) {
-      const sm = document.createElement('small'); sm.className = 'text-muted d-block'
+      const sm = document.createElement('small')
+      sm.className = 'text-muted d-block'
       sm.textContent = sub.join(' \u00b7 ')
       tdN.appendChild(sm)
     }
-    const tdA = document.createElement('td'); tdA.className = 'polar-actions'
+
+    const tdA = document.createElement('td')
+    tdA.className = 'polar-actions'
     if (!isActive) {
       const actBtn = document.createElement('button')
-      actBtn.className = 'btn btn-sm btn-outline-primary me-1'; actBtn.textContent = 'Activate'
+      actBtn.className = 'btn btn-sm btn-outline-primary me-1'
+      actBtn.textContent = 'Activate'
       actBtn.addEventListener('click', async () => {
-        const s = await apiPut('/settings', { activePolar: name })
-        if (s) {
-          settings = s
-          libraryVersion = ''   // force full reload — new polar may share same TWS list
+        const result = await apiPut('/polars/active', { id })
+        if (result) {
+          settings = { ...(settings || {}), activePolar: result.id }
+          libraryVersion = ''
           await refreshLibrary()
           await refreshPolars()
           _renderPolarsList(el)
@@ -993,57 +1249,28 @@ function _renderPolarsList(el) {
       })
       tdA.appendChild(actBtn)
     }
+
     const delBtn = document.createElement('button')
-    delBtn.className = 'btn btn-sm btn-outline-danger'; delBtn.textContent = 'Delete'
+    delBtn.className = 'btn btn-sm btn-outline-danger'
+    delBtn.textContent = 'Delete'
     delBtn.addEventListener('click', async () => {
-      if (!confirm('Delete polar "' + name + '"?')) return
-      await apiDelete('/polars/' + encodeURIComponent(name))
-      await refreshPolars(); _renderPolarsList(el)
+      if (!confirm('Delete polar "' + id + '"?')) return
+      await apiDelete('/polars/' + encodeURIComponent(id))
+      await refreshSettings()
+      await refreshPolars()
+      libraryVersion = ''
+      await refreshLibrary()
+      _renderPolarsList(el)
     })
     tdA.appendChild(delBtn)
-    tr.appendChild(tdN); tr.appendChild(tdA); tbody.appendChild(tr)
-  })
-  tbl.appendChild(tbody); el.appendChild(tbl)
-}
 
-function _renderOrcResults(el) {
-  el.innerHTML = ''
-  if (!_orcResults.length) {
-    if (_orcLastQuery !== null) {
-      const p = document.createElement('p'); p.className = 'text-muted small'
-      p.textContent = `No results for "${_orcLastQuery}" — try a partial name, boat type, or sail number.`
-      el.appendChild(p)
-    }
-    return
-  }
-  const tbl = document.createElement('table')
-  tbl.className = 'table table-sm table-borderless mb-0'
-  const tbody = document.createElement('tbody')
-  _orcResults.slice(0, 50).forEach(boat => {
-    const tr = document.createElement('tr')
-    const tdN = document.createElement('td')
-    tdN.textContent = boat.name + (boat.type ? ' (' + boat.type + ')' : '')
-    const s = document.createElement('small'); s.className = 'text-muted d-block'; s.textContent = boat.sailnumber
-    tdN.appendChild(s)
-    const tdA = document.createElement('td'); tdA.className = 'polar-actions'
-    const importBtn = document.createElement('button')
-    importBtn.className = 'btn btn-sm btn-outline-success'; importBtn.textContent = 'Import'
-    importBtn.addEventListener('click', async () => {
-      importBtn.disabled = true; importBtn.textContent = 'Importing…'
-      const res = await fetch(API + '/polars/import/' + encodeURIComponent(boat.sailnumber), {
-        method: 'POST', credentials: 'same-origin'
-      })
-      importBtn.disabled = false; importBtn.textContent = 'Import'
-      if (res.ok) {
-        showMessage('Imported "' + boat.name + '"')
-        await refreshPolars(); _renderPolarsList(document.getElementById('polars-list'))
-      } else {
-        showMessage('Import failed: ' + res.status)
-      }
-    })
-    tdA.appendChild(importBtn); tr.appendChild(tdN); tr.appendChild(tdA); tbody.appendChild(tr)
+    tr.appendChild(tdN)
+    tr.appendChild(tdA)
+    tbody.appendChild(tr)
   })
-  tbl.appendChild(tbody); el.appendChild(tbl)
+
+  tbl.appendChild(tbody)
+  el.appendChild(tbl)
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -1065,10 +1292,13 @@ function switchPage(page) {
   document.querySelectorAll('#main-nav .nav-link').forEach(l =>
     l.classList.toggle('active', l.dataset.page === page)
   )
-  document.getElementById('card-title').textContent = PAGES[page].title
-
+  const shell = document.getElementById('page-shell')
+  const title = document.getElementById('card-title')
   const body = document.getElementById('card-body')
+  title.textContent = PAGES[page].title
   body.innerHTML = ''
+  shell.classList.toggle('page-shellless', page === 'polars')
+  body.classList.toggle('page-shellless-body', page === 'polars')
   body.classList.toggle('polar-layout', page === 'overview' || page === 'settings')
 
   _currentPageEl = PAGES[page].build()
@@ -1082,7 +1312,6 @@ function startPolling() {
     await refreshLibrary()
     if (activePage === 'overview' && polar) polar.setLibraryData(twsList, curves, liveCurve)
   }, 5000)
-  setInterval(checkInternet, 30000)
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -1107,7 +1336,7 @@ async function init() {
     }
   })
 
-  await Promise.all([refreshSettings(), refreshPolars()])
+  await Promise.all([refreshSettings(), refreshPolars(), refreshImportFormats(), refreshImportSources()])
   await loadMeta()
   switchPage('overview')
   await refreshLibrary()

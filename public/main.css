@@ -17,6 +17,20 @@
   white-space: nowrap;
 }
 
+/* ─── Pages that should not render inside the shared card shell ───────────── */
+#page-shell.page-shellless {
+  display: contents;
+}
+
+#page-shell.page-shellless > #card-title {
+  display: none;
+}
+
+#card-body.page-shellless-body {
+  display: contents;
+  padding: 0;
+}
+
 /* ─── Sidebar active link accent ───────────────────────────────────────────── */
 .sidebar .nav-link.active { border-left-color: #1a73e8 !important; }
 
