@@ -38,7 +38,7 @@
   },
   "homepage": "https://github.com/htool/signalk-polar-performance-plugin#readme",
   "signalk": {
-    "appIcon": "./signalk-logo.png",
+    "appIcon": "./icon.png",
     "displayName": "Polar Performance",
     "screenshots": [
       "./docs/plotter.png",
