@@ -1,7 +1,7 @@
 {
   "name": "signalk-polar-performance-plugin",
   "version": "1.0.0",
-  "description": "A plugin that calculates performance information based on a (CSV) polar diagram.",
+  "description": "Calculates live sailing performance from polar data, with built-in polar management and import tools.",
   "main": "plugin/index.js",
   "exports": {
     ".": "./plugin/index.js"
