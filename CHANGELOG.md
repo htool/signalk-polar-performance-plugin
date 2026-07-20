@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-07-20
+
+### Added
+- Full polar file management: store, activate, copy, delete, and hot-swap polar files without restarting the plugin.
+- Import polars from the ORC (Offshore Racing Congress) database by sail number, boat name, or boat type.
+- Redesigned webapp polar management UI for canonical polar files and ORC imports.
+- OpenAPI spec covering polar-manager, polar-query, and legacy polar-data endpoints.
+- Custom plugin icon assets.
+
+### Fixed
+- Legacy `csvTable` in v0 settings is now converted to a canonical polar file during the v0→v1 migration; if conversion fails the migration retries on next start rather than silently discarding the data.
+- ORC availability check now short-circuits immediately when the certificate cache is already fresh, avoiding a redundant network round-trip; status check timeout raised from 2 s to 15 s.
+- Sidebar toggler was unreachable on mobile viewports.
+
+### Changed
+- `trueWindSpeedPath` legacy field is now removed during v0→v1 migration.
+- README and developer reference updated for canonical polar management and import flow.
+- Developer reference split into a separate file from the user guide.
+- Version bumped to 1.0.0 to reflect the stable, production-ready polar management API.
+
 ## [0.0.60] - 2026-07-06
 
 ### Added
