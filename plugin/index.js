@@ -4,6 +4,7 @@ const { PolarTable } = require('./PolarTable')
 const PolarFileStore = require('./PolarFileStore')
 const { ImportService, ImportError, createTimestampedId } = require('./import/ImportService')
 const canonical = require('./import/canonical')
+const { parseMatrixPolarText } = require('./import/matrixText')
 const {
   createSmoothedPolar,
   createSmoothedHandler,
@@ -105,7 +106,26 @@ module.exports = (app) => {
       delete s.dampingBSP
       delete s.useTWSsource
       delete s.useSOGsource
-      delete s.csvTable
+      delete s.trueWindSpeedPath
+
+      // Migrate embedded CSV polar to a canonical polar file.
+      // Only advance settingsVersion if the CSV is successfully written —
+      // if it fails, keep csvTable so the migration retries on next start.
+      if (s.csvTable && s.csvTable.trim()) {
+        try {
+          const { resource } = parseMatrixPolarText(s.csvTable)
+          store.saveCanonical('migrated-polar', resource)
+          s.activePolar = 'migrated-polar'
+          delete s.csvTable
+          app.debug('Legacy csvTable migrated to migrated-polar.json')
+        } catch (e) {
+          app.setPluginError('Migration failed — could not save legacy CSV: ' + e.message)
+          app.debug('CSV migration error: %s', e.message)
+          return s  // abort; csvTable kept so next start retries
+        }
+      } else {
+        delete s.csvTable
+      }
 
       s.settingsVersion = 1
       app.debug('Settings migrated from v0 to v1')
