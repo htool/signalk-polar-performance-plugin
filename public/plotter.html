@@ -45,6 +45,7 @@
       let libraryVersion = ''     // JSON string of twsList — change detector
       let liveTws        = null   // last fetched live TWS (knots)
       let liveCurve      = null   // interpolated curve for liveTws
+      let activePolarId  = null   // current active polar id
 
       // -----------------------------------------------------------------------
       // Fetch helpers
@@ -61,16 +62,26 @@
       // -----------------------------------------------------------------------
 
       async function refreshLibrary() {
+        // Resolve active polar ID first
+        let polarId
+        try {
+          const active = await fetchJSON(BASE + '/polars/active')
+          polarId = active.id
+        } catch (_) {
+          return  // no active polar — try again on next cycle
+        }
+
         let newList
         try {
-          newList = await fetchJSON(BASE + '/polar/tws')
+          newList = await fetchJSON(BASE + '/polars/' + polarId + '/axes/tws')
         } catch (_) {
           return  // polar not yet loaded — try again on next cycle
         }
 
-        const version = JSON.stringify(newList)
+        const version = polarId + ':' + JSON.stringify(newList)
         if (version === libraryVersion) return  // no change
 
+        activePolarId  = polarId
         libraryVersion = version
         twsList = newList
         curves  = {}
@@ -79,7 +90,7 @@
         await Promise.all(twsList.map(async (tws) => {
           try {
             curves[tws] = await fetchJSON(
-              BASE + '/polar/curve?tws=' + tws + '&step=' + STEP
+              BASE + '/polars/' + polarId + '/queries/curve?tws=' + tws + '&step=' + STEP
             )
           } catch (_) { /* skip individual failure */ }
         }))
@@ -103,10 +114,10 @@
       // -----------------------------------------------------------------------
 
       async function fetchCurveForTws(tws) {
-        if (!Number.isFinite(tws) || tws <= 0) return null
+        if (!Number.isFinite(tws) || tws <= 0 || !activePolarId) return null
         try {
           return await fetchJSON(
-            BASE + '/polar/curve?tws=' + tws.toFixed(5) + '&step=' + STEP
+            BASE + '/polars/' + activePolarId + '/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP
           )
         } catch (_) {
           return null
