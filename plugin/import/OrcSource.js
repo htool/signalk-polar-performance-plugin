@@ -6,7 +6,7 @@ const path = require('path')
 const ACTIVE_CERTIFICATES_URL = 'https://data.orc.org/public/WPub.dll?action=activecerts'
 const CERTIFICATE_URL_PREFIX = 'https://data.orc.org/public/WPub.dll/CC/'
 const DEFAULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000
-const DEFAULT_STATUS_TIMEOUT_MS = 2000
+const DEFAULT_STATUS_TIMEOUT_MS = 15000
 const MAX_SEARCH_RESULTS = 100
 const KNOT_TO_MPS = 0.514444
 const DEG_TO_RAD = Math.PI / 180
@@ -187,6 +187,12 @@ class OrcSource {
   }
 
   async getStatus() {
+    const cached = this.readCache()
+    const isFresh = cached && (this.now() - cached.fetchedAtMs) < this.cacheTtlMs
+    if (isFresh) {
+      return { available: true, availabilityMessage: '' }
+    }
+
     try {
       await withTimeout(
         this.refreshActiveCertificates(),
