@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 - `perfAdjust` was not applied to the `/polars/:id/queries/curve` (and `/speed`, `/targets`, `/performance`) endpoints because each request loaded a fresh `PolarTable` from disk without calling `setPerformanceAdjustment()`. Polar curves in the webapp now correctly scale when performance is changed.
-- `signalk.appIcon` path corrected to `./public/icon.png` so the App Store CDN resolves the icon from the npm tarball instead of showing the monogram fallback.
+- App Store icon was missing (monogram fallback shown): added `icon.png` at the package root so the App Store CDN can fetch it from the npm tarball via unpkg.com. The runtime `signalk.appIcon: ./icon.png` path is unchanged - the server still serves it from `public/icon.png` via the webapp mount.
 
 ### Changed
 - Polar query endpoints (`/queries/curve`, `/speed`, `/targets`, `/performance`) now use a size-1 in-memory cache keyed by polar ID, avoiding repeated disk reads when consecutive requests target the same polar (e.g. the parallel curve fetches on startup). The cache is invalidated on `PUT` or `DELETE` for that polar ID.

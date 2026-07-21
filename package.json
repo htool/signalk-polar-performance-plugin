@@ -7,6 +7,7 @@
     ".": "./plugin/index.js"
   },
   "files": [
+    "icon.png",
     "plugin/",
     "public/",
     "test/",
@@ -38,7 +39,7 @@
   },
   "homepage": "https://github.com/htool/signalk-polar-performance-plugin#readme",
   "signalk": {
-    "appIcon": "./public/icon.png",
+    "appIcon": "./icon.png",
     "displayName": "Polar Performance",
     "screenshots": [
       "./docs/plotter.png",
