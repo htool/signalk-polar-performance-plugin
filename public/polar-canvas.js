@@ -465,6 +465,18 @@
   }
 
   /**
+   * Show or hide all library TWS curves.
+   * When false, only the live (current-TWS) curve is drawn.
+   * @param {boolean} show
+   */
+  PolarCanvas.prototype.setShowAllTwsLines = function (show) {
+    if (this._showLibrary === show) return
+    this._showLibrary = show
+    this._cacheValid  = false
+    this.draw()
+  }
+
+  /**
    * Invalidate the offscreen cache and redraw.
    * Call after resizing the canvas element.
    */
