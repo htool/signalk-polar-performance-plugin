@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
   activePolar: '',
   perfAdjust: 1,
+  showAllTwsLines: true,
   smootherType: 'Exponential',
   smootherParamExponential: 1,
   smootherParamMovingAverage: 10,
@@ -453,6 +454,26 @@ module.exports = (app) => {
         return getStore().load(id)
       }
 
+      // Size-1 cache: avoids reloading from disk when consecutive query requests
+      // target the same polar ID (e.g. the N parallel curve fetches on startup).
+      // perfAdjust is applied fresh on every use so it is never part of the key.
+      let cachedPolar = null  // { id, table } | null
+
+      function loadPolarCached(id) {
+        if (!cachedPolar || cachedPolar.id !== id) {
+          app.debug('loadPolarCached: loading polar from disk id=%s', id)
+          cachedPolar = { id, table: loadStoredPolar(id) }
+        } else {
+          app.debug('loadPolarCached: reusing cached polar id=%s', id)
+        }
+        cachedPolar.table.setPerformanceAdjustment(settings.perfAdjust || 1)
+        return cachedPolar.table
+      }
+
+      function invalidatePolarCache(id) {
+        if (cachedPolar && cachedPolar.id === id) cachedPolar = null
+      }
+
       function getImportService() {
         if (!importService) {
           importService = new ImportService(getStore())
@@ -728,7 +749,7 @@ module.exports = (app) => {
 
       router.get('/polars/:id/queries/curve', (req, res) => {
         try {
-          const table = loadStoredPolar(req.params.id)
+          const table = loadPolarCached(req.params.id)
           const tws = parseFloat(req.query.tws)
           if (!Number.isFinite(tws) || tws < 0) {
             return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
@@ -745,7 +766,7 @@ module.exports = (app) => {
 
       router.get('/polars/:id/queries/speed', (req, res) => {
         try {
-          const table = loadStoredPolar(req.params.id)
+          const table = loadPolarCached(req.params.id)
           const tws = parseFloat(req.query.tws)
           const twa = parseFloat(req.query.twa)
           if (!Number.isFinite(tws) || tws < 0 || !Number.isFinite(twa) || twa < 0) {
@@ -759,7 +780,7 @@ module.exports = (app) => {
 
       router.get('/polars/:id/queries/targets', (req, res) => {
         try {
-          const table = loadStoredPolar(req.params.id)
+          const table = loadPolarCached(req.params.id)
           const tws = parseFloat(req.query.tws)
           if (!Number.isFinite(tws) || tws < 0) {
             return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
@@ -772,7 +793,7 @@ module.exports = (app) => {
 
       router.get('/polars/:id/queries/performance', (req, res) => {
         try {
-          const table = loadStoredPolar(req.params.id)
+          const table = loadPolarCached(req.params.id)
           const tws = parseFloat(req.query.tws)
           const twa = parseFloat(req.query.twa)
           const bsp = parseFloat(req.query.bsp)
@@ -992,6 +1013,7 @@ module.exports = (app) => {
             ...req.body,
             name: req.body.name || req.params.id
           })
+          invalidatePolarCache(req.params.id)
           if (settings.activePolar === req.params.id) {
             polarTable = loadStoredPolar(req.params.id)
             polarTable.setPerformanceAdjustment(settings.perfAdjust || 1)
@@ -1005,6 +1027,7 @@ module.exports = (app) => {
       router.delete('/polars/:id', (req, res) => {
         try {
           getStore().delete(req.params.id)
+          invalidatePolarCache(req.params.id)
           if (settings.activePolar === req.params.id) {
             settings.activePolar = ''
             polarTable = null
