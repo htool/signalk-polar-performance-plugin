@@ -1,13 +1,21 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-07-21
+
+### Added
+- Plotter webapp (plotter.html) now has a settings panel accessible via a gear button: active polar selector, performance percentage stepper (±5%, range 50–200%), and a toggle to show or hide all TWS library curves.
+- `PolarCanvas.setShowAllTwsLines()` method to toggle library curve visibility at runtime; when off, only the live (current-TWS) curve is drawn.
 
 ### Fixed
+- `perfAdjust` was not applied to the `/polars/:id/queries/curve` (and `/speed`, `/targets`, `/performance`) endpoints because each request loaded a fresh `PolarTable` from disk without calling `setPerformanceAdjustment()`. Polar curves in the webapp now correctly scale when performance is changed.
 - `signalk.appIcon` path corrected to `./public/icon.png` so the App Store CDN resolves the icon from the npm tarball instead of showing the monogram fallback.
+
+### Changed
+- Polar query endpoints (`/queries/curve`, `/speed`, `/targets`, `/performance`) now use a size-1 in-memory cache keyed by polar ID, avoiding repeated disk reads when consecutive requests target the same polar (e.g. the parallel curve fetches on startup). The cache is invalidated on `PUT` or `DELETE` for that polar ID.
 
 ## [1.0.1] - 2026-07-20
 
