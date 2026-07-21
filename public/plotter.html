@@ -6,12 +6,156 @@
   <title>Polar</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; font-family: sans-serif; }
     canvas { display: block; width: 100vw; height: 100vh; --polar-bg: #0d1117; --polar-dot-bg: #0d1117; --polar-live-curve: rgba(255,255,255,0.9); --polar-dot-polar: #facc15; --polar-dot-bsp: #f97316; --polar-grid: #2e3f55; --polar-grid-dash: #3a4f66; --polar-label: #6b7a8d; --polar-unit: #8090a0; }
+
+    /* ---- Settings trigger ---- */
+    #btn-settings {
+      position: fixed; bottom: 0; right: 0;
+      width: 72px; height: 72px;
+      background: rgba(255,255,255,0.07); border: none;
+      color: #6b7a8d; font-size: 28px; line-height: 1;
+      cursor: pointer; z-index: 10; touch-action: manipulation;
+    }
+    #btn-settings:active { background: rgba(255,255,255,0.18); color: #e0e0e0; }
+
+    /* ---- Shared overlay base ---- */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: #0d1117; z-index: 20;
+      flex-direction: column; overflow-y: auto;
+    }
+    .overlay.open { display: flex; }
+
+    /* ---- Panel header ---- */
+    .panel-header {
+      display: flex; align-items: center;
+      height: 72px; padding: 0 12px;
+      border-bottom: 1px solid #2e3f55;
+      gap: 12px; flex-shrink: 0;
+    }
+    .panel-header-title { color: #e0e0e0; font-size: 20px; }
+
+    /* ---- Icon button (close / back) ---- */
+    .btn-icon {
+      width: 72px; height: 72px; flex-shrink: 0;
+      background: rgba(255,255,255,0.06); border: 1px solid #2e3f55;
+      border-radius: 8px; color: #e0e0e0; font-size: 26px; line-height: 1;
+      cursor: pointer; touch-action: manipulation;
+    }
+    .btn-icon:active { background: rgba(255,255,255,0.18); }
+
+    /* ---- Settings rows ---- */
+    .settings-row {
+      display: flex; align-items: center;
+      min-height: 88px; padding: 12px 20px;
+      border-bottom: 1px solid #1e2e3e; gap: 16px;
+    }
+    .settings-row-label { color: #8090a0; font-size: 17px; flex: 1; min-width: 0; }
+
+    /* ---- Stepper ---- */
+    .stepper { display: flex; align-items: center; }
+    .btn-step {
+      width: 72px; height: 72px;
+      background: #1a2535; border: 1px solid #2e3f55;
+      color: #e0e0e0; font-size: 34px; line-height: 1;
+      cursor: pointer; touch-action: manipulation;
+    }
+    .btn-step:first-child { border-radius: 8px 0 0 8px; }
+    .btn-step:last-child  { border-radius: 0 8px 8px 0; }
+    .btn-step:active { background: #2e3f55; }
+    .stepper-value {
+      min-width: 90px; height: 72px;
+      background: #111922;
+      border-top: 1px solid #2e3f55; border-bottom: 1px solid #2e3f55;
+      color: #facc15; font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ---- Toggle ---- */
+    .btn-toggle {
+      min-width: 120px; height: 64px; flex-shrink: 0;
+      border: 2px solid #2e3f55; border-radius: 8px;
+      background: #1a2535; color: #6b7a8d; font-size: 18px;
+      cursor: pointer; touch-action: manipulation;
+    }
+    .btn-toggle.is-on  { background: #0f2d1c; border-color: #22c55e; color: #22c55e; }
+    .btn-toggle:active { opacity: 0.7; }
+
+    /* ---- Active-polar button ---- */
+    #btn-polar-current {
+      flex: 1; min-width: 0; height: 72px;
+      background: #1a2535; border: 1px solid #2e3f55;
+      border-radius: 8px; color: #e0e0e0; font-size: 17px;
+      text-align: left; padding: 0 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; touch-action: manipulation; gap: 8px;
+    }
+    #btn-polar-current:active { background: #2e3f55; }
+    #polar-name-display { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .polar-arrow { color: #6b7a8d; font-size: 22px; flex-shrink: 0; }
+
+    /* ---- Polar list items ---- */
+    .polar-item {
+      display: flex; align-items: center;
+      min-height: 80px; padding: 0 20px;
+      border-bottom: 1px solid #1e2e3e;
+      color: #e0e0e0; font-size: 18px;
+      background: transparent; border-left: none; border-right: none; border-top: none;
+      text-align: left; width: 100%;
+      cursor: pointer; touch-action: manipulation;
+    }
+    .polar-item.is-active { color: #facc15; background: #1a1a00; }
+    .polar-item:active { background: #2e3f55; }
+    .polar-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .polar-item-check { color: #facc15; font-size: 22px; width: 32px; text-align: right; flex-shrink: 0; }
   </style>
 </head>
 <body>
   <canvas id="polar"></canvas>
+
+  <!-- Settings trigger -->
+  <button id="btn-settings" aria-label="Settings">⚙</button>
+
+  <!-- Settings panel -->
+  <div id="settings-panel" class="overlay" role="dialog" aria-label="Settings">
+    <div class="panel-header">
+      <button class="btn-icon" id="btn-close-settings" aria-label="Close">✕</button>
+      <span class="panel-header-title">Settings</span>
+    </div>
+
+    <div class="settings-row">
+      <span class="settings-row-label">Active polar</span>
+      <button id="btn-polar-current" aria-label="Select polar">
+        <span id="polar-name-display">—</span>
+        <span class="polar-arrow">›</span>
+      </button>
+    </div>
+
+    <div class="settings-row">
+      <span class="settings-row-label">Performance</span>
+      <div class="stepper">
+        <button class="btn-step" id="btn-perf-minus" aria-label="Decrease">−</button>
+        <span class="stepper-value" id="perf-display">100%</span>
+        <button class="btn-step" id="btn-perf-plus" aria-label="Increase">+</button>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <span class="settings-row-label">Show all TWS lines</span>
+      <button class="btn-toggle is-on" id="btn-tws-toggle">ON</button>
+    </div>
+  </div>
+
+  <!-- Polar picker (opens on top of settings panel) -->
+  <div id="polar-list-panel" class="overlay" style="z-index:30" role="dialog" aria-label="Select polar">
+    <div class="panel-header">
+      <button class="btn-icon" id="btn-back-from-polar" aria-label="Back">‹</button>
+      <span class="panel-header-title">Select polar</span>
+    </div>
+    <div id="polar-list-items"></div>
+  </div>
+
   <script src="polar-canvas.js"></script>
   <script>
     (function () {
@@ -40,12 +184,16 @@
       // State
       // -----------------------------------------------------------------------
 
-      let twsList        = []     // current TWS columns (knots)
-      let curves         = {}     // twsKnots → curve response
-      let libraryVersion = ''     // JSON string of twsList — change detector
-      let liveTws        = null   // last fetched live TWS (knots)
+      let twsList        = []     // current TWS columns (m/s)
+      let curves         = {}     // twsMs → curve response
+      let libraryVersion = ''     // change detector
+      let liveTws        = null   // last fetched live TWS (m/s)
       let liveCurve      = null   // interpolated curve for liveTws
       let activePolarId  = null   // current active polar id
+
+      // Settings state — kept in sync with the server
+      let perfAdjust     = 1          // multiplier (1 = 100%)
+      let showAllTwsLines = true
 
       // -----------------------------------------------------------------------
       // Fetch helpers
@@ -53,6 +201,16 @@
 
       async function fetchJSON(url) {
         const res = await fetch(url)
+        if (!res.ok) throw new Error(res.status + ' ' + url)
+        return res.json()
+      }
+
+      async function putJSON(url, body) {
+        const res = await fetch(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
         if (!res.ok) throw new Error(res.status + ' ' + url)
         return res.json()
       }
@@ -147,10 +305,134 @@
       }
 
       // -----------------------------------------------------------------------
+      // Settings — load on startup and apply to canvas
+      // -----------------------------------------------------------------------
+
+      async function loadSettings() {
+        try {
+          const s = await fetchJSON(BASE + '/settings')
+          perfAdjust      = Number.isFinite(s.perfAdjust) ? s.perfAdjust : 1
+          showAllTwsLines = s.showAllTwsLines !== false
+          updatePerfDisplay()
+          updateTwsToggle()
+          polar.setShowAllTwsLines(showAllTwsLines)
+        } catch (_) { /* keep defaults */ }
+      }
+
+      // -----------------------------------------------------------------------
+      // Settings panel UI
+      // -----------------------------------------------------------------------
+
+      var settingsPanel  = document.getElementById('settings-panel')
+      var polarListPanel = document.getElementById('polar-list-panel')
+      var perfDisplay    = document.getElementById('perf-display')
+      var twsToggle      = document.getElementById('btn-tws-toggle')
+      var polarNameEl    = document.getElementById('polar-name-display')
+      var polarListEl    = document.getElementById('polar-list-items')
+
+      function updatePerfDisplay() {
+        perfDisplay.textContent = Math.round(perfAdjust * 100) + '%'
+      }
+
+      function updateTwsToggle() {
+        if (showAllTwsLines) {
+          twsToggle.textContent = 'ON'
+          twsToggle.className = 'btn-toggle is-on'
+        } else {
+          twsToggle.textContent = 'OFF'
+          twsToggle.className = 'btn-toggle'
+        }
+      }
+
+      // Open settings: fetch fresh state first
+      document.getElementById('btn-settings').addEventListener('click', function () {
+        loadSettings().then(function () {
+          // Update active polar name display
+          if (activePolarId) {
+            fetchJSON(BASE + '/polars/' + activePolarId)
+              .then(function (p) { polarNameEl.textContent = p.name || activePolarId })
+              .catch(function () { polarNameEl.textContent = activePolarId })
+          } else {
+            polarNameEl.textContent = '—'
+          }
+          settingsPanel.classList.add('open')
+        })
+      })
+
+      document.getElementById('btn-close-settings').addEventListener('click', function () {
+        settingsPanel.classList.remove('open')
+      })
+
+      // Performance stepper — ±5%, clamped 50%–200%
+      function applyPerfAdjust(next) {
+        if (next === perfAdjust) return
+        perfAdjust = next
+        updatePerfDisplay()
+        putJSON(BASE + '/settings', { perfAdjust: perfAdjust }).then(function () {
+          libraryVersion = ''   // force full curve reload — perfAdjust changes speeds but not the TWS list
+          return refreshLibrary()
+        }).catch(function () {})
+      }
+
+      document.getElementById('btn-perf-minus').addEventListener('click', function () {
+        applyPerfAdjust(Math.max(0.5, Math.round((perfAdjust - 0.05) * 100) / 100))
+      })
+
+      document.getElementById('btn-perf-plus').addEventListener('click', function () {
+        applyPerfAdjust(Math.min(2.0, Math.round((perfAdjust + 0.05) * 100) / 100))
+      })
+
+      // TWS toggle
+      twsToggle.addEventListener('click', function () {
+        showAllTwsLines = !showAllTwsLines
+        updateTwsToggle()
+        polar.setShowAllTwsLines(showAllTwsLines)
+        putJSON(BASE + '/settings', { showAllTwsLines: showAllTwsLines }).catch(function () {})
+      })
+
+      // Polar picker
+      document.getElementById('btn-polar-current').addEventListener('click', function () {
+        polarListEl.innerHTML = ''
+        fetchJSON(BASE + '/polars').then(function (list) {
+          list.forEach(function (p) {
+            var btn = document.createElement('button')
+            btn.className = 'polar-item' + (p.id === activePolarId ? ' is-active' : '')
+            var nameSpan = document.createElement('span')
+            nameSpan.className = 'polar-item-name'
+            nameSpan.textContent = p.name || p.id
+            btn.appendChild(nameSpan)
+            if (p.id === activePolarId) {
+              var check = document.createElement('span')
+              check.className = 'polar-item-check'
+              check.textContent = '✓'
+              btn.appendChild(check)
+            }
+            btn.addEventListener('click', function () {
+              putJSON(BASE + '/polars/active', { id: p.id })
+                .then(function () {
+                  polarNameEl.textContent = p.name || p.id
+                  polarListPanel.classList.remove('open')
+                  // Force library refresh on next cycle
+                  libraryVersion = ''
+                })
+                .catch(function () {})
+            })
+            polarListEl.appendChild(btn)
+          })
+          polarListPanel.classList.add('open')
+        }).catch(function () {})
+      })
+
+      document.getElementById('btn-back-from-polar').addEventListener('click', function () {
+        polarListPanel.classList.remove('open')
+      })
+
+      // -----------------------------------------------------------------------
       // Start
       // -----------------------------------------------------------------------
 
-      refreshLibrary().then(() => {
+      loadSettings()
+      refreshLibrary().then(function () {
         setInterval(refreshLibrary, 5000)   // check for polar changes every 5 s
         setInterval(pollLive, 1000)         // live data every 1 s
         loadMeta()                          // display units (once)
