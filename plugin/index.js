@@ -461,10 +461,7 @@ module.exports = (app) => {
 
       function loadPolarCached(id) {
         if (!cachedPolar || cachedPolar.id !== id) {
-          app.debug('loadPolarCached: loading polar from disk id=%s', id)
           cachedPolar = { id, table: loadStoredPolar(id) }
-        } else {
-          app.debug('loadPolarCached: reusing cached polar id=%s', id)
         }
         cachedPolar.table.setPerformanceAdjustment(settings.perfAdjust || 1)
         return cachedPolar.table
