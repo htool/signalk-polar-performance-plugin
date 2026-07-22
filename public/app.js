@@ -308,7 +308,7 @@ let outputValues = {}    // computed output values from /status, keyed by SK pat
 let settings     = null
 let polarsList   = []
 let importFormats = []
-let importSources = []
+let internetOnline = false
 
 // Canvas state
 let polar          = null
@@ -394,9 +394,9 @@ async function refreshImportFormats() {
   if (formats) importFormats = formats
 }
 
-async function refreshImportSources() {
-  const sources = await apiGet('/imports/sources')
-  if (sources) importSources = sources
+async function refreshInternetStatus() {
+  const result = await apiGet('/internet')
+  internetOnline = !!(result && result.online)
 }
 
 async function refreshLibrary() {
@@ -1070,16 +1070,10 @@ function _buildPolarsPage() {
   wrap.appendChild(orcCard.card)
   const orcWrap = orcCard.body
 
-  const orcSource = importSources.find(source => source.id === 'orc') || null
-  if (!orcSource) {
+  if (!internetOnline) {
     const unavailable = document.createElement('div')
     unavailable.className = 'text-muted small mb-3'
-    unavailable.textContent = 'The plugin did not advertise an ORC source.'
-    orcWrap.appendChild(unavailable)
-  } else if (orcSource.available === false) {
-    const unavailable = document.createElement('div')
-    unavailable.className = 'text-muted small mb-3'
-    unavailable.textContent = orcSource.availabilityMessage || 'ORC source unavailable: internet access is required for external source imports.'
+    unavailable.textContent = 'No internet connection — ORC import is unavailable.'
     orcWrap.appendChild(unavailable)
   } else {
     const sourceBlurb = document.createElement('p')
@@ -1148,7 +1142,7 @@ function _buildPolarsPage() {
         btn.textContent = 'Import'
         btn.addEventListener('click', async () => {
           const result = await apiPost(
-            '/imports/sources/' + encodeURIComponent(orcSource.id) + '/items/' + encodeURIComponent(item.externalId)
+            '/imports/sources/orc/items/' + encodeURIComponent(item.externalId)
           )
           if (result) {
             showMessage('Imported "' + result.id + '" from ORC')
@@ -1175,7 +1169,7 @@ function _buildPolarsPage() {
       }
 
       const query = new URLSearchParams({ q })
-      const results = await apiGet('/imports/sources/' + encodeURIComponent(orcSource.id) + '/search?' + query.toString())
+      const results = await apiGet('/imports/sources/orc/search?' + query.toString())
       if (results) renderOrcResults(results)
     }
 
@@ -1336,7 +1330,7 @@ async function init() {
     }
   })
 
-  await Promise.all([refreshSettings(), refreshPolars(), refreshImportFormats(), refreshImportSources()])
+  await Promise.all([refreshSettings(), refreshPolars(), refreshImportFormats(), refreshInternetStatus()])
   await loadMeta()
   switchPage('overview')
   await refreshLibrary()
