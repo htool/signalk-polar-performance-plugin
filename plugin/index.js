@@ -478,6 +478,23 @@ module.exports = (app) => {
         return importService
       }
 
+      // Lightweight internet connectivity probe.
+      // Attempts a HEAD request to Cloudflare's public DNS (1.1.1.1) with a
+      // 3-second timeout.  Returns true if any HTTP response is received,
+      // false on network error or timeout.
+      async function checkInternet() {
+        const TIMEOUT_MS = 3000
+        try {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+          const response = await fetch('https://1.1.1.1', { method: 'HEAD', signal: controller.signal })
+            .finally(() => clearTimeout(timer))
+          return response.status < 600
+        } catch (_) {
+          return false
+        }
+      }
+
       function errorStatus(error) {
         return /Polar not found/i.test(error.message) ? 404 : 500
       }
@@ -670,6 +687,14 @@ module.exports = (app) => {
         res.json(getImportService().listFormats())
       })
 
+      router.get('/internet', async (_req, res) => {
+        res.json({ online: await checkInternet() })
+      })
+
+      router.get('/imports/sources', (_req, res) => {
+        res.json(getImportService().listSources())
+      })
+
       router.post('/polars', (req, res) => {
         const validationError = validatePolarResourceBody(req.body)
         if (validationError) {
@@ -700,18 +725,10 @@ module.exports = (app) => {
         }
       })
 
-      router.get('/imports/sources', async (_req, res) => {
-        try {
-          res.json(await getImportService().listSources())
-        } catch (error) {
-          if (error instanceof ImportError) {
-            return res.status(error.status).json({ error: error.message })
-          }
-          res.status(500).json({ error: error.message })
-        }
-      })
-
       router.get('/imports/sources/:source/search', async (req, res) => {
+        if (!await checkInternet()) {
+          return res.status(503).json({ error: 'No internet connection — external source imports are unavailable' })
+        }
         try {
           const results = await getImportService().searchSource(req.params.source, req.query?.q)
           res.json(results)
@@ -724,6 +741,9 @@ module.exports = (app) => {
       })
 
       router.post('/imports/sources/:source/items/:externalId', async (req, res) => {
+        if (!await checkInternet()) {
+          return res.status(503).json({ error: 'No internet connection — external source imports are unavailable' })
+        }
         try {
           const result = await getImportService().importSource(req.params.source, req.params.externalId, req.body)
           res.status(201).json({ id: result.id })

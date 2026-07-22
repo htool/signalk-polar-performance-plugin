@@ -82,23 +82,8 @@ class ImportService {
     return this.registry.list()
   }
 
-  async listSources() {
-    const descriptors = this.sourceRegistry.list()
-    return Promise.all(descriptors.map(async (descriptor) => {
-      const source = this.sourceRegistry.get(descriptor.id)
-      if (source && typeof source.getStatus === 'function') {
-        return {
-          ...descriptor,
-          ...(await source.getStatus())
-        }
-      }
-
-      return {
-        ...descriptor,
-        available: true,
-        availabilityMessage: ''
-      }
-    }))
+  listSources() {
+    return this.sourceRegistry.list().map(descriptor => ({ ...descriptor }))
   }
 
   importText(formatId, body) {

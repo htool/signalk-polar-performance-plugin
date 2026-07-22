@@ -377,9 +377,10 @@ describe('Polar manager/query API', () => {
 
   it('searches the official ORC source and imports a certificate by RefNo', async () => {
     const calls = []
-    global.fetch = async (url) => {
+    global.fetch = async (url, opts) => {
       const href = String(url)
       calls.push(href)
+      if (href === 'https://1.1.1.1') return makeFetchResponse('', 204)  // internet probe
       if (href === ORC_ACTIVECERTS_URL) {
         return makeFetchResponse(ORC_ACTIVECERTS_XML)
       }
@@ -396,9 +397,7 @@ describe('Polar manager/query API', () => {
       id: 'orc',
       name: 'ORC Active Certificates',
       description: 'Official ORC active certificates and certificate pages',
-      url: ORC_ACTIVECERTS_URL,
-      available: true,
-      availabilityMessage: ''
+      url: ORC_ACTIVECERTS_URL
     }])
 
     res = makeResponse()
@@ -447,7 +446,7 @@ describe('Polar manager/query API', () => {
     assert.ok(res.body.beat)
     assert.ok(res.body.run)
 
-    assert.equal(calls.filter(url => url === ORC_ACTIVECERTS_URL).length, 1)
+    assert.equal(calls.filter(url => url === ORC_ACTIVECERTS_URL).length, 1)  // cache miss on first search only
     assert.equal(calls.filter(url => url === ORC_CERTIFICATE_URL).length, 1)
   })
 
@@ -461,21 +460,43 @@ describe('Polar manager/query API', () => {
     assert.equal(router.routes.post['/polars/:name'], undefined)
   })
 
-  it('reports ORC as unavailable without internet instead of failing source discovery', async () => {
-    global.fetch = async () => {
-      throw new Error('network unreachable')
+  it('returns online:true from /internet when the probe succeeds', async () => {
+    global.fetch = async (url) => {
+      if (String(url) === 'https://1.1.1.1') return makeFetchResponse('', 204)
+      throw new Error(`Unexpected fetch URL: ${url}`)
     }
-
     const res = makeResponse()
-    await router.routes.get['/imports/sources']({}, res)
+    await router.routes.get['/internet']({}, res)
     assert.equal(res.statusCode, 200)
-    assert.deepEqual(res.body, [{
-      id: 'orc',
-      name: 'ORC Active Certificates',
-      description: 'Official ORC active certificates and certificate pages',
-      url: ORC_ACTIVECERTS_URL,
-      available: false,
-      availabilityMessage: 'ORC source unavailable: internet access is required for external source imports'
-    }])
+    assert.deepEqual(res.body, { online: true })
+  })
+
+  it('returns online:false from /internet when the probe fails', async () => {
+    global.fetch = async () => { throw new Error('network unreachable') }
+    const res = makeResponse()
+    await router.routes.get['/internet']({}, res)
+    assert.equal(res.statusCode, 200)
+    assert.deepEqual(res.body, { online: false })
+  })
+
+  it('returns 503 from ORC search when there is no internet', async () => {
+    global.fetch = async () => { throw new Error('network unreachable') }
+    const res = makeResponse()
+    await router.routes.get['/imports/sources/:source/search']({
+      params: { source: 'orc' },
+      query: { q: 'vertigo' }
+    }, res)
+    assert.equal(res.statusCode, 503)
+    assert.ok(res.body.error.includes('No internet'))
+  })
+
+  it('returns 503 from ORC import when there is no internet', async () => {
+    global.fetch = async () => { throw new Error('network unreachable') }
+    const res = makeResponse()
+    await router.routes.post['/imports/sources/:source/items/:externalId']({
+      params: { source: 'orc', externalId: '04310004HPB' }
+    }, res)
+    assert.equal(res.statusCode, 503)
+    assert.ok(res.body.error.includes('No internet'))
   })
 })

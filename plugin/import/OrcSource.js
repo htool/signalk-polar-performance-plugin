@@ -6,7 +6,6 @@ const path = require('path')
 const ACTIVE_CERTIFICATES_URL = 'https://data.orc.org/public/WPub.dll?action=activecerts'
 const CERTIFICATE_URL_PREFIX = 'https://data.orc.org/public/WPub.dll/CC/'
 const DEFAULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000
-const DEFAULT_STATUS_TIMEOUT_MS = 15000
 const MAX_SEARCH_RESULTS = 100
 const KNOT_TO_MPS = 0.514444
 const DEG_TO_RAD = Math.PI / 180
@@ -150,8 +149,7 @@ class OrcSource {
     dataDir,
     fetcher,
     now = () => Date.now(),
-    cacheTtlMs = DEFAULT_CACHE_TTL_MS,
-    statusTimeoutMs = DEFAULT_STATUS_TIMEOUT_MS
+    cacheTtlMs = DEFAULT_CACHE_TTL_MS
   } = {}) {
     this.fetcher = typeof fetcher === 'function'
       ? fetcher
@@ -171,7 +169,6 @@ class OrcSource {
     this.defaultSource = 'orc'
     this.now = now
     this.cacheTtlMs = cacheTtlMs
-    this.statusTimeoutMs = statusTimeoutMs
     this.cacheDir = path.join(dataDir, 'import-cache')
     this.activeCachePath = path.join(this.cacheDir, 'orc-activecerts.json')
     ensureDir(this.cacheDir)
@@ -183,32 +180,6 @@ class OrcSource {
       name: this.name,
       description: 'Official ORC active certificates and certificate pages',
       url: ACTIVE_CERTIFICATES_URL
-    }
-  }
-
-  async getStatus() {
-    const cached = this.readCache()
-    const isFresh = cached && (this.now() - cached.fetchedAtMs) < this.cacheTtlMs
-    if (isFresh) {
-      return { available: true, availabilityMessage: '' }
-    }
-
-    try {
-      await withTimeout(
-        this.refreshActiveCertificates(),
-        this.statusTimeoutMs,
-        'ORC source unavailable: internet access is required for external source imports'
-      )
-
-      return {
-        available: true,
-        availabilityMessage: ''
-      }
-    } catch (_error) {
-      return {
-        available: false,
-        availabilityMessage: 'ORC source unavailable: internet access is required for external source imports'
-      }
     }
   }
 
