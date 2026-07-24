@@ -1,24 +1,55 @@
 {
   "name": "signalk-polar-performance-plugin",
-  "version": "0.0.60",
-  "description": "A plugin that calculates performance information based on a (CSV) polar diagram.",
+  "version": "1.2.0",
+  "description": "Calculates live sailing performance from polar data, with built-in polar management and import tools.",
   "main": "plugin/index.js",
+  "exports": {
+    ".": "./plugin/index.js"
+  },
+  "files": [
+    "icon.png",
+    "plugin/",
+    "public/",
+    "test/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20",
+    "signalk-server": ">=2.28.0"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/**/*.test.js",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "signalkutilities": "^3.0.1"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/htool/signalk-polar-performance-plugin.git"
   },
   "author": "hans@defect.org",
-  "license": "ISC",
+  "license": "Apache-2.0",
+  "signalk-plugin-enabled-by-default": false,
   "bugs": {
     "url": "https://github.com/htool/signalk-polar-performance-plugin/issues"
   },
   "homepage": "https://github.com/htool/signalk-polar-performance-plugin#readme",
   "signalk": {
-    "appIcon": "./signalk-logo.png",
-    "displayName": "Polar Performance"
+    "appIcon": "./icon.png",
+    "displayName": "Polar Performance",
+    "screenshots": [
+      "./docs/plotter.png",
+      "./docs/overview.png",
+      "./docs/polar.png",
+      "./docs/inputs.png",
+      "./docs/outputs.png",
+      "./docs/polar_management.png",
+      "./docs/import.png"
+    ]
   },
   "keywords": [
     "signalk-webapp",

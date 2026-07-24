@@ -1,0 +1,912 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Polar Performance Plugin API",
+    "version": "1.0.0",
+    "description": "REST API for polar library management and polar performance queries.\nAll speed values are in m/s, all angles in radians."
+  },
+  "servers": [
+    { "url": "/plugins/signalk-polar-performance-plugin" }
+  ],
+  "tags": [
+    {
+      "name": "polar-manager",
+      "description": "Polar library management: list, replace, inspect, delete, and select canonical polars by id."
+    },
+    {
+      "name": "polar-query",
+      "description": "Polar performance queries: inspect axes and derive speed, targets, curves, and performance ratios for any stored polar."
+    },
+    {
+      "name": "polar-import",
+      "description": "Optional polar ingestion extension: discover supported external sources and text formats, convert them to canonical polar resources, and store them in the library."
+    }
+  ],
+  "paths": {
+
+    "/polars": {
+      "get": {
+        "tags": ["polar-manager"],
+        "operationId": "listPolars",
+        "summary": "List all stored polars",
+        "description": "Returns a summary of every polar in the library.",
+        "responses": {
+          "200": {
+            "description": "Array of polar summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/PolarSummary" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["polar-manager"],
+        "operationId": "createPolar",
+        "summary": "Create a canonical polar with an auto-generated id",
+        "description": "Stores the supplied canonical PolarTable resource under an auto-generated id and returns that id.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PolarResourceBody" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Polar stored with an auto-generated id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IdResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid canonical polar resource",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/imports/formats": {
+      "get": {
+        "tags": ["polar-import"],
+        "operationId": "listImportFormats",
+        "summary": "List supported text import formats",
+        "description": "Returns the format identifiers accepted by the text import endpoint. These formats are conversion inputs only; imported data is stored as canonical polar resources.",
+        "responses": {
+          "200": {
+            "description": "Supported text import formats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ImportFormatDescriptor" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/imports/text/{format}": {
+      "post": {
+        "tags": ["polar-import"],
+        "operationId": "importPolarFromText",
+        "summary": "Import a polar from text content",
+        "description": "Parses the supplied text payload in the specified format, converts it to the canonical polar resource model, stores it in the local library, and returns the assigned id.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "path",
+            "required": true,
+            "description": "Text format identifier returned by GET /imports/formats.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TextPolarImportRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Polar imported and stored",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IdResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported format or invalid text payload",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "409": {
+            "description": "Requested id already exists",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/imports/sources": {
+      "get": {
+        "tags": ["polar-import"],
+        "operationId": "listImportSources",
+        "summary": "List supported external import sources",
+        "description": "Returns the external sources from which polars can be searched and imported. The current backend exposes the official ORC active certificate source as `orc`.",
+        "responses": {
+          "200": {
+            "description": "Supported external sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ImportSourceDescriptor" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/imports/sources/{source}/search": {
+      "get": {
+        "tags": ["polar-import"],
+        "operationId": "searchImportSource",
+        "summary": "Search an external polar source",
+        "description": "Queries the specified external source for polar candidates matching the search term. For the `orc` source this searches the official active certificate index by certificate RefNo, boat name, sail number, and class.",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "description": "External source identifier returned by GET /imports/sources. The current backend exposes `orc` for the official ORC active certificate source.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Free-text search string matched against source-specific polar metadata.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching external polar candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ExternalPolarSummary" }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import source not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "502": {
+            "description": "Failed to reach the external source",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/imports/sources/{source}/items/{externalId}": {
+      "post": {
+        "tags": ["polar-import"],
+        "operationId": "importPolarFromSource",
+        "summary": "Import a polar from an external source",
+        "description": "Fetches the specified external polar, converts it to the canonical resource model, stores it in the local library, and returns the assigned id. For the `orc` source, `externalId` is the certificate RefNo from the official active certificate index.",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "description": "External source identifier returned by GET /imports/sources. The current backend exposes `orc` for the official ORC active certificate source.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "externalId",
+            "in": "path",
+            "required": true,
+            "description": "External polar identifier returned by GET /imports/sources/{source}/search. For the `orc` source, this is the certificate RefNo.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Polar imported and stored",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/IdResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Import source or external polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "409": {
+            "description": "Requested id already exists",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "502": {
+            "description": "Failed to reach the external source",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/active": {
+      "get": {
+        "tags": ["polar-manager"],
+        "operationId": "getActivePolar",
+        "summary": "Get the active polar id",
+        "description": "Returns the id of the currently active polar.",
+        "responses": {
+          "200": {
+            "description": "Active polar id",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdResponse" } } }
+          },
+          "404": {
+            "description": "No polar is currently active",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["polar-manager"],
+        "operationId": "setActivePolar",
+        "summary": "Set the active polar",
+        "description": "Makes the identified polar the active polar for live computation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/IdResponse" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Active polar updated",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdResponse" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["polar-manager"],
+        "operationId": "clearActivePolar",
+        "summary": "Clear the active polar",
+        "description": "Clears the active polar so no stored polar is used for live computation.",
+        "responses": {
+          "200": {
+            "description": "Active polar cleared",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdResponse" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/polarId" }
+      ],
+      "get": {
+        "tags": ["polar-manager"],
+        "operationId": "getPolar",
+        "summary": "Get a canonical polar resource",
+        "description": "Returns the full canonical PolarTable resource, including axes, values, units, symmetry assumptions, and derived metadata.",
+        "responses": {
+          "200": {
+            "description": "Canonical polar resource",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PolarResource" }
+              }
+            }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["polar-manager"],
+        "operationId": "replacePolar",
+        "summary": "Create or replace a canonical polar resource",
+        "description": "Stores the supplied canonical PolarTable resource under the given id. If the polar exists it is replaced; otherwise it is created.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PolarResourceBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Polar stored",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdResponse" } } }
+          },
+          "400": {
+            "description": "Invalid canonical resource body",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["polar-manager"],
+        "operationId": "deletePolar",
+        "summary": "Delete a polar",
+        "description": "Permanently removes the identified polar from the library.",
+        "responses": {
+          "200": {
+            "description": "Polar deleted",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IdResponse" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/meta": {
+      "get": {
+        "tags": ["polar-manager"],
+        "operationId": "getPolarMeta",
+        "summary": "Get polar metadata",
+        "description": "Returns the stored metadata for the identified polar: name, sailnumber, boatType, year, source, notes, and TWS range.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Polar metadata",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PolarMeta" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/axes/tws": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getPolarTws",
+        "summary": "TWS values available in a polar",
+        "description": "Returns the array of true wind speed values (m/s) for which the polar has tabulated data.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "TWS values in m/s",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "number" } }
+              }
+            }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/queries/curve": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getPolarCurve",
+        "summary": "Interpolated polar curve at a given TWS",
+        "description": "Returns a sampled polar curve at the requested TWS, including beat and run target markers.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "required": false,
+            "description": "Angular sampling step in radians (default ~0.035 rad = 2 deg)",
+            "schema": { "type": "number", "minimum": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Polar curve data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PolarCurveResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/queries/speed": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getPolarSpeed",
+        "summary": "Interpolated boat speed at a TWS/TWA point",
+        "description": "Returns the polar boat speed at the given true wind speed and angle, plus interpolation quality indicators.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "twa",
+            "in": "query",
+            "required": true,
+            "description": "True wind angle in radians (positive, 0 to pi)",
+            "schema": { "type": "number", "minimum": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Interpolated speed result",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PolarSpeedResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/queries/targets": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getPolarTargets",
+        "summary": "Optimal beat and run targets at a given TWS",
+        "description": "Returns the optimal beat and run angles, boat speeds, and VMG values at the given true wind speed.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Beat and run targets",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PolarTargetsResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/queries/performance": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getPolarPerformance",
+        "summary": "Performance ratio against the polar",
+        "description": "Given actual TWS, TWA, and BSP, returns the polar target speed and performance ratio, plus VMG performance. VMG is upwind when TWA < 60 deg (1.047 rad), downwind when TWA > 120 deg (2.094 rad), and null for reaching in between.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "twa",
+            "in": "query",
+            "required": true,
+            "description": "True wind angle in radians (positive, 0 to pi)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "bsp",
+            "in": "query",
+            "required": true,
+            "description": "Actual boat speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Performance result",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PolarPerformanceResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    }
+
+  },
+
+  "components": {
+    "parameters": {
+      "polarId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Polar identifier",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" }
+        }
+      },
+
+      "IdResponse": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" }
+        }
+      },
+
+      "ImportFormatDescriptor": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable text format identifier used in POST /imports/text/{format}." },
+          "name": { "type": "string", "description": "Human-readable format name." },
+          "description": { "type": "string", "description": "Short description of the source text format." }
+        }
+      },
+
+      "ImportSourceDescriptor": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable source identifier used in /imports/sources/{source}/... endpoints." },
+          "name": { "type": "string", "description": "Human-readable source name." },
+          "description": { "type": "string", "description": "Short description of the external source." },
+          "url": { "type": "string", "description": "Optional source home page or API URL." },
+          "available": { "type": "boolean", "description": "Whether the external source is currently reachable for live imports." },
+          "availabilityMessage": { "type": "string", "description": "Human-readable reason when the source is currently unavailable." }
+        }
+      },
+
+      "ExternalPolarSummary": {
+        "type": "object",
+        "required": ["externalId"],
+        "properties": {
+          "externalId": { "type": "string", "description": "Source-specific polar identifier used when importing a result. For the `orc` source, this is the certificate RefNo." },
+          "name": { "type": "string", "description": "Human-readable boat or polar name." },
+          "sailnumber": { "type": "string" },
+          "boatType": { "type": "string" },
+          "year": { "type": "integer", "description": "Certificate or measurement year if known." },
+          "source": { "type": "string", "description": "Source identifier that produced this result." },
+          "countryId": { "type": "string", "description": "Source-specific country identifier if available." },
+          "certificateName": { "type": "string", "description": "Certificate variant label if available." },
+          "familyName": { "type": "string", "description": "Source-specific certificate family label if available." }
+        }
+      },
+
+      "TextPolarImportRequest": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string", "description": "Raw source text to parse and import." },
+          "name": { "type": "string", "description": "Optional human-readable label override." },
+          "sailnumber": { "type": "string" },
+          "boatType": { "type": "string" },
+          "year": { "type": "integer", "description": "Certificate or measurement year override." },
+          "source": { "type": "string", "description": "Source label override stored in the canonical metadata." },
+          "notes": { "type": "string", "description": "Optional notes stored in the canonical metadata." }
+        }
+      },
+
+      "PolarSummary": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id":         { "type": "string",  "description": "Opaque stable identifier for this polar" },
+          "name":       { "type": "string",  "description": "Human-readable label" },
+          "sailnumber": { "type": "string" },
+          "boatType":   { "type": "string" },
+          "year":       { "type": "integer", "description": "Certificate or measurement year" },
+          "source":     { "type": "string",  "description": "Data origin, e.g. orc, irc, measured, custom" }
+        }
+      },
+
+      "PolarMeta": {
+        "allOf": [
+          { "$ref": "#/components/schemas/PolarSummary" },
+          {
+            "type": "object",
+            "properties": {
+              "notes":  { "type": "string" },
+              "twsMin": { "type": "number", "description": "Lowest available TWS in the table (m/s)" },
+              "twsMax": { "type": "number", "description": "Highest available TWS in the table (m/s)" }
+            }
+          }
+        ]
+      },
+
+      "PolarUnits": {
+        "type": "object",
+        "required": ["tws", "twa", "boatSpeed"],
+        "properties": {
+          "tws": { "type": "string", "enum": ["m/s"] },
+          "twa": { "type": "string", "enum": ["rad"] },
+          "boatSpeed": { "type": "string", "enum": ["m/s"] }
+        }
+      },
+
+      "PolarSymmetry": {
+        "type": "object",
+        "required": ["portStarboardSymmetric"],
+        "properties": {
+          "portStarboardSymmetric": {
+            "type": "boolean",
+            "description": "Whether the polar assumes the same performance on port and starboard tack."
+          }
+        }
+      },
+
+      "PolarAxes": {
+        "type": "object",
+        "required": ["tws", "twa"],
+        "properties": {
+          "tws": {
+            "type": "array",
+            "description": "Sorted true wind speed axis in m/s.",
+            "items": { "type": "number" }
+          },
+          "twa": {
+            "type": "array",
+            "description": "Sorted true wind angle axis in radians, expressed over 0 to pi.",
+            "items": { "type": "number" }
+          }
+        }
+      },
+
+      "PolarValues": {
+        "type": "object",
+        "required": ["boatSpeedMatrix"],
+        "properties": {
+          "boatSpeedMatrix": {
+            "type": "array",
+            "description": "Boat speed matrix in m/s indexed by TWS row then TWA column.",
+            "items": {
+              "type": "array",
+              "items": { "type": "number" }
+            }
+          }
+        }
+      },
+
+      "PolarDerivedRow": {
+        "type": "object",
+        "required": ["tws"],
+        "properties": {
+          "tws": { "type": "number", "description": "True wind speed in m/s for the derived row." },
+          "beat": { "nullable": true, "$ref": "#/components/schemas/PolarTargetPoint" },
+          "run": { "nullable": true, "$ref": "#/components/schemas/PolarTargetPoint" },
+          "maxSpeed": { "type": "number", "description": "Maximum boat speed in m/s at this TWS." },
+          "maxSpeedAngle": { "type": "number", "description": "True wind angle in radians at which maxSpeed occurs." }
+        }
+      },
+
+      "PolarDerived": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PolarDerivedRow" }
+          }
+        }
+      },
+
+      "PolarResource": {
+        "allOf": [
+          { "$ref": "#/components/schemas/PolarMeta" },
+          {
+            "type": "object",
+            "required": ["id", "kind", "schemaVersion", "units", "symmetry", "axes", "values"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["polarTable"],
+                "description": "Canonical resource type identifier."
+              },
+              "schemaVersion": {
+                "type": "string",
+                "description": "Version of the canonical PolarTable resource schema."
+              },
+              "units": { "$ref": "#/components/schemas/PolarUnits" },
+              "symmetry": { "$ref": "#/components/schemas/PolarSymmetry" },
+              "axes": { "$ref": "#/components/schemas/PolarAxes" },
+              "values": { "$ref": "#/components/schemas/PolarValues" },
+              "derived": { "$ref": "#/components/schemas/PolarDerived" }
+            }
+          }
+        ]
+      },
+
+      "PolarResourceBody": {
+        "type": "object",
+        "required": ["kind", "schemaVersion", "units", "symmetry", "axes", "values"],
+        "properties": {
+          "name":       { "type": "string", "description": "Human-readable label" },
+          "sailnumber": { "type": "string" },
+          "boatType":   { "type": "string" },
+          "year":       { "type": "integer", "description": "Certificate or measurement year" },
+          "source":     { "type": "string", "description": "Data origin, e.g. orc, irc, measured, custom" },
+          "notes":      { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["polarTable"],
+            "description": "Canonical resource type identifier."
+          },
+          "schemaVersion": {
+            "type": "string",
+            "description": "Version of the canonical PolarTable resource schema."
+          },
+          "units": { "$ref": "#/components/schemas/PolarUnits" },
+          "symmetry": { "$ref": "#/components/schemas/PolarSymmetry" },
+          "axes": { "$ref": "#/components/schemas/PolarAxes" },
+          "values": { "$ref": "#/components/schemas/PolarValues" },
+          "derived": { "$ref": "#/components/schemas/PolarDerived" }
+        }
+      },
+
+      "PolarTargetPoint": {
+        "type": "object",
+        "description": "Optimal sailing target (beat or run).",
+        "properties": {
+          "twa": { "type": "number", "description": "Optimal true wind angle (rad)" },
+          "tbs": { "type": "number", "description": "Boat speed at optimal angle (m/s)" },
+          "vmg": { "type": "number", "description": "Velocity made good at optimal angle (m/s)" }
+        }
+      },
+
+      "PolarCurveResult": {
+        "type": "object",
+        "properties": {
+          "tws":    { "type": "number", "description": "Requested TWS (m/s)" },
+          "points": {
+            "type": "array",
+            "description": "Sampled points from 0 to pi",
+            "items": {
+              "type": "object",
+              "properties": {
+                "twa": { "type": "number", "description": "True wind angle (rad)" },
+                "tbs": { "type": "number", "description": "Boat speed (m/s)" }
+              }
+            }
+          },
+          "beat": { "nullable": true, "$ref": "#/components/schemas/PolarTargetPoint" },
+          "run":  { "nullable": true, "$ref": "#/components/schemas/PolarTargetPoint" }
+        }
+      },
+
+      "PolarSpeedResult": {
+        "type": "object",
+        "properties": {
+          "tws":   { "type": "number", "description": "True wind speed (m/s)" },
+          "twa":   { "type": "number", "description": "True wind angle (rad)" },
+          "tbs":   { "type": "number", "nullable": true, "description": "Interpolated boat speed (m/s), null if outside polar range" },
+          "state": {
+            "type": "object",
+            "description": "Interpolation quality indicators.",
+            "properties": {
+              "tws": { "type": "string", "enum": ["below_range", "in_range", "above_range"] },
+              "twa": { "type": "string", "enum": ["in_irons", "pinching", "in_range", "extrapolated", "above_range"] }
+            }
+          }
+        }
+      },
+
+      "PolarTargetsResult": {
+        "type": "object",
+        "properties": {
+          "tws":  { "type": "number", "description": "True wind speed (m/s)" },
+          "beat": { "nullable": true, "$ref": "#/components/schemas/PolarTargetPoint" },
+          "run":  { "nullable": true, "$ref": "#/components/schemas/PolarTargetPoint" }
+        }
+      },
+
+      "PerformanceMetric": {
+        "type": "object",
+        "properties": {
+          "polar":  { "type": "number", "description": "Polar reference value (m/s)" },
+          "actual": { "type": "number", "description": "Actual measured value (m/s)" },
+          "ratio":  { "type": "number", "description": "actual / polar" }
+        }
+      },
+
+      "PolarPerformanceResult": {
+        "type": "object",
+        "properties": {
+          "tws":       { "type": "number", "description": "True wind speed (m/s)" },
+          "twa":       { "type": "number", "description": "True wind angle (rad)" },
+          "bsp":       { "type": "number", "description": "Actual boat speed (m/s)" },
+          "direction": {
+            "type": "string",
+            "enum": ["upwind", "reaching", "downwind"],
+            "description": "Point of sail. upwind: TWA < 60 deg (1.047 rad); downwind: TWA > 120 deg (2.094 rad); reaching: between."
+          },
+          "speed": { "$ref": "#/components/schemas/PerformanceMetric" },
+          "vmg":   {
+            "nullable": true,
+            "$ref": "#/components/schemas/PerformanceMetric",
+            "description": "null when direction is reaching"
+          }
+        }
+      }
+
+    }
+  }
+}
