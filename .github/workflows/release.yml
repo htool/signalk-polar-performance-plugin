@@ -33,26 +33,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish:
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          if [[ "$tag" == *beta* ]]; then
-            npm publish --provenance --access public --tag beta
-          else
-            npm publish --provenance --access public
-          fi
+  # publish job disabled — npm publish requires the package owner's NPM_TOKEN.
+  # The owner (htool) can re-enable this by uncommenting the block below.
+  #
+  # publish:
+  #   needs: release
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: '22'
+  #         registry-url: 'https://registry.npmjs.org'
+  #     - run: npm ci
+  #     - name: Publish to npm
+  #       env:
+  #         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  #       run: |
+  #         tag="${GITHUB_REF#refs/tags/}"
+  #         if [[ "$tag" == *beta* ]]; then
+  #           npm publish --provenance --access public --tag beta
+  #         else
+  #           npm publish --provenance --access public
+  #         fi
