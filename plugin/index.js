@@ -374,14 +374,11 @@ module.exports = (app) => {
         }
       }
     } else {
-      // Zero out to prevent stale values accumulating in the data model
+      // Clear these paths so no stale non-zero value remains on the SK bus
       if (settings.polarSpeed) {
-        add('performance.polarSpeed', 0, 'm/s',
-          'Polar chart boat speed for current TWS and TWA.')
-        add('performance.polarSpeedRatio', 0, 'ratio',
-          'Actual boat speed divided by polar speed.')
-        add('performance.targetSpeed', 0, 'm/s',
-          'Boat speed needed to achieve target VMG at the optimal angle.')
+        values.push({ path: 'performance.polarSpeed', value: null })
+        values.push({ path: 'performance.polarSpeedRatio', value: null })
+        values.push({ path: 'performance.targetSpeed', value: null })
       }
     }
 
@@ -850,7 +847,7 @@ module.exports = (app) => {
       // Returns null for any field not yet available (plugin not running,
       // no BSP source, polar not loaded, or boat in irons).
       router.get('/live', (req, res) => {
-        const wind = windSmoother ? windSmoother.polarValue : null
+        const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle : null
         const TWA       = Number.isFinite(TWAsigned) ? Math.abs(TWAsigned) : null
@@ -896,7 +893,7 @@ module.exports = (app) => {
         const rawBsp = si(bspSmoother?.handler?.value ?? null)
         const rawHdg = si(hdgSmoother?.handler?.value ?? null)
 
-        const wind = windSmoother ? windSmoother.polarValue : null
+        const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle     : null
         const BSP       = bspSmoother ? bspSmoother.value : null
