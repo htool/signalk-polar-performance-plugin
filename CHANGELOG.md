@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 - `/live` and `/status` endpoints now return `null` for `tws`/`twa` (and downstream fields) when the wind smoother has no data or is stale, instead of `0`. The guard was checking for the presence of the smoother object rather than its `ready` state.
 - `computeAndSend`: when the polar table lookup fails (boat outside polar range — in irons or above max TWS), the `performance.polarSpeed`, `performance.polarSpeedRatio`, and `performance.targetSpeed` SK paths are now written with `null` instead of `0`. Writing `0` was misleading because it is a valid-looking value rather than an explicit "no data" signal.
+- `detectStaleData` now applies the idle resubscribe watchdog to all subscribed live inputs, not just true wind. Boat speed and optional true heading subscriptions are now re-established after prolonged silence, matching the existing wind recovery behavior.
+
+### Changed
+- The webapp setting label and description for `detectStaleData` now describe it as idle detection on inputs, reflecting that the safeguard covers all subscribed inputs rather than only wind.
 
 ## [1.2.1] - 2026-07-25
 

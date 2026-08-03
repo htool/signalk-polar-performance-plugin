@@ -626,6 +626,15 @@ function _buildInputsPage() {
   if (pm) smRows.push({ label: pm.label, control: createNumberInput(pm.key, settings?.[pm.key], pm, true) })
   wrap.appendChild(_settingsTable(smRows))
 
+  wrap.appendChild(sectionHeading('Connectivity'))
+  wrap.appendChild(_settingsTable([
+    { label: 'Idle detection on inputs',
+      desc: 'Resubscribes to all input paths after 60 s without data. Workaround for a subscription race condition on some SK server setups.',
+      control: createToggle(!!settings?.detectStaleData, v =>
+        apiPut('/settings', { detectStaleData: v }).then(s => { if (s) settings = s })
+      ) },
+  ]))
+
   wrap.appendChild(sectionHeading('True Wind Speed'))
   wrap.appendChild(buildTable([
     { label: 'Raw  — environment.wind.speedTrue',      id: 'in-tws-raw' },

@@ -17,6 +17,8 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 
+const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idlePeriod on wind handlers when detectStaleData is enabled
+
 const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
   activePolar: '',
@@ -35,7 +37,8 @@ const DEFAULT_SETTINGS = {
   polarSpeed: false,
   useSOG: false,
   tackTrue: false,
-  smoothedInputs: false
+  smoothedInputs: false,
+  detectStaleData: false
 }
 
 module.exports = (app) => {
@@ -74,6 +77,35 @@ module.exports = (app) => {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  function _wireHandlerWatchdog(handler) {
+    handler.idlePeriod = STALE_RESUBSCRIBE_PERIOD
+    handler.onIdle = () => {
+      if (!isRunning) return
+      app.debug(`resubscribing to ${handler.path} because data got stale or did not arrive at all`)
+      handler.unsubscribe()
+      handler.subscribe()
+    }
+  }
+
+  function _clearHandlerWatchdog(handler) {
+    handler.onIdle = null
+  }
+
+  function _wireStaleWatchdog() {
+    _wireHandlerWatchdog(windSmoother.polar.magnitudeHandler)
+    _wireHandlerWatchdog(windSmoother.polar.angleHandler)
+    if (bspSmoother) _wireHandlerWatchdog(bspSmoother.handler)
+    if (hdgSmoother) _wireHandlerWatchdog(hdgSmoother.handler)
+  }
+
+  function _clearStaleWatchdog() {
+    if (!windSmoother) return
+    _clearHandlerWatchdog(windSmoother.polar.magnitudeHandler)
+    _clearHandlerWatchdog(windSmoother.polar.angleHandler)
+    if (bspSmoother) _clearHandlerWatchdog(bspSmoother.handler)
+    if (hdgSmoother) _clearHandlerWatchdog(hdgSmoother.handler)
+  }
 
   function getSmootherClass(type) {
     switch (type) {
@@ -191,6 +223,15 @@ module.exports = (app) => {
         : 'navigation.speedThroughWater'
     }
 
+    // Stale-data watchdog toggle
+    if (keys.includes('detectStaleData') && windSmoother) {
+      if (settings.detectStaleData) {
+        _wireStaleWatchdog()
+      } else {
+        _clearStaleWatchdog()
+      }
+    }
+
     // Tack heading toggle
     if (keys.includes('tackTrue')) {
       if (settings.tackTrue && !hdgSmoother) {
@@ -201,6 +242,7 @@ module.exports = (app) => {
           SmootherClass: SC,
           smootherOptions: so
         })
+        if (settings.detectStaleData) _wireHandlerWatchdog(hdgSmoother.handler)
       } else if (!settings.tackTrue && hdgSmoother) {
         hdgSmoother.terminate()
         hdgSmoother = null
@@ -1126,6 +1168,8 @@ module.exports = (app) => {
 
       // Trigger performance computation whenever a new smoothed wind value is ready
       windSmoother.onChange = computeAndSend
+
+      if (settings.detectStaleData) _wireStaleWatchdog()
 
       isRunning = true
       app.debug('Plugin started')
