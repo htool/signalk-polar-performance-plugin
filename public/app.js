@@ -629,10 +629,7 @@ function _buildInputsPage() {
   wrap.appendChild(sectionHeading('Connectivity'))
   wrap.appendChild(_settingsTable([
     { label: 'Idle detection on inputs',
-      desc: 'Resubscribes to all input paths after 60 s without data. Workaround for a subscription race condition on some SK server setups.',
-      control: createToggle(!!settings?.detectStaleData, v =>
-        apiPut('/settings', { detectStaleData: v }).then(s => { if (s) settings = s })
-      ) },
+      desc: 'All live input subscriptions are automatically re-established after 60 s without data.' },
   ]))
 
   wrap.appendChild(sectionHeading('True Wind Speed'))

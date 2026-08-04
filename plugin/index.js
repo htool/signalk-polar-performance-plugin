@@ -17,7 +17,7 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 
-const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idlePeriod on wind handlers when detectStaleData is enabled
+const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idle period before live input subscriptions are re-established
 
 const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
@@ -37,8 +37,7 @@ const DEFAULT_SETTINGS = {
   polarSpeed: false,
   useSOG: false,
   tackTrue: false,
-  smoothedInputs: false,
-  detectStaleData: false
+  smoothedInputs: false
 }
 
 module.exports = (app) => {
@@ -79,32 +78,15 @@ module.exports = (app) => {
   // ---------------------------------------------------------------------------
 
   function _wireHandlerWatchdog(handler) {
-    handler.idlePeriod = STALE_RESUBSCRIBE_PERIOD
-    handler.onIdle = () => {
-      if (!isRunning) return
-      app.debug(`resubscribing to ${handler.path} because data got stale or did not arrive at all`)
-      handler.unsubscribe()
-      handler.subscribe()
+    return {
+      idlePeriod: STALE_RESUBSCRIBE_PERIOD,
+      onIdle: () => {
+        if (!isRunning) return
+        app.debug(`resubscribing to ${handler.path} because data got stale or did not arrive at all`)
+        handler.unsubscribe()
+        handler.subscribe()
+      }
     }
-  }
-
-  function _clearHandlerWatchdog(handler) {
-    handler.onIdle = null
-  }
-
-  function _wireStaleWatchdog() {
-    _wireHandlerWatchdog(windSmoother.polar.magnitudeHandler)
-    _wireHandlerWatchdog(windSmoother.polar.angleHandler)
-    if (bspSmoother) _wireHandlerWatchdog(bspSmoother.handler)
-    if (hdgSmoother) _wireHandlerWatchdog(hdgSmoother.handler)
-  }
-
-  function _clearStaleWatchdog() {
-    if (!windSmoother) return
-    _clearHandlerWatchdog(windSmoother.polar.magnitudeHandler)
-    _clearHandlerWatchdog(windSmoother.polar.angleHandler)
-    if (bspSmoother) _clearHandlerWatchdog(bspSmoother.handler)
-    if (hdgSmoother) _clearHandlerWatchdog(hdgSmoother.handler)
   }
 
   function getSmootherClass(type) {
@@ -216,20 +198,13 @@ module.exports = (app) => {
       if (hdgSmoother)  { hdgSmoother.setSmootherClass(SC);  hdgSmoother.setSmootherOptions(so)  }
     }
 
-    // Speed source change — re-point the BSP handler; it auto-resubscribes
+    // Speed source change — re-point the BSP handler with an explicit unsubscribe/subscribe cycle.
     if (keys.includes('useSOG') && bspSmoother) {
+      bspSmoother.unsubscribe()
       bspSmoother.handler.path = settings.useSOG
         ? 'navigation.speedOverGround'
         : 'navigation.speedThroughWater'
-    }
-
-    // Stale-data watchdog toggle
-    if (keys.includes('detectStaleData') && windSmoother) {
-      if (settings.detectStaleData) {
-        _wireStaleWatchdog()
-      } else {
-        _clearStaleWatchdog()
-      }
+      bspSmoother.subscribe()
     }
 
     // Tack heading toggle
@@ -240,9 +215,13 @@ module.exports = (app) => {
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
           SmootherClass: SC,
-          smootherOptions: so
+          smootherOptions: so,
+          ..._wireHandlerWatchdog({
+            get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
+            unsubscribe: () => hdgSmoother?.unsubscribe(),
+            subscribe: () => hdgSmoother?.subscribe(false, true),
+          })
         })
-        if (settings.detectStaleData) _wireHandlerWatchdog(hdgSmoother.handler)
       } else if (!settings.tackTrue && hdgSmoother) {
         hdgSmoother.terminate()
         hdgSmoother = null
@@ -1139,7 +1118,15 @@ module.exports = (app) => {
         app,
         pluginId: plugin.id,
         SmootherClass,
-        smootherOptions
+        smootherOptions,
+        onDelta: computeAndSend,
+        idlePeriod: STALE_RESUBSCRIBE_PERIOD,
+        onIdle: () => {
+          if (!isRunning) return
+          app.debug('resubscribing to wind inputs because data got stale or did not arrive at all')
+          windSmoother.unsubscribe()
+          windSmoother.subscribe(true, true)
+        }
       })
 
       // Boat speed (STW or SOG depending on settings)
@@ -1152,7 +1139,12 @@ module.exports = (app) => {
         app,
         pluginId: plugin.id,
         SmootherClass,
-        smootherOptions
+        smootherOptions,
+        ..._wireHandlerWatchdog({
+          get path() { return bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater') },
+          unsubscribe: () => bspSmoother?.unsubscribe(),
+          subscribe: () => bspSmoother?.subscribe(),
+        })
       })
 
       // Optional heading handler for opposite-tack computation.
@@ -1162,14 +1154,14 @@ module.exports = (app) => {
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
           SmootherClass,
-          smootherOptions
+          smootherOptions,
+          ..._wireHandlerWatchdog({
+            get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
+            unsubscribe: () => hdgSmoother?.unsubscribe(),
+            subscribe: () => hdgSmoother?.subscribe(false, true),
+          })
         })
       }
-
-      // Trigger performance computation whenever a new smoothed wind value is ready
-      windSmoother.onChange = computeAndSend
-
-      if (settings.detectStaleData) _wireStaleWatchdog()
 
       isRunning = true
       app.debug('Plugin started')
