@@ -54,6 +54,8 @@ module.exports = (app) => {
   let bspSmoother = null
   let hdgSmoother = null
   let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
+  let lifecycleWarningMap = new Map()
+  let lifecycleWarnings = []
 
   // Last-computed output values, updated by computeAndSend on every cycle.
   // Keys match the settings keys; values are SI numbers or null.
@@ -77,14 +79,48 @@ module.exports = (app) => {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  function _wireHandlerWatchdog(handler) {
+  function _setLifecycleWarning(id, status, path) {
+    const safePath = path || 'unknown path'
+    const message = status === 'idle'
+      ? `Input ${id} is idle on ${safePath}; resubscribing`
+      : `Input ${id} is stale on ${safePath}`
+    lifecycleWarningMap.set(id, {
+      id,
+      status,
+      path: safePath,
+      message,
+      updatedAt: Date.now()
+    })
+    lifecycleWarnings = Array.from(lifecycleWarningMap.values())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  function _clearLifecycleWarning(id) {
+    if (!lifecycleWarningMap.has(id)) return
+    lifecycleWarningMap.delete(id)
+    lifecycleWarnings = Array.from(lifecycleWarningMap.values())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  function _wireHandlerWatchdog({ id, getPath, unsubscribe, subscribe }) {
     return {
       idlePeriod: STALE_RESUBSCRIBE_PERIOD,
+      onDelta: () => {
+        _clearLifecycleWarning(id)
+      },
+      onStale: () => {
+        if (!isRunning) return
+        const path = getPath()
+        app.debug(`[${plugin.id}] stale input ${id} on ${path}`)
+        _setLifecycleWarning(id, 'stale', path)
+      },
       onIdle: () => {
         if (!isRunning) return
-        app.debug(`resubscribing to ${handler.path} because data got stale or did not arrive at all`)
-        handler.unsubscribe()
-        handler.subscribe()
+        const path = getPath()
+        app.debug(`[${plugin.id}] idle input ${id} on ${path}; resubscribing`)
+        _setLifecycleWarning(id, 'idle', path)
+        unsubscribe()
+        subscribe()
       }
     }
   }
@@ -959,7 +995,8 @@ module.exports = (app) => {
             }
           },
           outputs,
-          polarState
+          polarState,
+          lifecycleWarnings
         })
       })
 
@@ -1080,6 +1117,8 @@ module.exports = (app) => {
 
     start(options) {
       metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
+      lifecycleWarningMap = new Map()
+      lifecycleWarnings = []
 
       store = new PolarFileStore(app.getDataDirPath())
       importService = new ImportService(store)
@@ -1119,13 +1158,15 @@ module.exports = (app) => {
         pluginId: plugin.id,
         SmootherClass,
         smootherOptions,
-        onDelta: computeAndSend,
-        idlePeriod: STALE_RESUBSCRIBE_PERIOD,
-        onIdle: () => {
-          if (!isRunning) return
-          app.debug('resubscribing to wind inputs because data got stale or did not arrive at all')
-          windSmoother.unsubscribe()
-          windSmoother.subscribe(true, true)
+        ..._wireHandlerWatchdog({
+          id: 'wind.smoothed',
+          getPath: () => `${windSmoother?.polar?.pathMagnitude ?? 'environment.wind.speedTrue'}, ${windSmoother?.polar?.pathAngle ?? 'environment.wind.angleTrueWater'}`,
+          unsubscribe: () => windSmoother?.unsubscribe(),
+          subscribe: () => windSmoother?.subscribe(true, true),
+        }),
+        onDelta: () => {
+          _clearLifecycleWarning('wind.smoothed')
+          computeAndSend()
         }
       })
 
@@ -1141,7 +1182,8 @@ module.exports = (app) => {
         SmootherClass,
         smootherOptions,
         ..._wireHandlerWatchdog({
-          get path() { return bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater') },
+          id: 'bsp.smoothed',
+          getPath: () => bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'),
           unsubscribe: () => bspSmoother?.unsubscribe(),
           subscribe: () => bspSmoother?.subscribe(),
         })
@@ -1156,7 +1198,8 @@ module.exports = (app) => {
           SmootherClass,
           smootherOptions,
           ..._wireHandlerWatchdog({
-            get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
+            id: 'hdg.smoothed',
+            getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
             unsubscribe: () => hdgSmoother?.unsubscribe(),
             subscribe: () => hdgSmoother?.subscribe(false, true),
           })
@@ -1174,6 +1217,8 @@ module.exports = (app) => {
       if (windSmoother) { windSmoother.terminate(); windSmoother = null }
       if (bspSmoother)  { bspSmoother.terminate();  bspSmoother = null  }
       if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }
+      lifecycleWarningMap = new Map()
+      lifecycleWarnings = []
       app.debug('Plugin stopped')
     }
   }

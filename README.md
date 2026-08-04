@@ -2,6 +2,8 @@
 
 Polar Performance reads your boat's true wind speed, true wind angle, and boat speed from Signal K, looks up the corresponding target values from your polar diagram, and publishes performance metrics — beat angle, run angle, VMG, polar speed ratio, and others — back to the Signal K bus in real time. An integrated webapp lets you inspect the live values, manage polars, and configure the plugin while it is running.
 
+Current runtime behaviour is also more explicit: when a polar lookup cannot be completed or a required input has no usable value, the plugin writes `null` for the affected output paths and the `/live` and `/status` endpoints expose that state clearly. Idle input recovery is enabled for all live subscriptions, so temporary silence is handled without leaving the plugin in a stale state.
+
 ---
 
 ## Installation
