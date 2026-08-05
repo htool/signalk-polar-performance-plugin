@@ -30,6 +30,163 @@ class PolarTable {
     this.runExtrapFactor = 0.3; // Fraction of (π − runAngle) to extrapolate beyond the last tabulated angle
   }
 
+  _wrapPi(angle) {
+    let out = angle % (2 * Math.PI)
+    if (out >= Math.PI) out -= 2 * Math.PI
+    if (out < -Math.PI) out += 2 * Math.PI
+    return out
+  }
+
+  _wrap2Pi(angle) {
+    let out = angle % (2 * Math.PI)
+    if (out < 0) out += 2 * Math.PI
+    return out
+  }
+
+  _vectorFromPolar(magnitude, angle) {
+    return {
+      x: magnitude * Math.cos(angle),
+      y: magnitude * Math.sin(angle)
+    }
+  }
+
+  _dot2(a, b) {
+    return a.x * b.x + a.y * b.y
+  }
+
+  solveVmcByTack({
+    tws,
+    twd,
+    course,
+    stepRad = Math.PI / 90,
+    currentDrift,
+    currentSetTrue,
+    ignoreCurrent = false,
+    includePoints = false
+  }) {
+    if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(course)) {
+      return { port: null, starboard: null, points: includePoints ? [] : undefined }
+    }
+
+    const normalizedStep = Number.isFinite(stepRad) && stepRad > 0 ? stepRad : Math.PI / 90
+    const courseUnit = this._vectorFromPolar(1, course)
+
+    let current = { x: 0, y: 0 }
+    if (!ignoreCurrent) {
+      if (!Number.isFinite(currentDrift) || !Number.isFinite(currentSetTrue)) {
+        return { port: null, starboard: null, points: includePoints ? [] : undefined }
+      }
+      current = this._vectorFromPolar(currentDrift, currentSetTrue)
+    }
+
+    let bestPort = null
+    let bestStarboard = null
+    const points = includePoints ? [] : null
+
+    for (let theta = 0; theta < (2 * Math.PI) + 1e-9; theta += normalizedStep) {
+      const headingTrue = this._wrap2Pi(theta)
+      const twaSigned = this._wrapPi(headingTrue - twd)
+      const twa = Math.abs(twaSigned)
+      const state = this.getInterpolationState(tws, twa)
+
+      // VMC solver is intentionally constrained to valid polar domain only.
+      if (!state || state.tws !== 'in_range' || state.twa !== 'in_range') continue
+
+      const bspPolar = this.getBoatSpeed(tws, twa)
+      if (!Number.isFinite(bspPolar)) continue
+
+      const vbw = this._vectorFromPolar(bspPolar, headingTrue)
+      const vgPred = { x: vbw.x + current.x, y: vbw.y + current.y }
+      const vmc = this._dot2(vgPred, courseUnit)
+      if (!Number.isFinite(vmc)) continue
+
+      const candidate = {
+        headingTrue,
+        vmc,
+        twaSigned,
+        tack: twaSigned >= 0 ? 'starboard' : 'port'
+      }
+
+      if (includePoints) {
+        points.push({
+          headingTrue: Number(headingTrue.toFixed(5)),
+          twaSigned: Number(twaSigned.toFixed(5)),
+          vmc: Number(vmc.toFixed(4)),
+          tack: candidate.tack
+        })
+      }
+
+      if (candidate.tack === 'port') {
+        if (!bestPort || candidate.vmc > bestPort.vmc) bestPort = candidate
+      } else if (!bestStarboard || candidate.vmc > bestStarboard.vmc) {
+        bestStarboard = candidate
+      }
+    }
+
+    return {
+      port: bestPort,
+      starboard: bestStarboard,
+      points: includePoints ? points : undefined
+    }
+  }
+
+  getVmcPerformance({
+    tws,
+    twd,
+    course,
+    sog,
+    cog,
+    currentTwaSigned,
+    currentDrift,
+    currentSetTrue,
+    ignoreCurrent = false,
+    stepRad = Math.PI / 90,
+    ratioEpsilon = 1e-6
+  }) {
+    if (
+      !Number.isFinite(tws) ||
+      !Number.isFinite(twd) ||
+      !Number.isFinite(course) ||
+      !Number.isFinite(sog) ||
+      !Number.isFinite(cog) ||
+      !Number.isFinite(currentTwaSigned)
+    ) {
+      return null
+    }
+
+    const solved = this.solveVmcByTack({
+      tws,
+      twd,
+      course,
+      stepRad,
+      currentDrift,
+      currentSetTrue,
+      ignoreCurrent,
+      includePoints: false
+    })
+
+    const currentTack = currentTwaSigned >= 0 ? 'starboard' : 'port'
+    const currentBest = currentTack === 'starboard' ? solved.starboard : solved.port
+    const oppositeBest = currentTack === 'starboard' ? solved.port : solved.starboard
+    const actualVmc = sog * Math.cos(cog - course)
+
+    let ratio = null
+    if (Number.isFinite(actualVmc) && currentBest && Number.isFinite(currentBest.vmc) && currentBest.vmc > ratioEpsilon) {
+      ratio = actualVmc / currentBest.vmc
+    }
+
+    return {
+      actualVmc: Number.isFinite(actualVmc) ? actualVmc : null,
+      targetVmc: currentBest ? currentBest.vmc : null,
+      oppositeTackVmc: oppositeBest ? oppositeBest.vmc : null,
+      ratio: Number.isFinite(ratio) ? ratio : null,
+      targetHeadingTrue: currentBest ? currentBest.headingTrue : null,
+      oppositeTackHeadingTrue: oppositeBest ? oppositeBest.headingTrue : null,
+      portBest: solved.port,
+      starboardBest: solved.starboard
+    }
+  }
+
   /**
    * Sets the performance adjustment factor for all speed-related calculations.
    * This allows scaling the entire polar table performance up or down.

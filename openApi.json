@@ -582,6 +582,231 @@
           }
         }
       }
+    },
+
+    "/polars/{id}/queries/vmc-targets": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getVmcTargets",
+        "summary": "Best VMC targets by tack",
+        "description": "Returns best achievable VMC and heading on port and starboard for a given TWS, true wind direction, and target course. Current is optional; when omitted, current is assumed zero.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "twd",
+            "in": "query",
+            "required": true,
+            "description": "True wind direction in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "required": true,
+            "description": "Target course/bearing in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "required": false,
+            "description": "Angular sampling step in radians (default pi/90)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "currentDrift",
+            "in": "query",
+            "required": false,
+            "description": "Current drift speed in m/s (must be provided together with currentSetTrue)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "currentSetTrue",
+            "in": "query",
+            "required": false,
+            "description": "Current set direction in radians (must be provided together with currentDrift)",
+            "schema": { "type": "number" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "VMC targets per tack",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VmcTargetsResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/queries/vmc-performance": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getVmcPerformance",
+        "summary": "Compute six VMC performance outputs",
+        "description": "Computes actual VMC, target/opposite-tack VMC and headings, and VMC ratio. Current is optional; when omitted, current is assumed zero.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "twd",
+            "in": "query",
+            "required": true,
+            "description": "True wind direction in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "required": true,
+            "description": "Target course/bearing in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "sog",
+            "in": "query",
+            "required": true,
+            "description": "Speed over ground in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "cog",
+            "in": "query",
+            "required": true,
+            "description": "Course over ground true in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "currentTwaSigned",
+            "in": "query",
+            "required": true,
+            "description": "Signed true wind angle used to select current tack (port<0, starboard>=0)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "required": false,
+            "description": "Angular sampling step in radians (default pi/90)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "currentDrift",
+            "in": "query",
+            "required": false,
+            "description": "Current drift speed in m/s (must be provided together with currentSetTrue)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "currentSetTrue",
+            "in": "query",
+            "required": false,
+            "description": "Current set direction in radians (must be provided together with currentDrift)",
+            "schema": { "type": "number" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "VMC performance result",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VmcPerformanceResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/queries/vmc-curve": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getVmcCurve",
+        "summary": "VMC curve by heading",
+        "description": "Returns sampled heading-to-VMC points and best tack markers. Current is optional; when omitted, current is assumed zero.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" },
+          {
+            "name": "tws",
+            "in": "query",
+            "required": true,
+            "description": "True wind speed in m/s",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "twd",
+            "in": "query",
+            "required": true,
+            "description": "True wind direction in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "required": true,
+            "description": "Target course/bearing in radians (0..2pi)",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "required": false,
+            "description": "Angular sampling step in radians (default pi/90)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "currentDrift",
+            "in": "query",
+            "required": false,
+            "description": "Current drift speed in m/s (must be provided together with currentSetTrue)",
+            "schema": { "type": "number", "minimum": 0 }
+          },
+          {
+            "name": "currentSetTrue",
+            "in": "query",
+            "required": false,
+            "description": "Current set direction in radians (must be provided together with currentDrift)",
+            "schema": { "type": "number" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "VMC curve result",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VmcCurveResult" } } }
+          },
+          "400": {
+            "description": "Missing or invalid query parameters",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
     }
 
   },
@@ -904,6 +1129,71 @@
             "$ref": "#/components/schemas/PerformanceMetric",
             "description": "null when direction is reaching"
           }
+        }
+      },
+
+      "VmcTackTarget": {
+        "type": "object",
+        "properties": {
+          "headingTrue": { "type": "number", "nullable": true, "description": "Best heading true in radians for this tack" },
+          "vmc": { "type": "number", "nullable": true, "description": "Best VMC in m/s for this tack" }
+        }
+      },
+
+      "VmcTargetsResult": {
+        "type": "object",
+        "properties": {
+          "tws": { "type": "number", "description": "True wind speed (m/s)" },
+          "twd": { "type": "number", "description": "True wind direction (rad)" },
+          "course": { "type": "number", "description": "Target course/bearing (rad)" },
+          "step": { "type": "number", "description": "Sampling step (rad)" },
+          "port": { "$ref": "#/components/schemas/VmcTackTarget" },
+          "starboard": { "$ref": "#/components/schemas/VmcTackTarget" }
+        }
+      },
+
+      "VmcPerformanceResult": {
+        "type": "object",
+        "properties": {
+          "tws": { "type": "number" },
+          "twd": { "type": "number" },
+          "course": { "type": "number" },
+          "sog": { "type": "number" },
+          "cog": { "type": "number" },
+          "currentTwaSigned": { "type": "number" },
+          "step": { "type": "number" },
+          "actualVmc": { "type": "number", "nullable": true, "description": "Actual VMC over ground (m/s)" },
+          "targetVmc": { "type": "number", "nullable": true, "description": "Best VMC on current tack (m/s)" },
+          "oppositeTackVmc": { "type": "number", "nullable": true, "description": "Best VMC on opposite tack (m/s)" },
+          "ratio": { "type": "number", "nullable": true, "description": "actualVmc / targetVmc" },
+          "targetHeadingTrue": { "type": "number", "nullable": true, "description": "Best heading on current tack (rad)" },
+          "oppositeTackHeadingTrue": { "type": "number", "nullable": true, "description": "Best heading on opposite tack (rad)" }
+        }
+      },
+
+      "VmcCurvePoint": {
+        "type": "object",
+        "properties": {
+          "headingTrue": { "type": "number", "description": "Heading true sample (rad)" },
+          "twaSigned": { "type": "number", "description": "Signed TWA at heading sample (rad)" },
+          "vmc": { "type": "number", "description": "VMC at heading sample (m/s)" },
+          "tack": { "type": "string", "enum": ["port", "starboard"] }
+        }
+      },
+
+      "VmcCurveResult": {
+        "type": "object",
+        "properties": {
+          "tws": { "type": "number" },
+          "twd": { "type": "number" },
+          "course": { "type": "number" },
+          "step": { "type": "number" },
+          "points": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/VmcCurvePoint" }
+          },
+          "portBest": { "$ref": "#/components/schemas/VmcTackTarget" },
+          "starboardBest": { "$ref": "#/components/schemas/VmcTackTarget" }
         }
       }
 

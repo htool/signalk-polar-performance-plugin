@@ -375,6 +375,108 @@ describe('Polar manager/query API', () => {
     assert.ok(res.body.run)
   })
 
+  it('returns VMC targets per tack for valid query input', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/queries/vmc-targets']({
+      params: { id: storedId },
+      query: {
+        tws: '5.144',
+        twd: '0',
+        course: '0.78539816339'
+      }
+    }, res)
+
+    assert.equal(res.statusCode, 200)
+    assert.equal(typeof res.body.port, 'object')
+    assert.equal(typeof res.body.starboard, 'object')
+    assert.equal(typeof res.body.port.headingTrue, 'number')
+    assert.equal(typeof res.body.port.vmc, 'number')
+    assert.equal(typeof res.body.starboard.headingTrue, 'number')
+    assert.equal(typeof res.body.starboard.vmc, 'number')
+  })
+
+  it('rejects vmc-targets when only one current query parameter is provided', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/queries/vmc-targets']({
+      params: { id: storedId },
+      query: {
+        tws: '5.144',
+        twd: '0',
+        course: '1',
+        currentDrift: '0.2'
+      }
+    }, res)
+
+    assert.equal(res.statusCode, 400)
+    assert.match(res.body.error, /currentDrift/i)
+  })
+
+  it('returns vmc-performance values and ratio for full input set', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/queries/vmc-performance']({
+      params: { id: storedId },
+      query: {
+        tws: '5.144',
+        twd: '0',
+        course: '0.78539816339',
+        sog: '3.2',
+        cog: '0.9',
+        currentTwaSigned: '0.5'
+      }
+    }, res)
+
+    assert.equal(res.statusCode, 200)
+    assert.equal(typeof res.body.actualVmc, 'number')
+    assert.ok(res.body.targetVmc === null || typeof res.body.targetVmc === 'number')
+    assert.ok(res.body.oppositeTackVmc === null || typeof res.body.oppositeTackVmc === 'number')
+    assert.ok(res.body.targetHeadingTrue === null || typeof res.body.targetHeadingTrue === 'number')
+    assert.ok(res.body.oppositeTackHeadingTrue === null || typeof res.body.oppositeTackHeadingTrue === 'number')
+    assert.ok(res.body.ratio === null || typeof res.body.ratio === 'number')
+  })
+
+  it('returns vmc-curve points and best-by-tack markers', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/queries/vmc-curve']({
+      params: { id: storedId },
+      query: {
+        tws: '5.144',
+        twd: '0',
+        course: '1.0471975512',
+        step: '0.2'
+      }
+    }, res)
+
+    assert.equal(res.statusCode, 200)
+    assert.ok(Array.isArray(res.body.points))
+    assert.ok(res.body.points.length > 0)
+    assert.equal(typeof res.body.points[0].headingTrue, 'number')
+    assert.equal(typeof res.body.points[0].twaSigned, 'number')
+    assert.equal(typeof res.body.points[0].vmc, 'number')
+    assert.match(res.body.points[0].tack, /port|starboard/)
+    assert.equal(typeof res.body.portBest, 'object')
+    assert.equal(typeof res.body.starboardBest, 'object')
+  })
+
   it('searches the official ORC source and imports a certificate by RefNo', async () => {
     const calls = []
     global.fetch = async (url, opts) => {

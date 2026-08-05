@@ -122,6 +122,17 @@ The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`
 | `GET` | `/polars/:id/queries/speed?tws=<m/s>&twa=<rad>` | Interpolated boat speed and interpolation state for a single TWS/TWA point. |
 | `GET` | `/polars/:id/queries/targets?tws=<m/s>` | Optimal beat and run targets for a given TWS. |
 | `GET` | `/polars/:id/queries/performance?tws=<m/s>&twa=<rad>&bsp=<m/s>` | Speed and VMG performance ratios against the polar. |
+| `GET` | `/polars/:id/queries/vmc-targets?tws=<m/s>&twd=<rad>&course=<rad>[&step=<rad>][&currentDrift=<m/s>&currentSetTrue=<rad>]` | Best VMC and heading on port and starboard for the given conditions. |
+| `GET` | `/polars/:id/queries/vmc-performance?tws=<m/s>&twd=<rad>&course=<rad>&sog=<m/s>&cog=<rad>&currentTwaSigned=<rad>[&step=<rad>][&currentDrift=<m/s>&currentSetTrue=<rad>]` | Computes the six VMC performance outputs (actual, target/opposite tack, ratio, target/opposite headings). |
+| `GET` | `/polars/:id/queries/vmc-curve?tws=<m/s>&twd=<rad>&course=<rad>[&step=<rad>][&currentDrift=<m/s>&currentSetTrue=<rad>]` | Returns heading-sampled VMC points and best-by-tack markers for visualization. |
+
+### VMC query parameter rules
+
+- `step` is optional and defaults to `pi/90`.
+- `currentDrift` and `currentSetTrue` are optional as a pair:
+  - if both are omitted, the query assumes zero current
+  - if one is supplied without the other, the endpoint returns HTTP 400
+- VMC target/curve/performance optimization is constrained to valid in-range polar domain samples.
 
 ### Import endpoints
 
