@@ -17,6 +17,8 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 
+const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idle period before live input subscriptions are re-established
+
 const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
   activePolar: '',
@@ -52,6 +54,8 @@ module.exports = (app) => {
   let bspSmoother = null
   let hdgSmoother = null
   let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
+  let lifecycleWarningMap = new Map()
+  let lifecycleWarnings = []
 
   // Last-computed output values, updated by computeAndSend on every cycle.
   // Keys match the settings keys; values are SI numbers or null.
@@ -74,6 +78,52 @@ module.exports = (app) => {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  function _setLifecycleWarning(id, status, path) {
+    const safePath = path || 'unknown path'
+    const message = status === 'idle'
+      ? `Input ${id} is idle on ${safePath}; resubscribing`
+      : `Input ${id} is stale on ${safePath}`
+    lifecycleWarningMap.set(id, {
+      id,
+      status,
+      path: safePath,
+      message,
+      updatedAt: Date.now()
+    })
+    lifecycleWarnings = Array.from(lifecycleWarningMap.values())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  function _clearLifecycleWarning(id) {
+    if (!lifecycleWarningMap.has(id)) return
+    lifecycleWarningMap.delete(id)
+    lifecycleWarnings = Array.from(lifecycleWarningMap.values())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  function _wireHandlerWatchdog({ id, getPath, unsubscribe, subscribe }) {
+    return {
+      idlePeriod: STALE_RESUBSCRIBE_PERIOD,
+      onDelta: () => {
+        _clearLifecycleWarning(id)
+      },
+      onStale: () => {
+        if (!isRunning) return
+        const path = getPath()
+        app.debug(`[${plugin.id}] stale input ${id} on ${path}`)
+        _setLifecycleWarning(id, 'stale', path)
+      },
+      onIdle: () => {
+        if (!isRunning) return
+        const path = getPath()
+        app.debug(`[${plugin.id}] idle input ${id} on ${path}; resubscribing`)
+        _setLifecycleWarning(id, 'idle', path)
+        unsubscribe()
+        subscribe()
+      }
+    }
+  }
 
   function getSmootherClass(type) {
     switch (type) {
@@ -184,11 +234,13 @@ module.exports = (app) => {
       if (hdgSmoother)  { hdgSmoother.setSmootherClass(SC);  hdgSmoother.setSmootherOptions(so)  }
     }
 
-    // Speed source change — re-point the BSP handler; it auto-resubscribes
+    // Speed source change — re-point the BSP handler with an explicit unsubscribe/subscribe cycle.
     if (keys.includes('useSOG') && bspSmoother) {
+      bspSmoother.unsubscribe()
       bspSmoother.handler.path = settings.useSOG
         ? 'navigation.speedOverGround'
         : 'navigation.speedThroughWater'
+      bspSmoother.subscribe()
     }
 
     // Tack heading toggle
@@ -199,7 +251,12 @@ module.exports = (app) => {
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
           SmootherClass: SC,
-          smootherOptions: so
+          smootherOptions: so,
+          ..._wireHandlerWatchdog({
+            get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
+            unsubscribe: () => hdgSmoother?.unsubscribe(),
+            subscribe: () => hdgSmoother?.subscribe(false, true),
+          })
         })
       } else if (!settings.tackTrue && hdgSmoother) {
         hdgSmoother.terminate()
@@ -374,14 +431,11 @@ module.exports = (app) => {
         }
       }
     } else {
-      // Zero out to prevent stale values accumulating in the data model
+      // Clear these paths so no stale non-zero value remains on the SK bus
       if (settings.polarSpeed) {
-        add('performance.polarSpeed', 0, 'm/s',
-          'Polar chart boat speed for current TWS and TWA.')
-        add('performance.polarSpeedRatio', 0, 'ratio',
-          'Actual boat speed divided by polar speed.')
-        add('performance.targetSpeed', 0, 'm/s',
-          'Boat speed needed to achieve target VMG at the optimal angle.')
+        values.push({ path: 'performance.polarSpeed', value: null })
+        values.push({ path: 'performance.polarSpeedRatio', value: null })
+        values.push({ path: 'performance.targetSpeed', value: null })
       }
     }
 
@@ -850,7 +904,7 @@ module.exports = (app) => {
       // Returns null for any field not yet available (plugin not running,
       // no BSP source, polar not loaded, or boat in irons).
       router.get('/live', (req, res) => {
-        const wind = windSmoother ? windSmoother.polarValue : null
+        const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle : null
         const TWA       = Number.isFinite(TWAsigned) ? Math.abs(TWAsigned) : null
@@ -896,7 +950,7 @@ module.exports = (app) => {
         const rawBsp = si(bspSmoother?.handler?.value ?? null)
         const rawHdg = si(hdgSmoother?.handler?.value ?? null)
 
-        const wind = windSmoother ? windSmoother.polarValue : null
+        const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle     : null
         const BSP       = bspSmoother ? bspSmoother.value : null
@@ -941,7 +995,8 @@ module.exports = (app) => {
             }
           },
           outputs,
-          polarState
+          polarState,
+          lifecycleWarnings
         })
       })
 
@@ -1062,6 +1117,8 @@ module.exports = (app) => {
 
     start(options) {
       metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
+      lifecycleWarningMap = new Map()
+      lifecycleWarnings = []
 
       store = new PolarFileStore(app.getDataDirPath())
       importService = new ImportService(store)
@@ -1100,7 +1157,17 @@ module.exports = (app) => {
         app,
         pluginId: plugin.id,
         SmootherClass,
-        smootherOptions
+        smootherOptions,
+        ..._wireHandlerWatchdog({
+          id: 'wind.smoothed',
+          getPath: () => `${windSmoother?.polar?.pathMagnitude ?? 'environment.wind.speedTrue'}, ${windSmoother?.polar?.pathAngle ?? 'environment.wind.angleTrueWater'}`,
+          unsubscribe: () => windSmoother?.unsubscribe(),
+          subscribe: () => windSmoother?.subscribe(true, true),
+        }),
+        onDelta: () => {
+          _clearLifecycleWarning('wind.smoothed')
+          computeAndSend()
+        }
       })
 
       // Boat speed (STW or SOG depending on settings)
@@ -1113,7 +1180,13 @@ module.exports = (app) => {
         app,
         pluginId: plugin.id,
         SmootherClass,
-        smootherOptions
+        smootherOptions,
+        ..._wireHandlerWatchdog({
+          id: 'bsp.smoothed',
+          getPath: () => bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'),
+          unsubscribe: () => bspSmoother?.unsubscribe(),
+          subscribe: () => bspSmoother?.subscribe(),
+        })
       })
 
       // Optional heading handler for opposite-tack computation.
@@ -1123,12 +1196,15 @@ module.exports = (app) => {
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
           SmootherClass,
-          smootherOptions
+          smootherOptions,
+          ..._wireHandlerWatchdog({
+            id: 'hdg.smoothed',
+            getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
+            unsubscribe: () => hdgSmoother?.unsubscribe(),
+            subscribe: () => hdgSmoother?.subscribe(false, true),
+          })
         })
       }
-
-      // Trigger performance computation whenever a new smoothed wind value is ready
-      windSmoother.onChange = computeAndSend
 
       isRunning = true
       app.debug('Plugin started')
@@ -1141,6 +1217,8 @@ module.exports = (app) => {
       if (windSmoother) { windSmoother.terminate(); windSmoother = null }
       if (bspSmoother)  { bspSmoother.terminate();  bspSmoother = null  }
       if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }
+      lifecycleWarningMap = new Map()
+      lifecycleWarnings = []
       app.debug('Plugin stopped')
     }
   }

@@ -309,6 +309,7 @@ let settings     = null
 let polarsList   = []
 let importFormats = []
 let internetOnline = false
+let lifecycleWarnings = []
 
 // Canvas state
 let polar          = null
@@ -443,6 +444,7 @@ async function refreshLive() {
   const st = await apiGet('/status')
   if (st) {
     statusData = st
+    lifecycleWarnings = Array.isArray(st.lifecycleWarnings) ? st.lifecycleWarnings : []
     // Populate rawValues and outputValues from /status for the Inputs/Outputs pages
     if (st.inputs) {
       rawValues.tws = st.inputs.raw.tws
@@ -690,9 +692,9 @@ function _tickInputs() {
   setStale('in-bsp-smo', d?.bsp        == null)
 
   const warns = []
-  if (rawValues.tws == null) warns.push('environment.wind.speedTrue — no data from instruments')
-  if (rawValues.twa == null) warns.push('environment.wind.angleTrueWater — no data from instruments')
-  if (rawValues.bsp == null) warns.push((settings?.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater') + ' — no data from instruments')
+  lifecycleWarnings.forEach(w => {
+    if (w && typeof w.message === 'string') warns.push(w.message)
+  })
   updateWarnings(document.getElementById('in-warnings'), warns)
 }
 
