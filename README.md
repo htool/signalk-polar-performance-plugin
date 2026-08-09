@@ -37,6 +37,8 @@ The webapp is the primary interface for the plugin. Open it from the Signal K da
 
 A polar diagram on the left and live performance numbers on the right. The diagram shows a live TWS curve interpolated for the current wind speed, and two dots — the polar target speed (what the polar says you should be doing) and your actual boat speed — both at the current TWA. The targets section shows the beat and run angle and VMG interpolated from the polar for the current wind speed. Any data quality warnings appear at the bottom.
 
+The webapp also includes a dedicated Navigation page for VMC-related sailing decisions. It displays the live heading-to-VMC curve for the current polar and wind conditions, the current/target/opposite-tack VMC values, and the corresponding target headings. The full-screen plotter provides a Graph mode toggle so you can switch between Performance and Navigation overlays.
+
 ### Inputs
 
 Shows the raw instrument values as they arrive from Signal K (before smoothing) and the smoothed values actually used for computation, side by side. Useful for spotting stale sensors or checking whether the smoother settings make sense for your data. Any missing inputs are listed as warnings.
@@ -82,6 +84,10 @@ All three input channels — true wind speed, true wind angle, and boat speed �
 ### Speed source
 
 Choose between **speed through water** (`navigation.speedThroughWater`) and **speed over ground** (`navigation.speedOverGround`). Use SOG when a working paddlewheel is not available, but be aware that SOG includes current — this makes boat speed appear higher or lower depending on the tidal state.
+
+### Navigation / VMC outputs
+
+Enable the `vmcNavigation` output group to publish VMC-related navigation values. These calculations use the active polar together with the current course and current estimate from Signal K, and they are suppressed when no usable course bearing is available. The Navigation page and the plotter's Navigation mode use these outputs directly.
 
 ---
 
@@ -150,6 +156,19 @@ Automatically selects between beat and run depending on whether you are sailing 
 | `performance.tackTrue` | True heading on the opposite tack, calculated from the beat angle and current heading. Useful for tactical displays and layline charts. |
 
 Requires `navigation.headingTrue` to be available.
+
+### VMC navigation outputs
+
+| Path | Description |
+|------|-------------|
+| `performance.velocityMadeGoodOnCourse` | Actual velocity made good on course over ground. |
+| `performance.targetVelocityMadeGoodOnCourse` | Best achievable VMC on the current tack. |
+| `performance.oppositeTackVelocityMadeGoodOnCourse` | Best achievable VMC on the opposite tack. |
+| `performance.velocityMadeGoodOnCourseRatio` | Actual VMC divided by target VMC on the current tack. |
+| `performance.targetHeadingTrue` | Target true heading for maximum VMC on the current tack. |
+| `performance.oppositeTackHeadingTrue` | Target true heading for maximum VMC on the opposite tack. |
+
+These outputs are published when the VMC navigation output group is enabled. They depend on a valid course bearing and a usable current/ground-speed estimate, and they are used by the Navigation page and Navigation mode in the plotter.
 
 ### Smoothed inputs
 
@@ -240,7 +259,7 @@ The plugin includes a separate full-screen polar plotter page at:
 http://<your-server>:<port>/signalk-polar-performance-plugin/plotter.html
 ```
 
-This is a dark-themed, full-screen canvas display suitable for a chartplotter or secondary monitor. It shows all library curves, the live TWS curve, and the performance dots, and updates in real time.
+This is a dark-themed, full-screen canvas display suitable for a chartplotter or secondary monitor. It shows all library curves, the live TWS curve, and the performance dots, and updates in real time. The plotter now also has a Graph mode toggle so you can switch between Performance and Navigation views with navigation-aware overlays.
 
 ---
 
