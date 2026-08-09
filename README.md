@@ -200,6 +200,8 @@ Internet access is required only while searching or importing from ORC. In an is
 
 If you have a polar in a supported text format, you can import it directly from the **Polars** tab. The plugin currently supports Jieter-style semicolon CSV and Expedition-style delimited text. Optional metadata such as display name, sail number, boat type, year, source label, and notes can be added during text import.
 
+Native Polar JSON downloads are intended to be human-editable. When you download a native polar, the numeric axes and speeds are written in the display units declared in the file's `units` block, currently knots for speeds and degrees for angles. On import, the plugin reads that `units` block and converts the values back to canonical SI before storing the polar.
+
 The Jieter CSV format uses semicolons as separators. The first row is a header with `twa/tws` in the first column followed by wind speeds in knots. Each subsequent row is a TWA in degrees followed by boat speeds in knots. Beat and run angles appear as separate rows with one non-zero speed per row (the VMG for that wind speed column).
 
 **Example:**

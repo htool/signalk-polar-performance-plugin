@@ -151,6 +151,10 @@ function makeFetchResponse(body, status = 200) {
   }
 }
 
+function assertClose(actual, expected, tolerance = 1e-6) {
+  assert.ok(Math.abs(actual - expected) <= tolerance, `expected ${actual} to be within ${tolerance} of ${expected}`)
+}
+
 function makeApp(dataDir) {
   return {
     debug: () => {},
@@ -370,6 +374,39 @@ describe('Polar manager/query API', () => {
     const nativeBody = {
       content: JSON.stringify({
         ...CANONICAL_BODY,
+        units: {
+          tws: 'kn',
+          twa: 'deg',
+          boatSpeed: 'kn'
+        },
+        axes: {
+          tws: [6, 10],
+          twa: [43.2, 90, 152.1]
+        },
+        values: {
+          boatSpeedMatrix: [
+            [4.87, 5.16, 4.34],
+            [6.16, 6.51, 5.34]
+          ]
+        },
+        derived: {
+          rows: [
+            {
+              tws: 6,
+              beat: { twa: 43.2, tbs: 4.87, vmg: 3.55 },
+              run: { twa: 152.1, tbs: 4.34, vmg: 3.84 },
+              maxSpeed: 5.16,
+              maxSpeedAngle: 90
+            },
+            {
+              tws: 10,
+              beat: { twa: 43.2, tbs: 6.16, vmg: 4.49 },
+              run: { twa: 152.1, tbs: 5.34, vmg: 4.72 },
+              maxSpeed: 6.51,
+              maxSpeedAngle: 90
+            }
+          ]
+        },
         name: 'Native Import Boat',
         sailnumber: 'NATIVE-42',
         source: 'exported-native'
@@ -391,6 +428,18 @@ describe('Polar manager/query API', () => {
     assert.equal(res.body.name, 'Native Import Boat')
     assert.equal(res.body.sailnumber, 'NATIVE-42')
     assert.equal(res.body.source, 'exported-native')
+
+    res = makeResponse()
+    router.routes.get['/polars/:id']({ params: { id: importedId }, query: {} }, res)
+    assert.equal(res.statusCode, 200)
+    assert.deepEqual(res.body.units, {
+      tws: 'm/s',
+      twa: 'rad',
+      boatSpeed: 'm/s'
+    })
+    assertClose(res.body.axes.tws[0], CANONICAL_BODY.axes.tws[0], 5e-3)
+    assertClose(res.body.axes.twa[0], CANONICAL_BODY.axes.twa[0], 5e-3)
+    assertClose(res.body.values.boatSpeedMatrix[0][0], CANONICAL_BODY.values.boatSpeedMatrix[0][0], 5e-3)
   })
 
   it('exports a stored polar as native JSON download', () => {
@@ -408,6 +457,14 @@ describe('Polar manager/query API', () => {
     assert.equal(exported.id, storedId)
     assert.equal(exported.kind, 'polarTable')
     assert.equal(exported.name, 'API Boat')
+    assert.deepEqual(exported.units, {
+      tws: 'kn',
+      twa: 'deg',
+      boatSpeed: 'kn'
+    })
+    assertClose(exported.axes.tws[0], 6, 5e-3)
+    assertClose(exported.axes.twa[0], 43.2, 5e-3)
+    assertClose(exported.values.boatSpeedMatrix[0][0], 4.87, 5e-3)
   })
 
   it('imports Expedition-style delimited text into a canonical polar', () => {

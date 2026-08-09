@@ -1,5 +1,7 @@
 'use strict'
 
+const { normalizeImportedNativePolarResource } = require('./nativeUnits')
+
 class NativePolarImporter {
   constructor() {
     this.id = 'native'
@@ -19,7 +21,7 @@ class NativePolarImporter {
       throw new Error('Native Polar JSON must be an object')
     }
 
-    return { resource: parsed }
+    return { resource: normalizeImportedNativePolarResource(parsed) }
   }
 }
 

@@ -4,6 +4,7 @@ const { PolarTable } = require('./PolarTable')
 const PolarFileStore = require('./PolarFileStore')
 const { ImportService, ImportError, createTimestampedId } = require('./import/ImportService')
 const canonical = require('./import/canonical')
+const { exportNativePolarResource, inferNativeExportUnits } = require('./import/nativeUnits')
 const { parseMatrixPolarText } = require('./import/matrixText')
 const {
   MessageHandler,
@@ -18,6 +19,9 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 const DEFAULT_VMC_STEP_RAD = Math.PI / 90
+const META_SPEED_DISPLAY = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
+const META_ANGLE_DISPLAY = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
+const META_RATIO_DISPLAY = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
 
 const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idle period before live input subscriptions are re-established
 
@@ -1592,28 +1596,24 @@ module.exports = (app) => {
       // SK server's path metadata so user unit preferences (kn vs m/s etc.) are
       // respected. Falls back to safe defaults when SK metadata is unavailable.
       router.get('/meta', (req, res) => {
-        const speed = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
-        const angle = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
-        const ratio = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
-
         res.json({
-          tws:         { units: 'm/s', displayUnits: speed },
-          twa:         { units: 'rad', displayUnits: angle },
-          bsp:         { units: 'm/s', displayUnits: speed },
-          polarSpeed:  { units: 'm/s', displayUnits: speed },
-          performance: { units: 'ratio', displayUnits: ratio },
-          'curve.tbs': { units: 'm/s', displayUnits: speed },
-          'curve.vmg': { units: 'm/s', displayUnits: speed },
-          'curve.twa': { units: 'rad', displayUnits: angle },
-          'vmc':         { units: 'm/s', displayUnits: speed },
-          'vmc.heading': { units: 'rad', displayUnits: angle },
-          'vmc.ratio':   { units: 'ratio', displayUnits: ratio },
-          'performance.velocityMadeGoodOnCourse': { units: 'm/s', displayUnits: speed },
-          'performance.targetVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: speed },
-          'performance.oppositeTackVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: speed },
-          'performance.velocityMadeGoodOnCourseRatio': { units: 'ratio', displayUnits: ratio },
-          'performance.targetHeadingTrue': { units: 'rad', displayUnits: angle },
-          'performance.oppositeTackHeadingTrue': { units: 'rad', displayUnits: angle }
+          tws:         { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          twa:         { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          bsp:         { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          polarSpeed:  { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          performance: { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
+          'curve.tbs': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          'curve.vmg': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          'curve.twa': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          'vmc':         { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          'vmc.heading': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          'vmc.ratio':   { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
+          'performance.velocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          'performance.targetVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          'performance.oppositeTackVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          'performance.velocityMadeGoodOnCourseRatio': { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
+          'performance.targetHeadingTrue': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          'performance.oppositeTackHeadingTrue': { units: 'rad', displayUnits: META_ANGLE_DISPLAY }
         })
       })
 
@@ -1673,12 +1673,17 @@ module.exports = (app) => {
       router.get('/polars/:id/export/native', (req, res) => {
         try {
           const stored = getStore().readObject(req.params.id)
+          const exported = exportNativePolarResource(stored, inferNativeExportUnits({
+            tws: META_SPEED_DISPLAY,
+            twa: META_ANGLE_DISPLAY,
+            boatSpeed: META_SPEED_DISPLAY
+          }))
           const safeId = String(req.params.id || 'polar').replace(/[^A-Za-z0-9._-]+/g, '_')
           const filename = `${safeId || 'polar'}.json`
           res
             .type('application/json')
             .set('Content-Disposition', `attachment; filename="${filename}"`)
-            .send(JSON.stringify({ ...stored, id: req.params.id }, null, 2))
+            .send(JSON.stringify({ ...exported, id: req.params.id }, null, 2))
         } catch (e) {
           res.status(errorStatus(e)).json({ error: e.message })
         }
