@@ -133,6 +133,11 @@
     </div>
 
     <div class="settings-row">
+      <span class="settings-row-label">Graph</span>
+      <button class="btn-toggle" id="btn-graph-mode">Performance</button>
+    </div>
+
+    <div class="settings-row">
       <span class="settings-row-label">Performance</span>
       <div class="stepper">
         <button class="btn-step" id="btn-perf-minus" aria-label="Decrease">−</button>
@@ -190,10 +195,34 @@
       let liveTws        = null   // last fetched live TWS (m/s)
       let liveCurve      = null   // interpolated curve for liveTws
       let activePolarId  = null   // current active polar id
+      let graphMode      = 'performance'
+      let navCurve       = null
+      let navCurveKey    = ''
+      let lastLive       = null
+      let lastStatus     = null
+      let settingsState  = {}
 
       // Settings state — kept in sync with the server
       let perfAdjust     = 1          // multiplier (1 = 100%)
       let showAllTwsLines = true
+
+      function isFiniteNumber(value) {
+        return typeof value === 'number' && isFinite(value)
+      }
+
+      function normalizeMode(value) {
+        return value === 'navigation' ? 'navigation' : 'performance'
+      }
+
+      function updateGraphModeButton() {
+        if (graphMode === 'navigation') {
+          graphModeBtn.textContent = 'Navigation'
+          graphModeBtn.className = 'btn-toggle is-on'
+        } else {
+          graphModeBtn.textContent = 'Performance'
+          graphModeBtn.className = 'btn-toggle'
+        }
+      }
 
       // -----------------------------------------------------------------------
       // Fetch helpers
@@ -282,6 +311,89 @@
         }
       }
 
+      async function fetchNavigationCurve(status) {
+        if (!activePolarId || !status || !status.inputs || !status.inputs.smoothed) {
+          navCurve = null
+          navCurveKey = ''
+          return
+        }
+
+        var smoothed = status.inputs.smoothed
+        var tws = smoothed.tws
+        var twd = smoothed.twd
+        var course = smoothed.bearingTrue
+
+        if (!isFiniteNumber(tws) || !isFiniteNumber(twd) || !isFiniteNumber(course)) {
+          navCurve = null
+          navCurveKey = ''
+          return
+        }
+
+        var includeCurrent = !settingsState.ignoreCurrent
+        var currentDrift = smoothed.currentDrift
+        var currentSetTrue = smoothed.currentSetTrue
+
+        var key = [
+          activePolarId,
+          tws.toFixed(4),
+          twd.toFixed(4),
+          course.toFixed(4),
+          includeCurrent ? (isFiniteNumber(currentDrift) ? currentDrift.toFixed(4) : 'nc') : 'ignore',
+          includeCurrent ? (isFiniteNumber(currentSetTrue) ? currentSetTrue.toFixed(4) : 'nc') : 'ignore'
+        ].join('|')
+
+        if (key === navCurveKey) return
+
+        var query = '?tws=' + tws.toFixed(5) + '&twd=' + twd.toFixed(5) + '&course=' + course.toFixed(5) + '&step=' + STEP
+        if (includeCurrent && isFiniteNumber(currentDrift) && isFiniteNumber(currentSetTrue)) {
+          query += '&currentDrift=' + currentDrift.toFixed(5) + '&currentSetTrue=' + currentSetTrue.toFixed(5)
+        }
+
+        try {
+          navCurve = await fetchJSON(BASE + '/polars/' + activePolarId + '/queries/vmc-curve' + query)
+          navCurveKey = key
+        } catch (_) {
+          navCurve = null
+          navCurveKey = ''
+        }
+      }
+
+      function buildNavigationLive(status) {
+        var out = status && status.outputs ? status.outputs : {}
+        var smoothed = status && status.inputs && status.inputs.smoothed ? status.inputs.smoothed : {}
+        var routeSuppressed = !!(status && status.vmcRouteSuppressed)
+        var message = ''
+
+        if (!settingsState.vmcNavigation) {
+          message = 'VMC navigation outputs are disabled'
+        } else if (routeSuppressed) {
+          message = 'No active route - VMC markers suppressed'
+        }
+
+        return {
+          actualAngle: smoothed.cog,
+          actualValue: out['performance.velocityMadeGoodOnCourse'],
+          targetAngle: out['performance.targetHeadingTrue'],
+          targetValue: out['performance.targetVelocityMadeGoodOnCourse'],
+          oppositeAngle: out['performance.oppositeTackHeadingTrue'],
+          oppositeValue: out['performance.oppositeTackVelocityMadeGoodOnCourse'],
+          course: smoothed.bearingTrue,
+          twd: smoothed.twd,
+          routeSuppressed: routeSuppressed,
+          statusMessage: message
+        }
+      }
+
+      function renderGraph() {
+        polar.setMode(graphMode)
+        if (graphMode === 'navigation') {
+          polar.setNavigationData(navCurve, buildNavigationLive(lastStatus || {}))
+        } else {
+          polar.setLibraryData(twsList, curves, liveCurve)
+          if (lastLive) polar.setLiveData(lastLive, liveCurve)
+        }
+      }
+
       // -----------------------------------------------------------------------
       // Live poll — 1 Hz
       // -----------------------------------------------------------------------
@@ -293,6 +405,13 @@
         } catch (_) {
           return
         }
+        lastLive = live
+
+        try {
+          lastStatus = await fetchJSON(BASE + '/status')
+        } catch (_) {
+          // Keep last status snapshot if available; navigation rendering can still proceed.
+        }
 
         // Refresh live curve when TWS changes by more than 0.05 m/s (~0.1 kt)
         const newTws = live.tws
@@ -301,7 +420,10 @@
           liveCurve = await fetchCurveForTws(newTws)
         }
 
-        polar.setLiveData(live, liveCurve)
+        if (graphMode === 'navigation') {
+          await fetchNavigationCurve(lastStatus || {})
+        }
+        renderGraph()
       }
 
       // -----------------------------------------------------------------------
@@ -311,11 +433,15 @@
       async function loadSettings() {
         try {
           const s = await fetchJSON(BASE + '/settings')
+          settingsState = s || {}
           perfAdjust      = Number.isFinite(s.perfAdjust) ? s.perfAdjust : 1
           showAllTwsLines = s.showAllTwsLines !== false
+          graphMode       = normalizeMode(s.plotterGraphMode)
           updatePerfDisplay()
           updateTwsToggle()
+          updateGraphModeButton()
           polar.setShowAllTwsLines(showAllTwsLines)
+          renderGraph()
         } catch (_) { /* keep defaults */ }
       }
 
@@ -327,6 +453,7 @@
       var polarListPanel = document.getElementById('polar-list-panel')
       var perfDisplay    = document.getElementById('perf-display')
       var twsToggle      = document.getElementById('btn-tws-toggle')
+      var graphModeBtn   = document.getElementById('btn-graph-mode')
       var polarNameEl    = document.getElementById('polar-name-display')
       var polarListEl    = document.getElementById('polar-list-items')
 
@@ -368,7 +495,8 @@
         if (next === perfAdjust) return
         perfAdjust = next
         updatePerfDisplay()
-        putJSON(BASE + '/settings', { perfAdjust: perfAdjust }).then(function () {
+        putJSON(BASE + '/settings', { perfAdjust: perfAdjust }).then(function (s) {
+          settingsState = s || settingsState
           libraryVersion = ''   // force full curve reload — perfAdjust changes speeds but not the TWS list
           return refreshLibrary()
         }).catch(function () {})
@@ -387,7 +515,18 @@
         showAllTwsLines = !showAllTwsLines
         updateTwsToggle()
         polar.setShowAllTwsLines(showAllTwsLines)
-        putJSON(BASE + '/settings', { showAllTwsLines: showAllTwsLines }).catch(function () {})
+        putJSON(BASE + '/settings', { showAllTwsLines: showAllTwsLines }).then(function (s) {
+          settingsState = s || settingsState
+        }).catch(function () {})
+      })
+
+      graphModeBtn.addEventListener('click', function () {
+        graphMode = graphMode === 'performance' ? 'navigation' : 'performance'
+        updateGraphModeButton()
+        renderGraph()
+        putJSON(BASE + '/settings', { plotterGraphMode: graphMode }).then(function (s) {
+          settingsState = s || settingsState
+        }).catch(function () {})
       })
 
       // Polar picker
@@ -414,6 +553,7 @@
                   polarListPanel.classList.remove('open')
                   // Force library refresh on next cycle
                   libraryVersion = ''
+                  navCurveKey = ''
                 })
                 .catch(function () {})
             })

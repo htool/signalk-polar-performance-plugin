@@ -42,6 +42,13 @@ function fmtVal(value, metaKey, fallback) {
   return c.fn(v).toFixed(c.decimals) + '\u00a0' + c.symbol
 }
 
+function fmtVectorPolar(magnitude, angle, magnitudeMetaKey, angleMetaKey, magnitudeFallback, angleFallback) {
+  const mag = fmtVal(magnitude, magnitudeMetaKey, magnitudeFallback)
+  const ang = fmtVal(angle, angleMetaKey, angleFallback)
+  if (mag === '—' || ang === '—') return '—'
+  return `${mag} / ${ang}`
+}
+
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 async function apiGet(path, opts = {}) {
   try {
@@ -205,11 +212,12 @@ function buildTable(rows) {
   return tbl
 }
 
-function createToggle(checked, onChange) {
+function createToggle(checked, onChange, disabled = false) {
   const lbl = document.createElement('label')
   lbl.className = 'switch switch-text switch-primary mb-0'
   const cb = document.createElement('input')
   cb.type = 'checkbox'; cb.className = 'switch-input form-check-input'; cb.checked = !!checked
+  cb.disabled = !!disabled
   cb.addEventListener('change', () => onChange(cb.checked))
   const sl = document.createElement('span')
   sl.className = 'switch-label'; sl.setAttribute('data-on', 'On'); sl.setAttribute('data-off', 'Off')
@@ -304,6 +312,8 @@ function updateWarnings(el, items) {
 let liveData     = null  // from /live — smoothed values (tws, twa, bsp, polarSpeed, performance)
 let statusData   = null  // from /status — raw inputs + computed outputs
 let rawValues    = {}    // raw sensor values from /status, keyed by short name (tws/twa/bsp/hdg)
+let smoothedValues = {}   // smoothed sensor values from /status, keyed by short name
+let inputPaths = {}       // input path map from /status
 let outputValues = {}    // computed output values from /status, keyed by SK path string
 let settings     = null
 let polarsList   = []
@@ -313,17 +323,20 @@ let lifecycleWarnings = []
 
 // Canvas state
 let polar          = null
+let navPolar       = null
 let twsList        = []
 let curves         = {}
 let libraryVersion = ''
 let liveTws        = null
 let liveCurve      = null
+let liveVmcCurve   = null
+let liveVmcCurveKey = ''
 const STEP = (2 * Math.PI / 180).toFixed(6)
 
 let activePage = 'overview'
 
 // ── Output path definitions ───────────────────────────────────────────────────
-const OUTPUT_DEFS = [
+const PERFORMANCE_OUTPUT_DEFS = [
   { key: 'beatAngle',        label: 'Beat & run angles',
     paths: [
       { sk: 'performance/beatAngle',  label: 'Beat angle',           mk: 'twa',         fb: ANGLE_DEFAULT },
@@ -369,6 +382,15 @@ const OUTPUT_DEFS = [
       { sk: 'environment/wind/angleTrueWaterDamped', label: 'True wind angle (smoothed)', mk: 'twa', fb: ANGLE_DEFAULT },
       { sk: 'performance/boatSpeedDamped',           label: 'Boat speed (smoothed)',      mk: 'bsp', fb: SPEED_DEFAULT },
     ]},
+]
+
+const NAVIGATION_OUTPUT_DEFS = [
+  { sk: 'performance/velocityMadeGoodOnCourse',             label: 'Actual VMC',              mk: 'performance.velocityMadeGoodOnCourse',             fb: SPEED_DEFAULT },
+  { sk: 'performance/targetVelocityMadeGoodOnCourse',       label: 'Target VMC',              mk: 'performance.targetVelocityMadeGoodOnCourse',       fb: SPEED_DEFAULT },
+  { sk: 'performance/oppositeTackVelocityMadeGoodOnCourse', label: 'Opposite tack VMC',       mk: 'performance.oppositeTackVelocityMadeGoodOnCourse', fb: SPEED_DEFAULT },
+  { sk: 'performance/velocityMadeGoodOnCourseRatio',        label: 'VMC ratio',               mk: 'performance.velocityMadeGoodOnCourseRatio',        fb: RATIO_DEFAULT },
+  { sk: 'performance/targetHeadingTrue',                    label: 'Target heading (true)',   mk: 'performance.targetHeadingTrue',                    fb: ANGLE_DEFAULT },
+  { sk: 'performance/oppositeTackHeadingTrue',              label: 'Opposite tack heading',   mk: 'performance.oppositeTackHeadingTrue',              fb: ANGLE_DEFAULT },
 ]
 
 // Unique SK path id used as DOM element id (slashes → dashes)
@@ -434,6 +456,76 @@ async function refreshLibrary() {
   if (polar) polar.setLibraryData(twsList, curves, liveCurve)
 }
 
+async function refreshVmcCurve() {
+  const activeId = settings?.activePolar
+  const smoothed = statusData?.inputs?.smoothed
+  if (!activeId || !settings?.vmcNavigation || !smoothed) {
+    liveVmcCurve = null
+    liveVmcCurveKey = ''
+    return
+  }
+
+  const tws = smoothed.tws
+  const twd = smoothed.twd
+  const course = smoothed.bearingTrue
+  if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(course)) {
+    liveVmcCurve = null
+    liveVmcCurveKey = ''
+    return
+  }
+
+  const includeCurrent = !settings?.ignoreCurrent
+  const currentDrift = smoothed.currentDrift
+  const currentSetTrue = smoothed.currentSetTrue
+
+  const key = [
+    activeId,
+    tws.toFixed(4),
+    twd.toFixed(4),
+    course.toFixed(4),
+    includeCurrent ? (Number.isFinite(currentDrift) ? currentDrift.toFixed(4) : 'nc') : 'ignore',
+    includeCurrent ? (Number.isFinite(currentSetTrue) ? currentSetTrue.toFixed(4) : 'nc') : 'ignore'
+  ].join('|')
+
+  if (key === liveVmcCurveKey) return
+
+  let query = `/polars/${encodeURIComponent(activeId)}/queries/vmc-curve?tws=${tws.toFixed(5)}&twd=${twd.toFixed(5)}&course=${course.toFixed(5)}&step=${STEP}`
+  if (includeCurrent && Number.isFinite(currentDrift) && Number.isFinite(currentSetTrue)) {
+    query += `&currentDrift=${currentDrift.toFixed(5)}&currentSetTrue=${currentSetTrue.toFixed(5)}`
+  }
+
+  try {
+    const curve = await apiGet(query, { silent503: true })
+    if (curve) {
+      liveVmcCurve = curve
+      liveVmcCurveKey = key
+    }
+  } catch (_) {
+    liveVmcCurve = null
+    liveVmcCurveKey = ''
+  }
+}
+
+function updateOverviewNavigationCanvas() {
+  if (!navPolar) return
+  const navLive = {
+    actualAngle: smoothedValues?.cog,
+    actualValue: outputValues['performance/velocityMadeGoodOnCourse'],
+    targetAngle: outputValues['performance/targetHeadingTrue'],
+    targetValue: outputValues['performance/targetVelocityMadeGoodOnCourse'],
+    oppositeAngle: outputValues['performance/oppositeTackHeadingTrue'],
+    oppositeValue: outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'],
+    course: smoothedValues?.bearingTrue,
+    twd: smoothedValues?.twd,
+    routeSuppressed: !!statusData?.vmcRouteSuppressed,
+    statusMessage: !settings?.vmcNavigation
+      ? 'VMC navigation outputs are disabled'
+      : (statusData?.vmcRouteSuppressed ? 'No active route - VMC markers suppressed' : '')
+  }
+  navPolar.setMode('navigation')
+  navPolar.setNavigationData(liveVmcCurve, navLive)
+}
+
 // Main 1-second refresh: all data from plugin endpoints only
 async function refreshLive() {
   // 1. Plugin live snapshot (smoothed wind/bsp + polar state)
@@ -447,10 +539,37 @@ async function refreshLive() {
     lifecycleWarnings = Array.isArray(st.lifecycleWarnings) ? st.lifecycleWarnings : []
     // Populate rawValues and outputValues from /status for the Inputs/Outputs pages
     if (st.inputs) {
-      rawValues.tws = st.inputs.raw.tws
-      rawValues.twa = st.inputs.raw.twa
-      rawValues.bsp = st.inputs.raw.bsp
-      rawValues.hdg = st.inputs.raw.hdg ?? null
+      const raw = st.inputs.raw || {}
+      const smoothed = st.inputs.smoothed || {}
+      rawValues = {
+        tws: raw.tws ?? null,
+        twa: raw.twa ?? null,
+        bsp: raw.bsp ?? null,
+        hdg: raw.hdg ?? null,
+        sog: raw.sog ?? null,
+        cog: raw.cog ?? null,
+        twd: raw.twd ?? null,
+        bearingTrue: raw.bearingTrue ?? null,
+        currentDrift: raw.currentDrift ?? null,
+        currentSetTrue: raw.currentSetTrue ?? null
+      }
+      smoothedValues = {
+        tws: smoothed.tws ?? null,
+        twa: smoothed.twa ?? null,
+        bsp: smoothed.bsp ?? null,
+        hdg: smoothed.hdg ?? null,
+        sog: smoothed.sog ?? null,
+        cog: smoothed.cog ?? null,
+        twd: smoothed.twd ?? null,
+        bearingTrue: smoothed.bearingTrue ?? null,
+        currentDrift: smoothed.currentDrift ?? null,
+        currentSetTrue: smoothed.currentSetTrue ?? null
+      }
+      inputPaths = st.inputs.paths || {}
+    } else {
+      rawValues = {}
+      smoothedValues = {}
+      inputPaths = {}
     }
     if (st.outputs) {
       const converted = {}
@@ -473,6 +592,11 @@ async function refreshLive() {
       catch (_) {}
     }
     polar.setLiveData(liveData, liveCurve)
+  }
+
+  if (statusData && navPolar) {
+    await refreshVmcCurve()
+    updateOverviewNavigationCanvas()
   }
 
   // 4. Tick active page
@@ -498,56 +622,97 @@ function polarStateWarnings(d) {
 function _tickActivePage() {
   if (activePage === 'overview') _tickOverview()
   else if (activePage === 'inputs')  _tickInputs()
-  else if (activePage === 'outputs') _tickOutputs()
+  else if (activePage === 'performance') _tickPerformance()
+  else if (activePage === 'navigation') _tickNavigation()
 }
 
 // ── PAGE: Overview ────────────────────────────────────────────────────────────
 function _buildOverviewPage() {
-  const row = document.createElement('div')
-  row.className = 'row g-3'
+  const wrap = document.createElement('div')
 
-  // Canvas (left)
-  const left = document.createElement('div')
-  left.className = 'col-md-6'
-  const canvasEl = document.createElement('canvas')
-  canvasEl.id = 'polar-canvas'
-  canvasEl.className = 'polar-canvas'
-  left.appendChild(canvasEl)
+  const perfCard = createPageCard('Performance')
+  const navCard = createPageCard('Navigation')
 
-  // Live numbers (right) — skeleton built once; values updated in-place via setVal()
-  const right = document.createElement('div')
-  right.className = 'col-md-6'
-  right.appendChild(sectionHeading('Live Performance'))
-  right.appendChild(buildTable([
+  const perfRow = document.createElement('div')
+  perfRow.className = 'row g-3 mb-3'
+  const perfLeft = document.createElement('div')
+  perfLeft.className = 'col-md-6'
+  const perfCanvas = document.createElement('canvas')
+  perfCanvas.id = 'polar-canvas'
+  perfCanvas.className = 'polar-canvas'
+  perfLeft.appendChild(perfCanvas)
+
+  const perfRight = document.createElement('div')
+  perfRight.className = 'col-md-6'
+  perfRight.appendChild(sectionHeading('Live Performance'))
+  perfRight.appendChild(buildTable([
     { label: 'True Wind Speed',  id: 'ov-tws'  },
     { label: 'True Wind Angle',  id: 'ov-twa'  },
     { label: 'Boat Speed',       id: 'ov-bsp'  },
     { label: 'Polar Target',     id: 'ov-pol'  },
     { label: 'Performance',      id: 'ov-perf' },
   ]))
-
-  // Targets and warnings — appended lazily by _tickOverview
   const targetsDiv = document.createElement('div'); targetsDiv.id = 'ov-targets'
   const warningsDiv = document.createElement('div'); warningsDiv.id = 'ov-warnings'
-  right.appendChild(targetsDiv); right.appendChild(warningsDiv)
+  perfRight.appendChild(targetsDiv)
+  perfRight.appendChild(warningsDiv)
+  perfRow.appendChild(perfLeft)
+  perfRow.appendChild(perfRight)
 
-  row.appendChild(left); row.appendChild(right)
+  const navRow = document.createElement('div')
+  navRow.className = 'row g-3'
+  const navLeft = document.createElement('div')
+  navLeft.className = 'col-md-6'
+  const navCanvas = document.createElement('canvas')
+  navCanvas.id = 'nav-polar-canvas'
+  navCanvas.className = 'polar-canvas'
+  navLeft.appendChild(navCanvas)
+
+  const navRight = document.createElement('div')
+  navRight.className = 'col-md-6'
+  navRight.appendChild(sectionHeading('Live Navigation'))
+  navRight.appendChild(buildTable([
+    { label: 'Actual VMC',             id: 'ov-nav-actual' },
+    { label: 'Target VMC',             id: 'ov-nav-target' },
+    { label: 'Opposite tack VMC',      id: 'ov-nav-opp'    },
+    { label: 'VMC ratio',              id: 'ov-nav-ratio'  },
+    { label: 'Target heading (true)',  id: 'ov-nav-hdg'    },
+    { label: 'Opposite heading (true)',id: 'ov-nav-opp-hdg' },
+  ]))
+  const navWarningsDiv = document.createElement('div'); navWarningsDiv.id = 'ov-nav-warnings'
+  navRight.appendChild(navWarningsDiv)
+  navRow.appendChild(navLeft)
+  navRow.appendChild(navRight)
+
+  perfCard.body.appendChild(perfRow)
+  navCard.body.appendChild(navRow)
+  wrap.appendChild(perfCard.card)
+  wrap.appendChild(navCard.card)
 
   if (window.PolarCanvas) {
-    polar = new window.PolarCanvas(canvasEl, { showLibrary: false })
+    polar = new window.PolarCanvas(perfCanvas, { showLibrary: false, mode: 'performance' })
+    navPolar = new window.PolarCanvas(navCanvas, { showLibrary: false, showLiveCurve: false, mode: 'navigation' })
   }
 
   function _applyPolarData() {
-    if (!polar) return
-    if (Object.keys(meta).length) polar.setMeta(meta)
-    if (twsList.length) polar.setLibraryData(twsList, curves, liveCurve)
-    if (liveData)       polar.setLiveData(liveData, liveCurve)
+    if (polar) {
+      if (Object.keys(meta).length) polar.setMeta(meta)
+      if (twsList.length) polar.setLibraryData(twsList, curves, liveCurve)
+      if (liveData) polar.setLiveData(liveData, liveCurve)
+    }
+    if (navPolar) {
+      if (Object.keys(meta).length) navPolar.setMeta(meta)
+      updateOverviewNavigationCanvas()
+    }
   }
 
-  // Use ResizeObserver to resize and redraw the canvas whenever its CSS size
-  // changes — this handles both the async CoreUI stylesheet arriving and any
-  // later window resize events. We debounce with one RAF so the aspect-ratio
-  // constraint has settled before we read offsetWidth.
+  const onResize = () => {
+    if (activePage !== 'overview') return
+    if (polar) polar.resize()
+    if (navPolar) navPolar.resize()
+  }
+  window.addEventListener('resize', onResize)
+
   if (window.ResizeObserver) {
     let _rafPending = false
     const obs = new ResizeObserver(() => {
@@ -555,31 +720,37 @@ function _buildOverviewPage() {
       _rafPending = true
       requestAnimationFrame(() => {
         _rafPending = false
-        if (canvasEl.offsetWidth > 0 && polar) {
-          polar.resize()
+        if (perfCanvas.offsetWidth > 0 && navCanvas.offsetWidth > 0) {
+          if (polar) polar.resize()
+          if (navPolar) navPolar.resize()
           _applyPolarData()
           _tickOverview()
         }
       })
     })
-    obs.observe(canvasEl)
-    row._cleanup = () => {
+    obs.observe(perfCanvas)
+    obs.observe(navCanvas)
+    wrap._cleanup = () => {
       obs.disconnect()
       window.removeEventListener('resize', onResize)
+      polar = null
+      navPolar = null
     }
   } else {
-    // Fallback for browsers without ResizeObserver
     requestAnimationFrame(() => {
       if (polar) polar.resize()
+      if (navPolar) navPolar.resize()
       _applyPolarData()
       _tickOverview()
     })
-    row._cleanup = () => window.removeEventListener('resize', onResize)
+    wrap._cleanup = () => {
+      window.removeEventListener('resize', onResize)
+      polar = null
+      navPolar = null
+    }
   }
 
-  const onResize = () => { if (activePage === 'overview' && polar) polar.resize() }
-  window.addEventListener('resize', onResize)
-  return row
+  return wrap
 }
 
 function _tickOverview() {
@@ -615,6 +786,35 @@ function _tickOverview() {
   if (d?.tws != null && d?.polarState == null) warns.push('No polar loaded — configure in Polars')
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
+
+  setVal('ov-nav-actual',  fmtVal(outputValues['performance/velocityMadeGoodOnCourse'], 'performance.velocityMadeGoodOnCourse', SPEED_DEFAULT))
+  setVal('ov-nav-target',  fmtVal(outputValues['performance/targetVelocityMadeGoodOnCourse'], 'performance.targetVelocityMadeGoodOnCourse', SPEED_DEFAULT))
+  setVal('ov-nav-opp',     fmtVal(outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'], 'performance.oppositeTackVelocityMadeGoodOnCourse', SPEED_DEFAULT))
+  setVal('ov-nav-ratio',   fmtVal(outputValues['performance/velocityMadeGoodOnCourseRatio'], 'performance.velocityMadeGoodOnCourseRatio', RATIO_DEFAULT))
+  setVal('ov-nav-hdg',     fmtVal(outputValues['performance/targetHeadingTrue'], 'performance.targetHeadingTrue', ANGLE_DEFAULT))
+  setVal('ov-nav-opp-hdg', fmtVal(outputValues['performance/oppositeTackHeadingTrue'], 'performance.oppositeTackHeadingTrue', ANGLE_DEFAULT))
+
+  const navWarns = []
+  if (!settings?.vmcNavigation) {
+    navWarns.push('VMC navigation outputs are disabled')
+  } else {
+    if (d?.tws == null) navWarns.push('True wind speed — no data (environment.wind.speedTrue)')
+    if (d?.twa == null) navWarns.push('True wind angle — no data (environment.wind.angleTrueWater)')
+    if (d?.bsp == null) navWarns.push('Boat speed — no data')
+    if (smoothedValues?.sog == null || smoothedValues?.cog == null) navWarns.push('Ground vector — no data')
+    if (smoothedValues?.twd == null) navWarns.push('True wind direction — no data')
+    if (smoothedValues?.bearingTrue == null) navWarns.push('Course bearing true — no data')
+    if (!settings?.ignoreCurrent && (smoothedValues?.currentDrift == null || smoothedValues?.currentSetTrue == null)) {
+      navWarns.push('Current vector — no data')
+    }
+    if (statusData?.vmcRouteSuppressed) {
+      navWarns.push('No active route — VMC markers are suppressed until course bearing is available')
+    }
+    if (d?.tws != null && d?.polarState == null) navWarns.push('No polar loaded — configure in Polars')
+    navWarns.push(...polarStateWarnings(d))
+  }
+  updateWarnings(document.getElementById('ov-nav-warnings'), navWarns)
+  updateOverviewNavigationCanvas()
 }
 
 // ── PAGE: Inputs ──────────────────────────────────────────────────────────────
@@ -628,16 +828,10 @@ function _buildInputsPage() {
   if (pm) smRows.push({ label: pm.label, control: createNumberInput(pm.key, settings?.[pm.key], pm, true) })
   wrap.appendChild(_settingsTable(smRows))
 
-  wrap.appendChild(sectionHeading('True Wind Speed'))
+  wrap.appendChild(sectionHeading('True Wind Vector'))
   wrap.appendChild(buildTable([
-    { label: 'Raw  — environment.wind.speedTrue',      id: 'in-tws-raw' },
-    { label: 'Smoothed — plugin',                      id: 'in-tws-smo' },
-  ]))
-
-  wrap.appendChild(sectionHeading('True Wind Angle'))
-  wrap.appendChild(buildTable([
-    { label: 'Raw  — environment.wind.angleTrueWater', id: 'in-twa-raw' },
-    { label: 'Smoothed — plugin',                      id: 'in-twa-smo' },
+    { label: 'Raw — environment.wind.speedTrue + environment.wind.angleTrueWater',      id: 'in-tw-raw' },
+    { label: 'Smoothed — plugin',                                                      id: 'in-tw-smo' },
   ]))
 
   wrap.appendChild(sectionHeading('Boat Speed'))
@@ -654,13 +848,55 @@ function _buildInputsPage() {
     { label: 'Smoothed — plugin', id: 'in-bsp-smo' },
   ]))
 
-  // Heading — only if tackTrue enabled
-  if (settings?.tackTrue) {
-    wrap.appendChild(sectionHeading('Heading (True)'))
-    wrap.appendChild(buildTable([
-      { label: 'Raw — navigation.headingTrue', id: 'in-hdg-raw' },
-    ]))
-  }
+  wrap.appendChild(sectionHeading('Heading (True)'))
+  wrap.appendChild(buildTable([
+    {
+      label: 'Raw — navigation.headingTrue',
+      desc: 'Required only when Opposite tack heading output is enabled.',
+      id: 'in-hdg-raw'
+    },
+    { label: 'Smoothed — plugin', id: 'in-hdg-smo' },
+  ]))
+
+  wrap.appendChild(sectionHeading('Ground Vector'))
+  wrap.appendChild(buildTable([
+    {
+      label: 'Raw — navigation.speedOverGround + navigation.courseOverGroundTrue',
+      desc: 'Required only when VMC navigation is enabled.',
+      id: 'in-ground-raw'
+    },
+    { label: 'Smoothed — plugin', id: 'in-ground-smo' },
+  ]))
+
+  wrap.appendChild(sectionHeading('True Wind Direction'))
+  wrap.appendChild(buildTable([
+    {
+      label: 'Raw — environment.wind.directionTrue',
+      desc: 'Required only when VMC navigation is enabled.',
+      id: 'in-twd-raw'
+    },
+    { label: 'Smoothed — plugin', id: 'in-twd-smo' },
+  ]))
+
+  wrap.appendChild(sectionHeading('Course Bearing (True)'))
+  wrap.appendChild(buildTable([
+    {
+      label: 'Raw — navigation.course.calcValues.bearingTrue',
+      desc: 'Required only when VMC navigation is enabled.',
+      id: 'in-bearing-raw'
+    },
+    { label: 'Smoothed — plugin', id: 'in-bearing-smo' },
+  ]))
+
+  wrap.appendChild(sectionHeading('Current Vector'))
+  wrap.appendChild(buildTable([
+    {
+      label: 'Raw — environment.current.drift + environment.current.setTrue',
+      desc: 'Required only when VMC navigation is enabled and Ignore current is disabled.',
+      id: 'in-current-raw'
+    },
+    { label: 'Smoothed — plugin', id: 'in-current-smo' },
+  ]))
 
   const warningsDiv = document.createElement('div'); warningsDiv.id = 'in-warnings'
   wrap.appendChild(warningsDiv)
@@ -670,32 +906,92 @@ function _buildInputsPage() {
 }
 
 function _tickInputs() {
-  const d = liveData
+  const requiresHeading = !!settings?.performanceOutputs
+  const requiresVmc = !!settings?.vmcNavigation
+  const requiresCurrent = requiresVmc && !settings?.ignoreCurrent
 
-  setVal('in-tws-raw', fmtVal(rawValues.tws, 'tws', SPEED_DEFAULT))
-  setVal('in-tws-smo', fmtVal(d?.tws,        'tws', SPEED_DEFAULT))
-  setVal('in-twa-raw', fmtVal(rawValues.twa !== null && rawValues.twa !== undefined ? Math.abs(rawValues.twa) : null, 'twa', ANGLE_DEFAULT))
-  setVal('in-twa-smo', fmtVal(d?.twa !== null && d?.twa !== undefined ? Math.abs(d.twa) : null, 'twa', ANGLE_DEFAULT))
-  setVal('in-bsp-raw', fmtVal(rawValues.bsp, 'bsp', SPEED_DEFAULT))
-  setVal('in-bsp-smo', fmtVal(d?.bsp,        'bsp', SPEED_DEFAULT))
-  if (settings?.tackTrue) setVal('in-hdg-raw', fmtVal(rawValues.hdg, 'twa', ANGLE_DEFAULT))
+  const setRequiredValue = (id, required, value) => setVal(id, required ? value : '—')
+
+  setRequiredValue('in-tw-raw', true, fmtVectorPolar(rawValues.tws, rawValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-tw-smo', true, fmtVectorPolar(smoothedValues.tws, smoothedValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-bsp-raw', true, fmtVal(rawValues.bsp, 'bsp', SPEED_DEFAULT))
+  setRequiredValue('in-bsp-smo', true, fmtVal(smoothedValues.bsp, 'bsp', SPEED_DEFAULT))
+
+  setRequiredValue('in-hdg-raw', requiresHeading, fmtVal(rawValues.hdg, 'twa', ANGLE_DEFAULT))
+  setRequiredValue('in-hdg-smo', requiresHeading, fmtVal(smoothedValues.hdg, 'twa', ANGLE_DEFAULT))
+
+  setRequiredValue('in-ground-raw', requiresVmc, fmtVectorPolar(rawValues.sog, rawValues.cog, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-ground-smo', requiresVmc, fmtVectorPolar(smoothedValues.sog, smoothedValues.cog, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-twd-raw', requiresVmc, fmtVal(rawValues.twd, 'vmc.heading', ANGLE_DEFAULT))
+  setRequiredValue('in-twd-smo', requiresVmc, fmtVal(smoothedValues.twd, 'vmc.heading', ANGLE_DEFAULT))
+  setRequiredValue('in-bearing-raw', requiresVmc, fmtVal(rawValues.bearingTrue, 'vmc.heading', ANGLE_DEFAULT))
+  setRequiredValue('in-bearing-smo', requiresVmc, fmtVal(smoothedValues.bearingTrue, 'vmc.heading', ANGLE_DEFAULT))
+  setRequiredValue('in-current-raw', requiresCurrent, fmtVectorPolar(rawValues.currentDrift, rawValues.currentSetTrue, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-current-smo', requiresCurrent, fmtVectorPolar(smoothedValues.currentDrift, smoothedValues.currentSetTrue, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
 
   // Update boat speed raw label to show actual path
   const bspLabelEl = document.querySelector('#in-bsp-raw')?.closest('tr')?.cells?.[0]
-  if (bspLabelEl) bspLabelEl.textContent = 'Raw — ' + (settings?.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater')
+  if (bspLabelEl) {
+    const bspPath = inputPaths.bsp || (settings?.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater')
+    bspLabelEl.textContent = 'Raw — ' + bspPath
+  }
 
-  setStale('in-tws-raw', rawValues.tws == null)
-  setStale('in-tws-smo', d?.tws        == null)
-  setStale('in-twa-raw', rawValues.twa == null)
-  setStale('in-twa-smo', d?.twa        == null)
+  setStale('in-tw-raw', rawValues.tws == null || rawValues.twa == null)
+  setStale('in-tw-smo', smoothedValues.tws == null || smoothedValues.twa == null)
   setStale('in-bsp-raw', rawValues.bsp == null)
-  setStale('in-bsp-smo', d?.bsp        == null)
+  setStale('in-bsp-smo', smoothedValues.bsp == null)
+  setStale('in-hdg-raw', !requiresHeading || rawValues.hdg == null)
+  setStale('in-hdg-smo', !requiresHeading || smoothedValues.hdg == null)
+  setStale('in-ground-raw', !requiresVmc || rawValues.sog == null || rawValues.cog == null)
+  setStale('in-ground-smo', !requiresVmc || smoothedValues.sog == null || smoothedValues.cog == null)
+  setStale('in-twd-raw', !requiresVmc || rawValues.twd == null)
+  setStale('in-twd-smo', !requiresVmc || smoothedValues.twd == null)
+  setStale('in-bearing-raw', !requiresVmc || rawValues.bearingTrue == null)
+  setStale('in-bearing-smo', !requiresVmc || smoothedValues.bearingTrue == null)
+  setStale('in-current-raw', !requiresCurrent || rawValues.currentDrift == null || rawValues.currentSetTrue == null)
+  setStale('in-current-smo', !requiresCurrent || smoothedValues.currentDrift == null || smoothedValues.currentSetTrue == null)
 
-  const warns = []
+  const warns = new Set()
+
+  const addMissingWarning = (label, rawReady, smoothedReady) => {
+    if (!rawReady && !smoothedReady) {
+      warns.add(`${label}: no data`) 
+    } else if (!smoothedReady) {
+      warns.add(`${label}: no smoothed data yet`)
+    }
+  }
+
+  addMissingWarning('True wind vector', rawValues.tws != null && rawValues.twa != null, smoothedValues.tws != null && smoothedValues.twa != null)
+  addMissingWarning('Boat speed', rawValues.bsp != null, smoothedValues.bsp != null)
+
+  if (requiresHeading) {
+    addMissingWarning('Heading true', rawValues.hdg != null, smoothedValues.hdg != null)
+  }
+  if (requiresVmc) {
+    addMissingWarning('Ground vector', rawValues.sog != null && rawValues.cog != null, smoothedValues.sog != null && smoothedValues.cog != null)
+    addMissingWarning('True wind direction', rawValues.twd != null, smoothedValues.twd != null)
+    addMissingWarning('Course bearing true', rawValues.bearingTrue != null, smoothedValues.bearingTrue != null)
+    if (requiresCurrent) {
+      addMissingWarning('Current vector', rawValues.currentDrift != null && rawValues.currentSetTrue != null, smoothedValues.currentDrift != null && smoothedValues.currentSetTrue != null)
+    }
+  }
+
+  const relevantLifecycleIds = new Set(['wind.smoothed', 'bsp.smoothed'])
+  if (settings?.performanceOutputs) relevantLifecycleIds.add('hdg.smoothed')
+  if (settings?.vmcNavigation) {
+    relevantLifecycleIds.add('ground.smoothed')
+    relevantLifecycleIds.add('twd.smoothed')
+    relevantLifecycleIds.add('bearing.smoothed')
+    if (!settings?.ignoreCurrent) relevantLifecycleIds.add('current.smoothed')
+  }
+
   lifecycleWarnings.forEach(w => {
-    if (w && typeof w.message === 'string') warns.push(w.message)
+    if (w && typeof w.message === 'string' && relevantLifecycleIds.has(w.id)) {
+      warns.add(w.message)
+    }
   })
-  updateWarnings(document.getElementById('in-warnings'), warns)
+
+  updateWarnings(document.getElementById('in-warnings'), Array.from(warns))
 }
 
 // ── PAGE: Settings ─────────────────────────────────────────────────────────────
@@ -887,54 +1183,159 @@ function _smootherSelector() {
   return sel
 }
 
-// ── PAGE: Outputs ──────────────────────────────────────────────────────────────
-function _buildOutputsPage() {
-  const wrap = document.createElement('div'); wrap.id = 'outputs-wrap'
+// ── PAGE: Performance ──────────────────────────────────────────────────────────
+function _buildPerformancePage() {
+  const wrap = document.createElement('div'); wrap.id = 'performance-wrap'
+  const performanceOutputsEnabled = !!settings?.performanceOutputs
+
+  wrap.appendChild(sectionHeading('Performance Controls'))
+  wrap.appendChild(_settingsTable([
+    {
+      label: 'Enable performance outputs',
+      control: createToggle(performanceOutputsEnabled, checked => {
+        apiPut('/settings', { performanceOutputs: checked }).then(s => {
+          if (!s) return
+          settings = s
+          if (activePage === 'performance') switchPage('performance')
+        })
+      })
+    }
+  ]))
+
   wrap.appendChild(sectionHeading('Output Paths'))
 
-  OUTPUT_DEFS.forEach(def => {
+  PERFORMANCE_OUTPUT_DEFS.forEach(def => {
     const block = document.createElement('div'); block.className = 'mb-2'
 
-    // Header row: label left, toggle right — same two-column layout as settings tables
-    const enabled = !!(settings && settings[def.key])
-    const toggle = createToggle(enabled, checked => {
-      apiPut('/settings', { [def.key]: checked }).then(s => {
-        if (!s) return
-        settings = s
-        const sub = document.getElementById('out-sub-' + def.key)
-        if (sub) sub.style.display = checked ? '' : 'none'
-      })
-    })
-    block.appendChild(buildTable([{ label: def.label, control: toggle, rowClass: 'fw-semibold' }]))
+    // Group header + sub-table values are informational; master toggle controls publish state.
+    block.appendChild(buildTable([{ label: def.label, rowClass: 'fw-semibold' }]))
 
-    // Sub-table: individual paths + live values (shown only when enabled)
     const sub = document.createElement('div')
-    sub.id = 'out-sub-' + def.key
-    sub.style.display = enabled ? '' : 'none'
-    sub.style.display = enabled ? '' : 'none'
     sub.appendChild(buildTable(def.paths.map(p => ({
       label: p.label + '\u2002(' + p.sk.replace(/\//g, '.') + ')',
-      id: skId(p.sk),
+      id: 'perf-' + skId(p.sk),
     }))))
     block.appendChild(sub)
     wrap.appendChild(block)
   })
 
-  const warningsDiv = document.createElement('div'); warningsDiv.id = 'out-warnings'
+  const warningsDiv = document.createElement('div'); warningsDiv.id = 'perf-warnings'
   wrap.appendChild(warningsDiv)
 
-  _tickOutputs()
+  _tickPerformance()
   return wrap
 }
 
-function _tickOutputs() {
-  OUTPUT_DEFS.forEach(def => {
-    if (!settings || !settings[def.key]) return
+function _tickPerformance() {
+  const performanceOutputsEnabled = !!settings?.performanceOutputs
+  PERFORMANCE_OUTPUT_DEFS.forEach(def => {
+    if (!settings || !performanceOutputsEnabled) {
+      def.paths.forEach(p => {
+        const id = 'perf-' + skId(p.sk)
+        setVal(id, '—')
+        setStale(id, true)
+      })
+      return
+    }
     def.paths.forEach(p => {
-      setVal(skId(p.sk), fmtVal(outputValues[p.sk], p.mk, p.fb))
+      const id = 'perf-' + skId(p.sk)
+      setVal(id, fmtVal(outputValues[p.sk], p.mk, p.fb))
+      setStale(id, outputValues[p.sk] == null)
     })
   })
-  updateWarnings(document.getElementById('out-warnings'), polarStateWarnings(liveData))
+  if (!performanceOutputsEnabled) {
+    updateWarnings(document.getElementById('perf-warnings'), ['Performance outputs are disabled'])
+    return
+  }
+  updateWarnings(document.getElementById('perf-warnings'), polarStateWarnings(liveData))
+}
+
+// ── PAGE: Navigation ───────────────────────────────────────────────────────────
+function _buildNavigationPage() {
+  const wrap = document.createElement('div'); wrap.id = 'navigation-wrap'
+
+  wrap.appendChild(sectionHeading('VMC Controls'))
+  wrap.appendChild(_settingsTable([
+    {
+      label: 'Enable VMC navigation outputs',
+      control: createToggle(!!settings?.vmcNavigation, checked => {
+        apiPut('/settings', { vmcNavigation: checked }).then(s => {
+          if (s) {
+            settings = s
+            _tickNavigation()
+          }
+        })
+      })
+    },
+    {
+      label: 'Ignore current in VMC calculations',
+      desc: 'When enabled, VMC uses zero-current assumptions.',
+      control: createToggle(!!settings?.ignoreCurrent, checked => {
+        apiPut('/settings', { ignoreCurrent: checked }).then(s => {
+          if (s) {
+            settings = s
+            _tickNavigation()
+          }
+        })
+      })
+    }
+  ]))
+
+  wrap.appendChild(sectionHeading('VMC Outputs'))
+  wrap.appendChild(buildTable(NAVIGATION_OUTPUT_DEFS.map(def => ({
+    label: def.label + '\u2002(' + def.sk.replace(/\//g, '.') + ')',
+    id: 'nav-' + skId(def.sk),
+  }))))
+
+  const warningsDiv = document.createElement('div'); warningsDiv.id = 'nav-warnings'
+  wrap.appendChild(warningsDiv)
+
+  _tickNavigation()
+  return wrap
+}
+
+function _tickNavigation() {
+  const vmcEnabled = !!settings?.vmcNavigation
+  const requiresCurrent = vmcEnabled && !settings?.ignoreCurrent
+
+  NAVIGATION_OUTPUT_DEFS.forEach(def => {
+    const id = 'nav-' + skId(def.sk)
+    if (!vmcEnabled) {
+      setVal(id, '—')
+      setStale(id, true)
+      return
+    }
+    setVal(id, fmtVal(outputValues[def.sk], def.mk, def.fb))
+    setStale(id, outputValues[def.sk] == null)
+  })
+
+  const warns = new Set()
+  if (!vmcEnabled) {
+    warns.add('VMC navigation outputs are disabled')
+    updateWarnings(document.getElementById('nav-warnings'), Array.from(warns))
+    return
+  }
+
+  const d = liveData
+  if (d?.tws == null) warns.add('True wind speed - no data (environment.wind.speedTrue)')
+  if (d?.twa == null) warns.add('True wind angle - no data (environment.wind.angleTrueWater)')
+  if (d?.bsp == null) warns.add('Boat speed - no data')
+  if (statusData?.vmcRouteSuppressed) {
+    warns.add('No active route - VMC navigation is enabled but route-based targets are suppressed until course bearing is available')
+  }
+  if (d?.tws != null && d?.polarState == null) warns.add('No polar loaded - configure in Polars')
+  polarStateWarnings(d).forEach(msg => warns.add(msg))
+
+  const relevantLifecycleIds = new Set(['wind.smoothed', 'ground.smoothed', 'twd.smoothed', 'bearing.smoothed'])
+  if (requiresCurrent) relevantLifecycleIds.add('current.smoothed')
+
+  lifecycleWarnings.forEach(w => {
+    if (w && typeof w.message === 'string' && relevantLifecycleIds.has(w.id)) {
+      warns.add(w.message)
+    }
+  })
+
+  updateWarnings(document.getElementById('nav-warnings'), Array.from(warns))
 }
 
 // ── PAGE: Polars ───────────────────────────────────────────────────────────────
@@ -1274,7 +1675,8 @@ const PAGES = {
   overview: { title: 'Overview',          build: _buildOverviewPage  },
   inputs:   { title: 'Inputs',             build: _buildInputsPage   },
   settings: { title: 'Polar',              build: _buildSettingsPage },
-  outputs:  { title: 'Outputs',            build: _buildOutputsPage  },
+  performance: { title: 'Performance',     build: _buildPerformancePage },
+  navigation:  { title: 'Navigation',      build: _buildNavigationPage  },
   polars:   { title: 'Polar management',   build: _buildPolarsPage   },
 }
 

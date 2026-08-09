@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+- The webapp now separates outputs into dedicated Performance and Navigation pages, and the plotter adds a Graph mode toggle (Performance/Navigation) with navigation-aware overlays driven by live/status VMC data.
+
 ### Fixed
 - `/live` and `/status` endpoints now return `null` for `tws`/`twa` (and downstream fields) when the wind smoother has no data or is stale, instead of `0`. The guard was checking for the presence of the smoother object rather than its `ready` state.
 - `computeAndSend`: when the polar table lookup fails (boat outside polar range — in irons or above max TWS), the `performance.polarSpeed`, `performance.polarSpeedRatio`, and `performance.targetSpeed` SK paths are now written with `null` instead of `0`. Writing `0` was misleading because it is a valid-looking value rather than an explicit "no data" signal.

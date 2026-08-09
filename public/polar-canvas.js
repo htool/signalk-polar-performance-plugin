@@ -11,6 +11,9 @@
 (function (global) {
   'use strict'
 
+  const GRAPH_MARKER_RADIUS = 5
+  const BEARING_DOT_RADIUS = 7
+
   // ---------------------------------------------------------------------------
   // Unit helpers — all data from endpoints is SI (m/s, rad).
   // Display units are read from the /meta endpoint so the server's user
@@ -42,6 +45,7 @@
     // Display options
     this._showLibrary   = (opts && opts.showLibrary  !== undefined) ? opts.showLibrary  : true
     this._showLiveCurve = (opts && opts.showLiveCurve !== undefined) ? opts.showLiveCurve : true
+    this._mode          = (opts && opts.mode) ? opts.mode : 'performance'
 
     // Library data (set once per polar load)
     this._twsList  = []   // [number] — TWS values in m/s
@@ -51,11 +55,58 @@
     this._live      = null  // { tws, twa, bsp, polarSpeed, performance } — SI
     this._liveCurve = null  // curve for current live TWS (same shape as library curve)
 
+    // Navigation mode data
+    this._navCurve = null   // { points:[{headingTrue, vmc}], ... }
+    this._navLive  = null   // { actualAngle, actualValue, targetAngle, targetValue, oppositeAngle, oppositeValue, course, routeSuppressed, statusMessage }
+
     // Display unit metadata from GET /meta
     this._meta         = null
     this._formulaCache = new Map()
 
     this._initOffscreen()
+  }
+
+  function isFiniteNumber(value) {
+    return typeof value === 'number' && isFinite(value)
+  }
+
+  function wrapPi(a) {
+    let v = a
+    while (v > Math.PI) v -= 2 * Math.PI
+    while (v <= -Math.PI) v += 2 * Math.PI
+    return v
+  }
+
+  function orderAngularPoints(points, angleKey) {
+    const sorted = points.slice().sort(function (a, b) { return a[angleKey] - b[angleKey] })
+    if (sorted.length < 2) return sorted
+
+    let largestGap = -1
+    let splitIndex = 0
+    for (let i = 0; i < sorted.length; i++) {
+      const current = sorted[i][angleKey]
+      const next = sorted[(i + 1) % sorted.length][angleKey]
+      const gap = i === sorted.length - 1
+        ? (next + (2 * Math.PI)) - current
+        : next - current
+      if (gap > largestGap) {
+        largestGap = gap
+        splitIndex = i + 1
+      }
+    }
+
+    if (splitIndex <= 0 || splitIndex >= sorted.length) return sorted
+    return sorted.slice(splitIndex).concat(sorted.slice(0, splitIndex))
+  }
+
+  function drawHollowCircle(ctx, x, y, radius, strokeColor, fillColor, lineWidth) {
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, 2 * Math.PI)
+    ctx.fillStyle = fillColor
+    ctx.fill()
+    ctx.strokeStyle = strokeColor
+    ctx.lineWidth = lineWidth
+    ctx.stroke()
   }
 
   PolarCanvas.prototype._initOffscreen = function () {
@@ -86,6 +137,8 @@
 
   // Highest speed across all loaded curves in m/s.
   PolarCanvas.prototype._maxSpeedMs = function () {
+    if (this._mode === 'navigation') return this._maxNavigationSpeedMs()
+
     let maxMs = 0
     const allCurves = Object.values(this._curves)
     if (this._liveCurve) allCurves.push(this._liveCurve)
@@ -95,6 +148,22 @@
       }
     }
     return maxMs || (10 / 1.943844)  // default ~5 m/s
+  }
+
+  PolarCanvas.prototype._maxNavigationSpeedMs = function () {
+    let maxMs = 0
+    const points = this._navCurve && this._navCurve.points ? this._navCurve.points : []
+    for (let i = 0; i < points.length; i++) {
+      const vmc = points[i].vmc
+      if (isFiniteNumber(vmc)) maxMs = Math.max(maxMs, Math.abs(vmc))
+    }
+
+    const nav = this._navLive || {}
+    ;['actualValue', 'targetValue', 'oppositeValue'].forEach((k) => {
+      if (isFiniteNumber(nav[k])) maxMs = Math.max(maxMs, Math.abs(nav[k]))
+    })
+
+    return maxMs || (10 / 1.943844)
   }
 
   // Apply a formula string (e.g. 'value * 1.943844') to a value, using a cache
@@ -157,6 +226,11 @@
   // ---------------------------------------------------------------------------
 
   PolarCanvas.prototype._buildCache = function () {
+    if (this._mode === 'navigation') {
+      this._buildNavigationCache()
+      return
+    }
+
     const { w, h, cx, cy, R } = this._dims()
     const oc = this._offCtx
     const { stepMs, maxMs, labelFn, sym } = this._ringParams(this._maxSpeedMs())
@@ -256,12 +330,247 @@
         const curve = this._curves[tws]
         if (!curve || curve.points.length === 0) continue
         const color = this._curveColor(i)
-        this._drawCurve(oc, cx, cy, R, maxMs, curve, color, 1.2, 3)
+        this._drawCurve(oc, cx, cy, R, maxMs, curve, color, 1.2, GRAPH_MARKER_RADIUS)
         this._drawCurveLabel(oc, cx, cy, R, maxMs, curve, tws, color)
       }
     }
 
     this._cacheValid = true
+  }
+
+  PolarCanvas.prototype._buildNavigationCache = function () {
+    const { w, h, cx, cy, R } = this._dims()
+    const oc = this._offCtx
+    const { stepMs, maxMs, labelFn, sym } = this._ringParams(this._maxNavigationSpeedMs())
+
+    const dpr = window.devicePixelRatio || 1
+    this._offscreen.width  = Math.round(w * dpr)
+    this._offscreen.height = Math.round(h * dpr)
+    oc.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+    const cs      = getComputedStyle(this._canvas)
+    const bg      = cs.getPropertyValue('--polar-bg').trim()
+    const gridCol = cs.getPropertyValue('--polar-grid').trim()      || '#1e2535'
+    const lblCol  = cs.getPropertyValue('--polar-label').trim()     || '#4e5a6a'
+    const unitCol = cs.getPropertyValue('--polar-unit').trim()      || '#6b7a8d'
+
+    oc.clearRect(0, 0, w, h)
+    if (bg && bg !== 'transparent') {
+      oc.fillStyle = bg
+      oc.fillRect(0, 0, w, h)
+    }
+
+    const fontSize = Math.max(10, Math.min(13, R / 18))
+    oc.font = `${fontSize}px sans-serif`
+
+    for (let ringMs = stepMs; ringMs <= maxMs + stepMs * 0.01; ringMs += stepMs) {
+      const r = (ringMs / maxMs) * R
+      oc.beginPath()
+      oc.arc(cx, cy, r, 0, 2 * Math.PI)
+      oc.strokeStyle = gridCol
+      oc.lineWidth = 0.8
+      oc.stroke()
+
+      oc.fillStyle    = lblCol
+      oc.textAlign    = 'center'
+      oc.textBaseline = 'bottom'
+      oc.fillText(labelFn(ringMs), cx, cy - r - 2)
+    }
+
+    const outerR = R
+    oc.fillStyle    = unitCol
+    oc.font         = `${fontSize}px sans-serif`
+    oc.textAlign    = 'center'
+    oc.textBaseline = 'bottom'
+    oc.fillText(sym, cx, cy - outerR - fontSize - 2)
+
+    const headingDU = this._meta && this._meta['vmc.heading'] && this._meta['vmc.heading'].displayUnits
+    for (let deg = 0; deg < 360; deg += 30) {
+      const rad  = deg * Math.PI / 180
+      const sinA = Math.sin(rad)
+      const cosA = Math.cos(rad)
+
+      oc.beginPath()
+      oc.moveTo(cx, cy)
+      oc.lineTo(cx + R * sinA, cy - R * cosA)
+      oc.strokeStyle = gridCol
+      oc.lineWidth = 0.8
+      oc.stroke()
+
+      const labelR = R + fontSize * 1.6
+      const lx = cx + labelR * sinA
+      const ly = cy - labelR * cosA
+      const absSin = Math.abs(sinA)
+      oc.textAlign    = absSin < 0.1 ? 'center' : sinA > 0 ? 'left' : 'right'
+      oc.textBaseline = cosA > 0.1 ? 'bottom' : cosA < -0.1 ? 'top' : 'middle'
+      oc.fillStyle    = lblCol
+      oc.fillText(this._formatUnit(rad, headingDU, 'rad'), lx, ly)
+    }
+
+    this._cacheValid = true
+  }
+
+  PolarCanvas.prototype._drawNavigationCurve = function (ctx, cx, cy, R, maxMs) {
+    const points = this._navCurve && this._navCurve.points ? this._navCurve.points : []
+    if (!points.length) return
+
+    const tackColors = {
+      starboard: '#16a34a',
+      port: '#dc2626'
+    }
+
+    const drawTackCurve = function (tack) {
+      const tackPoints = orderAngularPoints(
+        points.filter(function (pt) {
+          return pt && pt.tack === tack && isFiniteNumber(pt.headingTrue) && isFiniteNumber(pt.vmc)
+        }),
+        'headingTrue'
+      )
+
+      if (!tackPoints.length) return
+
+      ctx.beginPath()
+      let started = false
+      for (let i = 0; i < tackPoints.length; i++) {
+        const pt = tackPoints[i]
+        const radial = Math.max(0, pt.vmc)
+        const xy = polarToXY(cx, cy, R, maxMs, pt.headingTrue, radial)
+        if (!started) {
+          ctx.moveTo(xy.x, xy.y)
+          started = true
+        } else {
+          ctx.lineTo(xy.x, xy.y)
+        }
+      }
+
+      ctx.strokeStyle = tackColors[tack]
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+
+    drawTackCurve('starboard')
+    drawTackCurve('port')
+  }
+
+  PolarCanvas.prototype._drawNavigationRay = function (ctx, cx, cy, R, angle, color) {
+    if (!isFiniteNumber(angle)) return
+    const x = cx + R * Math.sin(angle)
+    const y = cy - R * Math.cos(angle)
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(x, y)
+    ctx.strokeStyle = color
+    ctx.setLineDash([])
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // Waypoint marker on outer ring
+    ctx.beginPath()
+    ctx.arc(x, y, BEARING_DOT_RADIUS, 0, 2 * Math.PI)
+    ctx.fillStyle = color
+    ctx.fill()
+  }
+
+  PolarCanvas.prototype._drawNavigationMarker = function (ctx, cx, cy, R, maxMs, angle, value, color, radius) {
+    if (!isFiniteNumber(angle) || !isFiniteNumber(value)) return
+    const dotBg = getComputedStyle(this._canvas).getPropertyValue('--polar-dot-bg').trim() || '#fff'
+    const radial = Math.max(0, value)
+    const xy = polarToXY(cx, cy, R, maxMs, angle, radial)
+    const markerRadius = Number.isFinite(radius) ? radius : GRAPH_MARKER_RADIUS
+    drawHollowCircle(ctx, xy.x, xy.y, markerRadius, color, dotBg, 2)
+  }
+
+  PolarCanvas.prototype._drawVectorLine = function (ctx, cx, cy, R, maxMs, angle, value, color) {
+    if (!isFiniteNumber(angle) || !isFiniteNumber(value) || value <= 0) return
+    const xy = polarToXY(cx, cy, R, maxMs, angle, value)
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(xy.x, xy.y)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2.5
+    ctx.stroke()
+
+    const vx = xy.x - cx
+    const vy = xy.y - cy
+    const len = Math.hypot(vx, vy)
+    if (len < 1e-6) return
+
+    const ux = vx / len
+    const uy = vy / len
+    const nx = -uy
+    const ny = ux
+    const arrowLength = 11
+    const arrowWidth = 7
+    const bx = xy.x - ux * arrowLength
+    const by = xy.y - uy * arrowLength
+
+    ctx.beginPath()
+    ctx.moveTo(xy.x, xy.y)
+    ctx.lineTo(bx + nx * (arrowWidth / 2), by + ny * (arrowWidth / 2))
+    ctx.lineTo(bx - nx * (arrowWidth / 2), by - ny * (arrowWidth / 2))
+    ctx.closePath()
+    ctx.fillStyle = color
+    ctx.fill()
+  }
+
+  PolarCanvas.prototype._drawLivePerformanceCurve = function (ctx, cx, cy, R, maxMs, curve) {
+    if (!curve || !curve.points || curve.points.length === 0) return
+
+    const starColor = '#16a34a'
+    const portColor = '#dc2626'
+    const dotBg = getComputedStyle(this._canvas).getPropertyValue('--polar-dot-bg').trim() || '#fff'
+
+    const drawSide = (mirror, color) => {
+      ctx.beginPath()
+      let first = true
+      for (let i = 0; i < curve.points.length; i++) {
+        const pt = curve.points[i]
+        const angleRad = mirror ? 2 * Math.PI - pt.twa : pt.twa
+        const xy = polarToXY(cx, cy, R, maxMs, angleRad, pt.tbs)
+        if (first) {
+          ctx.moveTo(xy.x, xy.y)
+          first = false
+        } else {
+          ctx.lineTo(xy.x, xy.y)
+        }
+      }
+      ctx.strokeStyle = color
+      ctx.lineWidth = 2
+      ctx.stroke()
+
+      const markers = [curve.beat, curve.run]
+      for (let m = 0; m < markers.length; m++) {
+        const marker = markers[m]
+        if (!marker) continue
+        const angleRad = mirror ? 2 * Math.PI - marker.twa : marker.twa
+        const xy = polarToXY(cx, cy, R, maxMs, angleRad, marker.tbs)
+        drawHollowCircle(ctx, xy.x, xy.y, GRAPH_MARKER_RADIUS, color, dotBg, 2)
+      }
+    }
+
+    drawSide(false, starColor)
+    drawSide(true, portColor)
+  }
+
+  PolarCanvas.prototype._drawNavigationMessage = function (ctx, text, color) {
+    if (!text) return
+    ctx.font = '12px sans-serif'
+    const padX = 10
+    const padY = 8
+    const tw = ctx.measureText(text).width
+    const boxW = tw + padX * 2
+    const boxH = 28
+    const x = 8
+    const y = 8
+    ctx.fillStyle = 'rgba(13,17,23,0.82)'
+    ctx.fillRect(x, y, boxW, boxH)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.strokeRect(x, y, boxW, boxH)
+    ctx.fillStyle = color
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, x + padX, y + boxH / 2)
   }
 
   // Draw one polar curve (starboard half + port mirror) with optional beat/run dots.
@@ -288,13 +597,8 @@
         if (!marker) continue
         const angleRad = mirror ? 2 * Math.PI - marker.twa : marker.twa
         const { x, y } = polarToXY(cx, cy, R, maxMs, angleRad, marker.tbs)
-        ctx.beginPath()
-        ctx.arc(x, y, dotRadius, 0, 2 * Math.PI)
-        ctx.fillStyle = dotBg
-        ctx.fill()
-        ctx.strokeStyle = color
-        ctx.lineWidth   = Math.max(1.5, lineWidth * 0.8)
-        ctx.stroke()
+        const markerRadius = Number.isFinite(dotRadius) ? dotRadius : GRAPH_MARKER_RADIUS
+        drawHollowCircle(ctx, x, y, markerRadius, color, dotBg, Math.max(1.5, lineWidth * 0.8))
         // restore for next iteration
         ctx.strokeStyle = color
         ctx.lineWidth   = lineWidth
@@ -374,6 +678,11 @@
   // ---------------------------------------------------------------------------
 
   PolarCanvas.prototype._drawLive = function () {
+    if (this._mode === 'navigation') {
+      this._drawNavigationLive()
+      return
+    }
+
     const canvas = this._canvas
     const ctx    = this._ctx
     const { w, h, cx, cy, R } = this._dims()
@@ -391,37 +700,47 @@
 
     // --- Interpolated curve for current live TWS ---
     if (this._showLiveCurve && this._liveCurve && this._liveCurve.points.length > 0) {
-      const liveCurveColor = getComputedStyle(this._canvas).getPropertyValue('--polar-live-curve').trim() || 'rgba(255,255,255,0.9)'
-      this._drawCurve(ctx, cx, cy, R, maxMs, this._liveCurve, liveCurveColor, 2.0, 5)
+      this._drawLivePerformanceCurve(ctx, cx, cy, R, maxMs, this._liveCurve)
       if (this._liveCurve.tws != null) {
-        this._drawCurveLabel(ctx, cx, cy, R, maxMs, this._liveCurve, this._liveCurve.tws, liveCurveColor)
+        this._drawCurveLabel(ctx, cx, cy, R, maxMs, this._liveCurve, this._liveCurve.tws, '#16a34a')
       }
     }
 
-    // --- Performance dots — current tack side only ---
+    // --- Actual performance vector (blue) ---
     if (Number.isFinite(twa)) {
-      const style = getComputedStyle(this._canvas)
-      const dotPolar = style.getPropertyValue('--polar-dot-polar').trim() || '#facc15'
-      const dotBsp   = style.getPropertyValue('--polar-dot-bsp').trim()   || '#f97316'
-
-      // polarSpeed dot
-      if (Number.isFinite(live.polarSpeed) && live.polarSpeed > 0) {
-        const { x, y } = polarToXY(cx, cy, R, maxMs, twa, live.polarSpeed)
-        ctx.beginPath()
-        ctx.arc(x, y, 7, 0, 2 * Math.PI)
-        ctx.fillStyle = dotPolar
-        ctx.fill()
-      }
-
-      // actualBSP dot
-      if (Number.isFinite(live.bsp) && live.bsp > 0) {
-        const { x, y } = polarToXY(cx, cy, R, maxMs, twa, live.bsp)
-        ctx.beginPath()
-        ctx.arc(x, y, 7, 0, 2 * Math.PI)
-        ctx.fillStyle = dotBsp
-        ctx.fill()
-      }
+      this._drawVectorLine(ctx, cx, cy, R, maxMs, twa, live.bsp, '#2563eb')
     }
+  }
+
+  PolarCanvas.prototype._drawNavigationLive = function () {
+    const ctx = this._ctx
+    const { w, h, cx, cy, R } = this._dims()
+    const { maxMs } = this._ringParams(this._maxNavigationSpeedMs())
+
+    ctx.clearRect(0, 0, w, h)
+    ctx.drawImage(this._offscreen, 0, 0, w, h)
+
+    this._drawNavigationCurve(ctx, cx, cy, R, maxMs)
+
+    const nav = this._navLive || {}
+    const twd = nav.twd
+    const tackFromHeading = (heading) => {
+      if (!isFiniteNumber(heading) || !isFiniteNumber(twd)) return null
+      return wrapPi(heading - twd) >= 0 ? 'starboard' : 'port'
+    }
+    const tackColor = (tack) => tack === 'starboard' ? '#16a34a' : '#dc2626'
+
+    this._drawNavigationRay(ctx, cx, cy, R, nav.course, '#facc15')
+
+    const targetTack = tackFromHeading(nav.targetAngle)
+    const oppositeTack = tackFromHeading(nav.oppositeAngle)
+    this._drawNavigationMarker(ctx, cx, cy, R, maxMs, nav.targetAngle, nav.targetValue, tackColor(targetTack), GRAPH_MARKER_RADIUS)
+    this._drawNavigationMarker(ctx, cx, cy, R, maxMs, nav.oppositeAngle, nav.oppositeValue, tackColor(oppositeTack), GRAPH_MARKER_RADIUS)
+
+    this._drawVectorLine(ctx, cx, cy, R, maxMs, nav.actualAngle, nav.actualValue, '#2563eb')
+
+    const message = nav.statusMessage || (nav.routeSuppressed ? 'No active route - VMC markers suppressed' : '')
+    if (message) this._drawNavigationMessage(ctx, message, '#fbbf24')
   }
 
   // ---------------------------------------------------------------------------
@@ -449,6 +768,21 @@
     this._twsList    = twsList
     this._curves     = curves
     this._liveCurve  = liveCurve || null
+    this._cacheValid = false
+    this.draw()
+  }
+
+  PolarCanvas.prototype.setNavigationData = function (navCurve, navLive) {
+    this._navCurve = navCurve || null
+    this._navLive = navLive || null
+    this._cacheValid = false
+    this.draw()
+  }
+
+  PolarCanvas.prototype.setMode = function (mode) {
+    const next = mode === 'navigation' ? 'navigation' : 'performance'
+    if (this._mode === next) return
+    this._mode = next
     this._cacheValid = false
     this.draw()
   }
