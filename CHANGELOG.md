@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 - Added VMC navigation support with a dedicated Navigation page in the webapp, new navigation-oriented outputs for actual/target/opposite-tack VMC and headings, and a plotter Graph mode toggle for switching between Performance and Navigation overlays driven by live/status VMC data.
+- Added live curve endpoints for external widgets: `/live/curve` returns the current polar curve with beat/run optima, and `/live/vmc-curve` returns the current VMC curve with port/starboard optima, both derived from the plugin's current Signal K state.
 
 ### Fixed
 - `/live` and `/status` endpoints now return `null` for `tws`/`twa` (and downstream fields) when the wind smoother has no data or is stale, instead of `0`. The guard was checking for the presence of the smoother object rather than its `ready` state.

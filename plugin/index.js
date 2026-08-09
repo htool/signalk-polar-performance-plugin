@@ -1026,6 +1026,88 @@ module.exports = (app) => {
         }
       }
 
+      function getLiveStateSnapshot() {
+        const wind = windSmoother?.ready ? windSmoother.polarValue : null
+        const tws = wind ? wind.magnitude : null
+        const twd = twdSmoother ? twdSmoother.value : null
+        const course = bearingHandler ? bearingHandler.value : null
+        const current = currentSmoother?.polarValue
+
+        return {
+          polarId: settings.activePolar || null,
+          timestamp: new Date().toISOString(),
+          stale: !polarTable || !Number.isFinite(tws),
+          tws,
+          twd,
+          course,
+          currentDrift: current ? current.magnitude : null,
+          currentSetTrue: current ? current.angle : null
+        }
+      }
+
+      function buildLiveCurveResult() {
+        const live = getLiveStateSnapshot()
+        if (!polarTable || !Number.isFinite(live.tws)) {
+          return {
+            polarId: live.polarId,
+            timestamp: live.timestamp,
+            stale: true,
+            tws: toFixedNumber(live.tws, 5),
+            points: [],
+            beat: null,
+            run: null
+          }
+        }
+
+        return {
+          polarId: live.polarId,
+          timestamp: live.timestamp,
+          stale: live.stale,
+          tws: toFixedNumber(live.tws, 5),
+          ...buildCurveResult(polarTable, live.tws, DEFAULT_VMC_STEP_RAD)
+        }
+      }
+
+      function buildLiveVmcCurveResult() {
+        const live = getLiveStateSnapshot()
+        if (
+          !polarTable ||
+          !Number.isFinite(live.tws) ||
+          !Number.isFinite(live.twd) ||
+          !Number.isFinite(live.course)
+        ) {
+          return {
+            polarId: live.polarId,
+            timestamp: live.timestamp,
+            stale: true,
+            tws: toFixedNumber(live.tws, 5),
+            twd: toFixedNumber(live.twd, 5),
+            course: toFixedNumber(live.course, 5),
+            points: [],
+            portBest: null,
+            starboardBest: null
+          }
+        }
+
+        return {
+          polarId: live.polarId,
+          timestamp: live.timestamp,
+          stale: live.stale,
+          tws: toFixedNumber(live.tws, 5),
+          twd: toFixedNumber(live.twd, 5),
+          course: toFixedNumber(live.course, 5),
+          ...buildVmcCurveResult(
+            polarTable,
+            live.tws,
+            live.twd,
+            live.course,
+            DEFAULT_VMC_STEP_RAD,
+            live.currentDrift,
+            live.currentSetTrue
+          )
+        }
+      }
+
       function validatePolarResourceBody(resource) {
         return canonical.validateCanonicalPolarResourceBody(resource)
       }
@@ -1392,6 +1474,14 @@ module.exports = (app) => {
         })
       })
 
+      router.get('/live/curve', (_req, res) => {
+        res.json(buildLiveCurveResult())
+      })
+
+      router.get('/live/vmc-curve', (_req, res) => {
+        res.json(buildLiveVmcCurveResult())
+      })
+
       // Comprehensive snapshot of everything the plugin knows about its current state.
       // All values are SI units (m/s, rad). Use /meta for display unit conversion.
       //
@@ -1577,6 +1667,20 @@ module.exports = (app) => {
           res.json({ ...stored, id: req.params.id })
         } catch (e) {
           res.status(404).json({ error: e.message })
+        }
+      })
+
+      router.get('/polars/:id/export/native', (req, res) => {
+        try {
+          const stored = getStore().readObject(req.params.id)
+          const safeId = String(req.params.id || 'polar').replace(/[^A-Za-z0-9._-]+/g, '_')
+          const filename = `${safeId || 'polar'}.json`
+          res
+            .type('application/json')
+            .set('Content-Disposition', `attachment; filename="${filename}"`)
+            .send(JSON.stringify({ ...stored, id: req.params.id }, null, 2))
+        } catch (e) {
+          res.status(errorStatus(e)).json({ error: e.message })
         }
       })
 

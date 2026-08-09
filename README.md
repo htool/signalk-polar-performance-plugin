@@ -39,6 +39,13 @@ A polar diagram on the left and live performance numbers on the right. The diagr
 
 The webapp also includes a dedicated Navigation page for VMC-related sailing decisions. It displays the live heading-to-VMC curve for the current polar and wind conditions, the current/target/opposite-tack VMC values, and the corresponding target headings. The full-screen plotter provides a Graph mode toggle so you can switch between Performance and Navigation overlays.
 
+For external clients such as KIP or SKIP race steer widgets, the plugin also exposes live curve endpoints that return curve points only, driven by the plugin's current Signal K state:
+
+- `GET /plugins/signalk-polar-performance-plugin/live/curve`
+- `GET /plugins/signalk-polar-performance-plugin/live/vmc-curve`
+
+The first returns the current polar curve with beat/run optima. The second returns the current VMC curve with port/starboard optima.
+
 ### Inputs
 
 Shows the raw instrument values as they arrive from Signal K (before smoothing) and the smoothed values actually used for computation, side by side. Useful for spotting stale sensors or checking whether the smoother settings make sense for your data. Any missing inputs are listed as warnings.
@@ -295,6 +302,7 @@ Performance calculations are only as good as the inputs. A few things are worth 
 If you want to automate polar management or consume the plugin as a canonical polar provider, use the developer reference:
 
 - [Developer reference](docs/developer-reference.md) for the canonical `polarTable` structure and the plugin REST API.
+- The live curve endpoints above return curve data only; the Signal K bus remains the source of truth for the live deltas.
 - [openApi.json](openApi.json) for the authoritative machine-readable contract.
 
 ---

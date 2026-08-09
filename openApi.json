@@ -19,7 +19,7 @@
     },
     {
       "name": "polar-import",
-      "description": "Optional polar ingestion extension: discover supported external sources and text formats, convert them to canonical polar resources, and store them in the library."
+      "description": "Optional polar ingestion extension: discover supported external sources and text formats (including Native Polar JSON), convert them to canonical polar resources, and store them in the library."
     }
   ],
   "paths": {
@@ -74,12 +74,50 @@
       }
     },
 
+    "/live/curve": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getLivePolarCurve",
+        "summary": "Live polar curve",
+        "description": "Returns the current polar curve sampled from the plugin's live TWS state. The response contains curve points plus minimal metadata.",
+        "responses": {
+          "200": {
+            "description": "Live polar curve",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LivePolarCurveResult" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/live/vmc-curve": {
+      "get": {
+        "tags": ["polar-query"],
+        "operationId": "getLiveVmcCurve",
+        "summary": "Live VMC curve",
+        "description": "Returns the current VMC curve sampled from the plugin's live TWS/TWD/course state. The response contains curve points plus minimal metadata.",
+        "responses": {
+          "200": {
+            "description": "Live VMC curve",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LiveVmcCurveResult" }
+              }
+            }
+          }
+        }
+      }
+    },
+
     "/imports/formats": {
       "get": {
         "tags": ["polar-import"],
         "operationId": "listImportFormats",
         "summary": "List supported text import formats",
-        "description": "Returns the format identifiers accepted by the text import endpoint. These formats are conversion inputs only; imported data is stored as canonical polar resources.",
+        "description": "Returns the format identifiers accepted by the text import endpoint. Includes `native` for Native Polar (JSON). Imported data is stored as canonical polar resources.",
         "responses": {
           "200": {
             "description": "Supported text import formats",
@@ -101,7 +139,7 @@
         "tags": ["polar-import"],
         "operationId": "importPolarFromText",
         "summary": "Import a polar from text content",
-        "description": "Parses the supplied text payload in the specified format, converts it to the canonical polar resource model, stores it in the local library, and returns the assigned id.",
+        "description": "Parses the supplied text payload in the specified format, converts it to the canonical polar resource model, stores it in the local library, and returns the assigned id. Use `format=native` with a Native Polar JSON document in `content` to import exported native polars.",
         "parameters": [
           {
             "name": "format",
@@ -389,6 +427,32 @@
           "200": {
             "description": "Polar metadata",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PolarMeta" } } }
+          },
+          "404": {
+            "description": "Polar not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+
+    "/polars/{id}/export/native": {
+      "get": {
+        "tags": ["polar-manager"],
+        "operationId": "exportPolarNative",
+        "summary": "Download a native polar JSON resource",
+        "description": "Returns the stored native polar JSON resource as a downloadable `application/json` attachment.",
+        "parameters": [
+          { "$ref": "#/components/parameters/polarId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Native polar JSON",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PolarResource" }
+              }
+            }
           },
           "404": {
             "description": "Polar not found",
@@ -882,7 +946,7 @@
         "type": "object",
         "required": ["content"],
         "properties": {
-          "content": { "type": "string", "description": "Raw source text to parse and import." },
+          "content": { "type": "string", "description": "Raw source text to parse and import. For `format=native`, this must be a Native Polar JSON document string." },
           "name": { "type": "string", "description": "Optional human-readable label override." },
           "sailnumber": { "type": "string" },
           "boatType": { "type": "string" },
@@ -1077,6 +1141,20 @@
         }
       },
 
+      "LivePolarCurveResult": {
+        "allOf": [
+          { "$ref": "#/components/schemas/PolarCurveResult" },
+          {
+            "type": "object",
+            "properties": {
+              "polarId": { "type": "string", "nullable": true, "description": "Active polar id used to generate the curve." },
+              "timestamp": { "type": "string", "description": "ISO-8601 timestamp when the curve was generated." },
+              "stale": { "type": "boolean", "description": "True when the plugin does not currently have enough live state to generate the curve." }
+            }
+          }
+        ]
+      },
+
       "PolarSpeedResult": {
         "type": "object",
         "properties": {
@@ -1195,6 +1273,20 @@
           "portBest": { "$ref": "#/components/schemas/VmcTackTarget" },
           "starboardBest": { "$ref": "#/components/schemas/VmcTackTarget" }
         }
+      },
+
+      "LiveVmcCurveResult": {
+        "allOf": [
+          { "$ref": "#/components/schemas/VmcCurveResult" },
+          {
+            "type": "object",
+            "properties": {
+              "polarId": { "type": "string", "nullable": true, "description": "Active polar id used to generate the curve." },
+              "timestamp": { "type": "string", "description": "ISO-8601 timestamp when the curve was generated." },
+              "stale": { "type": "boolean", "description": "True when the plugin does not currently have enough live state to generate the curve." }
+            }
+          }
+        ]
       }
 
     }

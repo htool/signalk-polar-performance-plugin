@@ -101,6 +101,35 @@ async function apiDelete(path) {
   } catch (e) { showMessage('Delete failed: ' + e.message); return null }
 }
 
+async function downloadNativePolar(id) {
+  try {
+    const res = await fetch(
+      API + '/polars/' + encodeURIComponent(id) + '/export/native',
+      { credentials: 'same-origin' }
+    )
+    if (!res.ok) {
+      showMessage('Download failed: ' + res.status)
+      return
+    }
+
+    const blob = await res.blob()
+    const contentDisposition = res.headers.get('content-disposition') || ''
+    const match = contentDisposition.match(/filename="?([^";]+)"?/i)
+    const filename = match?.[1] || (id + '.json')
+
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(href)
+  } catch (e) {
+    showMessage('Download failed: ' + e.message)
+  }
+}
+
 // Fetch a single scalar value from the SK REST API
 // ── Message bar ───────────────────────────────────────────────────────────────
 let _msgTimer = null
@@ -1415,14 +1444,14 @@ function _buildPolarsPage() {
   addFormRow('Sail number', sailInp)
   addFormRow('Boat type', typeInp)
   addFormRow('Year', yearInp)
-  addFormRow('Source label', sourceInp, 'Optional metadata override stored with the canonical polar.')
+  addFormRow('Source label', sourceInp, 'Optional metadata override stored with the native polar.')
   importMetaTable.appendChild(importMetaBody)
   textWrap.appendChild(importMetaTable)
 
   const importTextArea = document.createElement('textarea')
   importTextArea.className = 'form-control form-control-sm mb-2'
   importTextArea.rows = 12
-  importTextArea.placeholder = 'Paste Jieter or Expedition polar text here'
+  importTextArea.placeholder = 'Paste Native Polar JSON, Jieter, or Expedition polar text here'
   importTextArea.style.fontFamily = 'monospace'
   importTextArea.style.fontSize = '0.8rem'
   textWrap.appendChild(importTextArea)
@@ -1592,7 +1621,7 @@ function _renderPolarsList(el) {
   el.innerHTML = ''
   if (!polarsList.length) {
     const p = document.createElement('p'); p.className = 'text-muted small mb-3'
-    p.textContent = 'No canonical polars stored yet.'
+    p.textContent = 'No polars stored yet.'
     el.appendChild(p)
     return
   }
@@ -1629,6 +1658,15 @@ function _renderPolarsList(el) {
 
     const tdA = document.createElement('td')
     tdA.className = 'polar-actions'
+
+    const dlBtn = document.createElement('button')
+    dlBtn.className = 'btn btn-sm btn-outline-secondary me-1'
+    dlBtn.textContent = 'Download'
+    dlBtn.addEventListener('click', async () => {
+      await downloadNativePolar(id)
+    })
+    tdA.appendChild(dlBtn)
+
     if (!isActive) {
       const actBtn = document.createElement('button')
       actBtn.className = 'btn btn-sm btn-outline-primary me-1'

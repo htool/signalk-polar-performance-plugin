@@ -297,11 +297,40 @@ describe('Polar manager/query API', () => {
     assert.equal(res.statusCode, 404)
   })
 
+  it('serves live curve endpoints with curve-only payloads', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.put['/polars/active']({ body: { id: storedId } }, res)
+    assert.equal(res.statusCode, 200)
+
+    res = makeResponse()
+    router.routes.get['/live/curve']({}, res)
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.body.polarId, storedId)
+    assert.equal(res.body.stale, true)
+    assert.ok(Array.isArray(res.body.points))
+    assert.equal(res.body.beat, null)
+    assert.equal(res.body.run, null)
+
+    res = makeResponse()
+    router.routes.get['/live/vmc-curve']({}, res)
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.body.polarId, storedId)
+    assert.equal(res.body.stale, true)
+    assert.ok(Array.isArray(res.body.points))
+    assert.equal(res.body.portBest, null)
+    assert.equal(res.body.starboardBest, null)
+  })
+
   it('lists supported text import formats and imports Jieter text', () => {
     let res = makeResponse()
     router.routes.get['/imports/formats']({}, res)
     assert.equal(res.statusCode, 200)
-    assert.deepEqual(res.body.map(entry => entry.id), ['jieter', 'expedition'])
+    assert.deepEqual(res.body.map(entry => entry.id), ['jieter', 'expedition', 'native'])
 
     res = makeResponse()
     router.routes.post['/imports/text/:format']({
@@ -335,6 +364,50 @@ describe('Polar manager/query API', () => {
     assert.equal(res.statusCode, 200)
     assert.ok(res.body.beat)
     assert.ok(res.body.run)
+  })
+
+  it('imports Native Polar JSON through the text import endpoint', () => {
+    const nativeBody = {
+      content: JSON.stringify({
+        ...CANONICAL_BODY,
+        name: 'Native Import Boat',
+        sailnumber: 'NATIVE-42',
+        source: 'exported-native'
+      })
+    }
+
+    let res = makeResponse()
+    router.routes.post['/imports/text/:format']({
+      params: { format: 'native' },
+      body: nativeBody
+    }, res)
+    assert.equal(res.statusCode, 201)
+    assert.match(res.body.id, /^native-42-\d{8}t\d{6}z(?:-\d+)?$/)
+    const importedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/meta']({ params: { id: importedId }, query: {} }, res)
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.body.name, 'Native Import Boat')
+    assert.equal(res.body.sailnumber, 'NATIVE-42')
+    assert.equal(res.body.source, 'exported-native')
+  })
+
+  it('exports a stored polar as native JSON download', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/export/native']({ params: { id: storedId } }, res)
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.headers['content-type'], 'application/json')
+    assert.match(String(res.headers['Content-Disposition']), /attachment; filename=/)
+    const exported = JSON.parse(res.body)
+    assert.equal(exported.id, storedId)
+    assert.equal(exported.kind, 'polarTable')
+    assert.equal(exported.name, 'API Boat')
   })
 
   it('imports Expedition-style delimited text into a canonical polar', () => {

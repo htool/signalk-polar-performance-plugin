@@ -5,6 +5,7 @@ const SourceRegistry = require('./SourceRegistry')
 const OrcSource = require('./OrcSource')
 const JieterImporter = require('./JieterImporter')
 const ExpeditionImporter = require('./ExpeditionImporter')
+const NativePolarImporter = require('./NativePolarImporter')
 const { applyMetadata, validateCanonicalPolarResourceBody } = require('./canonical')
 
 class ImportError extends Error {
@@ -67,7 +68,8 @@ class ImportService {
     this.now = options.now || (() => Date.now())
     this.registry = new FormatRegistry([
       new JieterImporter(),
-      new ExpeditionImporter()
+      new ExpeditionImporter(),
+      new NativePolarImporter()
     ])
     this.sourceRegistry = new SourceRegistry([
       new OrcSource({
