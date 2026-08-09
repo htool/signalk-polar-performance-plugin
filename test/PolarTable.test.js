@@ -169,6 +169,29 @@ describe('PolarTable — interpolation', () => {
       `Expected interpolated speed between 0 and beat speed, got ${speed}`)
   })
 
+  it('getBoatSpeedState allows below-range TWS when speed is still computable', () => {
+    const state = polar.getBoatSpeedState(SI.fromKnots(2), SI.fromDegrees(90))
+    assert.equal(state.canCompute, true)
+    assert.ok(state.speed !== null && state.speed >= 0)
+    assert.equal(state.state.tws, 'below_range')
+    assert.equal(state.state.twa, 'in_range')
+  })
+
+  it('getBoatSpeedState allows above-range TWS when speed is still computable', () => {
+    const state = polar.getBoatSpeedState(SI.fromKnots(30), SI.fromDegrees(90))
+    assert.equal(state.canCompute, true)
+    assert.ok(state.speed !== null && state.speed > 0)
+    assert.equal(state.state.tws, 'above_range')
+    assert.equal(state.state.twa, 'in_range')
+  })
+
+  it('getBoatSpeedState blocks angles beyond the extrapolation limit', () => {
+    const state = polar.getBoatSpeedState(SI.fromKnots(12), SI.fromDegrees(170))
+    assert.equal(state.canCompute, false)
+    assert.equal(state.speed, null)
+    assert.equal(state.state.twa, 'above_range')
+  })
+
 })
 
 describe('PolarTable — interpolation state', () => {

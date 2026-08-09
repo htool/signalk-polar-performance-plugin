@@ -6,6 +6,7 @@ const { ImportService, ImportError, createTimestampedId } = require('./import/Im
 const canonical = require('./import/canonical')
 const { parseMatrixPolarText } = require('./import/matrixText')
 const {
+  MessageHandler,
   createSmoothedPolar,
   createSmoothedHandler,
   SmoothedAngle,
@@ -24,6 +25,8 @@ const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
   activePolar: '',
   perfAdjust: 1,
+  performanceOutputs: true,
+  plotterGraphMode: 'performance',
   showAllTwsLines: true,
   smootherType: 'Exponential',
   smootherParamExponential: 1,
@@ -58,11 +61,12 @@ module.exports = (app) => {
   let hdgSmoother = null
   let groundSmoother = null
   let twdSmoother = null
-  let bearingSmoother = null
+  let bearingHandler = null
   let currentSmoother = null
   let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
   let lifecycleWarningMap = new Map()
   let lifecycleWarnings = []
+  let vmcRouteSuppressed = false
 
   // Last-computed output values, updated by computeAndSend on every cycle.
   // Keys match the settings keys; values are SI numbers or null.
@@ -88,6 +92,25 @@ module.exports = (app) => {
       'performance.targetHeadingTrue',
       'performance.oppositeTackHeadingTrue'
     ],
+  }
+
+  const PERFORMANCE_OUTPUT_KEYS = [
+    'beatAngle',
+    'beatVMG',
+    'targetTWA',
+    'optimumWindAngle',
+    'VMG',
+    'polarSpeed',
+    'maxSpeed',
+    'tackTrue',
+    'smoothedInputs'
+  ]
+
+  function isOutputEnabled(key) {
+    if (PERFORMANCE_OUTPUT_KEYS.includes(key)) return !!settings.performanceOutputs
+    if (!settings[key]) return false
+    if (key === 'vmcNavigation') return true
+    return true
   }
 
   const VMC_OUTPUT_META = [
@@ -191,6 +214,34 @@ module.exports = (app) => {
         updates: [{ meta: fresh }]
       })
     }
+  }
+
+  function _restoreBasePluginStatus() {
+    if (settings.activePolar && polarTable) {
+      app.setPluginStatus(`Polar '${settings.activePolar}' loaded`)
+    } else if (!settings.activePolar) {
+      app.setPluginStatus('No polar configured — set activePolar or upload a CSV file')
+    }
+  }
+
+  function _buildBearingHandler(onDelta) {
+    const handler = new MessageHandler(app, plugin.id, 'bearing')
+    handler.configure('navigation.course.calcValues.bearingTrue')
+    handler.onDelta = () => {
+      if (vmcRouteSuppressed) {
+        vmcRouteSuppressed = false
+        _restoreBasePluginStatus()
+      }
+      if (typeof onDelta === 'function') onDelta()
+    }
+    handler.onStale = () => {
+      if (!isRunning || !settings.vmcNavigation) return
+      if (vmcRouteSuppressed) return
+      vmcRouteSuppressed = true
+      app.setPluginStatus('No active route: VMC calculations are suppressed until course bearing is available.')
+    }
+    handler.subscribe()
+    return handler
   }
 
   function getSmootherClass(type) {
@@ -302,7 +353,6 @@ module.exports = (app) => {
       if (hdgSmoother)  { hdgSmoother.setSmootherClass(SC);  hdgSmoother.setSmootherOptions(so)  }
       if (groundSmoother)  { groundSmoother.setSmootherClass(SC);  groundSmoother.setSmootherOptions(so)  }
       if (twdSmoother)  { twdSmoother.setSmootherClass(SC);  twdSmoother.setSmootherOptions(so)  }
-      if (bearingSmoother) { bearingSmoother.setSmootherClass(SC); bearingSmoother.setSmootherOptions(so) }
       if (currentSmoother) { currentSmoother.setSmootherClass(SC); currentSmoother.setSmootherOptions(so) }
     }
 
@@ -316,8 +366,8 @@ module.exports = (app) => {
     }
 
     // Tack heading toggle
-    if (keys.includes('tackTrue')) {
-      if (settings.tackTrue && !hdgSmoother) {
+    if (keys.includes('tackTrue') || keys.includes('performanceOutputs')) {
+      if (isOutputEnabled('tackTrue') && !hdgSmoother) {
         const SC = getSmootherClass(settings.smootherType)
         const so = getSmootherOptions(settings.smootherType, settings)
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
@@ -330,19 +380,25 @@ module.exports = (app) => {
             subscribe: () => hdgSmoother?.subscribe(false, true),
           })
         })
-      } else if (!settings.tackTrue && hdgSmoother) {
+      } else if (!isOutputEnabled('tackTrue') && hdgSmoother) {
         hdgSmoother.terminate()
         hdgSmoother = null
       }
     }
 
-    if (keys.includes('vmcNavigation')) {
+    if (keys.includes('vmcNavigation') || keys.includes('ignoreCurrent')) {
       if (settings.vmcNavigation) {
         _publishOutputMetadata(VMC_OUTPUT_META)
         const SC = getSmootherClass(settings.smootherType)
         const so = getSmootherOptions(settings.smootherType, settings)
 
         if (!groundSmoother) {
+          const groundWatchdog = _wireHandlerWatchdog({
+            id: 'ground.smoothed',
+            getPath: () => `${groundSmoother?.polar?.pathMagnitude ?? 'navigation.speedOverGround'}, ${groundSmoother?.polar?.pathAngle ?? 'navigation.courseOverGroundTrue'}`,
+            unsubscribe: () => groundSmoother?.unsubscribe(),
+            subscribe: () => groundSmoother?.subscribe(true, true),
+          })
           groundSmoother = createSmoothedPolar({
             id: 'ground',
             pathMagnitude: 'navigation.speedOverGround',
@@ -352,69 +408,77 @@ module.exports = (app) => {
             pluginId: plugin.id,
             SmootherClass: SC,
             smootherOptions: so,
-            ..._wireHandlerWatchdog({
-              id: 'ground.smoothed',
-              getPath: () => `${groundSmoother?.polar?.pathMagnitude ?? 'navigation.speedOverGround'}, ${groundSmoother?.polar?.pathAngle ?? 'navigation.courseOverGroundTrue'}`,
-              unsubscribe: () => groundSmoother?.unsubscribe(),
-              subscribe: () => groundSmoother?.subscribe(true, true),
-            }),
-            onDelta: computeAndSend
+            ...groundWatchdog,
+            onDelta: () => {
+              groundWatchdog.onDelta()
+              computeAndSend()
+            }
           })
         }
-        if (!bearingSmoother) {
-          bearingSmoother = new SmoothedAngle(app, plugin.id, 'bearing', 'navigation.course.calcValues.bearingTrue', {
-            angleRange: '0to2pi',
-            subscribe: true,
-            SmootherClass: SC,
-            smootherOptions: so,
-            ..._wireHandlerWatchdog({
-              id: 'bearing.smoothed',
-              getPath: () => bearingSmoother?.handler?.path ?? 'navigation.course.calcValues.bearingTrue',
-              unsubscribe: () => bearingSmoother?.unsubscribe(),
-              subscribe: () => bearingSmoother?.subscribe(false, true),
-            }),
-            onDelta: computeAndSend
-          })
+        if (!bearingHandler) {
+          bearingHandler = _buildBearingHandler(computeAndSend)
         }
         if (!twdSmoother) {
+          const twdWatchdog = _wireHandlerWatchdog({
+            id: 'twd.smoothed',
+            getPath: () => twdSmoother?.handler?.path ?? 'environment.wind.directionTrue',
+            unsubscribe: () => twdSmoother?.unsubscribe(),
+            subscribe: () => twdSmoother?.subscribe(false, true),
+          })
           twdSmoother = new SmoothedAngle(app, plugin.id, 'twd', 'environment.wind.directionTrue', {
             angleRange: '0to2pi',
             subscribe: true,
             SmootherClass: SC,
             smootherOptions: so,
-            ..._wireHandlerWatchdog({
-              id: 'twd.smoothed',
-              getPath: () => twdSmoother?.handler?.path ?? 'environment.wind.directionTrue',
-              unsubscribe: () => twdSmoother?.unsubscribe(),
-              subscribe: () => twdSmoother?.subscribe(false, true),
-            }),
-            onDelta: computeAndSend
+            ...twdWatchdog,
+            onDelta: () => {
+              twdWatchdog.onDelta()
+              computeAndSend()
+            }
           })
         }
-        if (!currentSmoother) {
-          currentSmoother = createSmoothedPolar({
-            id: 'current',
-            pathMagnitude: 'environment.current.drift',
-            pathAngle: 'environment.current.setTrue',
-            subscribe: true,
-            app,
-            pluginId: plugin.id,
-            SmootherClass: SC,
-            smootherOptions: so,
-            ..._wireHandlerWatchdog({
+        if (!settings.ignoreCurrent) {
+          if (!currentSmoother) {
+            const currentWatchdog = _wireHandlerWatchdog({
               id: 'current.smoothed',
               getPath: () => `${currentSmoother?.polar?.pathMagnitude ?? 'environment.current.drift'}, ${currentSmoother?.polar?.pathAngle ?? 'environment.current.setTrue'}`,
               unsubscribe: () => currentSmoother?.unsubscribe(),
               subscribe: () => currentSmoother?.subscribe(true, true),
-            }),
-            onDelta: computeAndSend
-          })
+            })
+            currentSmoother = createSmoothedPolar({
+              id: 'current',
+              pathMagnitude: 'environment.current.drift',
+              pathAngle: 'environment.current.setTrue',
+              angleRange: '0to2pi',
+              subscribe: true,
+              app,
+              pluginId: plugin.id,
+              SmootherClass: SC,
+              smootherOptions: so,
+              ...currentWatchdog,
+              onDelta: () => {
+                currentWatchdog.onDelta()
+                computeAndSend()
+              }
+            })
+          }
+        } else {
+          if (currentSmoother) {
+            currentSmoother.terminate()
+            currentSmoother = null
+          }
+          _clearLifecycleWarning('current.smoothed')
         }
       } else {
         if (groundSmoother) { groundSmoother.terminate(); groundSmoother = null }
         if (twdSmoother) { twdSmoother.terminate(); twdSmoother = null }
-        if (bearingSmoother) { bearingSmoother.terminate(); bearingSmoother = null }
+        if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
         if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
+        _clearLifecycleWarning('current.smoothed')
+        if (vmcRouteSuppressed) {
+          vmcRouteSuppressed = false
+          _restoreBasePluginStatus()
+        }
       }
     }
 
@@ -424,8 +488,14 @@ module.exports = (app) => {
 
     // Nullify SK paths for any output toggle that was just switched off
     const disabledPaths = keys
-      .filter(k => OUTPUT_PATHS[k] && !settings[k])
+      .filter(k => OUTPUT_PATHS[k] && !isOutputEnabled(k))
       .flatMap(k => OUTPUT_PATHS[k])
+    if (keys.includes('performanceOutputs') && !settings.performanceOutputs) {
+      PERFORMANCE_OUTPUT_KEYS.forEach(k => {
+        const paths = OUTPUT_PATHS[k]
+        if (paths) disabledPaths.push(...paths)
+      })
+    }
     if (disabledPaths.length) {
       app.handleMessage(plugin.id, {
         updates: [{ values: disabledPaths.map(path => ({ path, value: null })) }]
@@ -453,9 +523,9 @@ module.exports = (app) => {
     if (hasPendingChanges) applyOptionChanges()
     if (!polarTable) return
 
-    const wind = windSmoother.polarValue
-    const TWS = wind.magnitude
-    const TWAsigned = wind.angle
+    const wind = windSmoother?.polarValue
+    const TWS = wind?.magnitude
+    const TWAsigned = wind?.angle
     if (!Number.isFinite(TWS) || !Number.isFinite(TWAsigned)) return
 
     // TWA is always positive for polar lookups; sign is tracked via `port`
@@ -486,7 +556,7 @@ module.exports = (app) => {
     }
 
     // Always emit smoothed inputs
-    if (settings.smoothedInputs) {
+    if (isOutputEnabled('smoothedInputs')) {
       add('environment.wind.angleTrueWaterDamped', TWAsigned, 'rad',
         'True Wind Angle after smoothing, negative to port.')
       if (Number.isFinite(BSP)) {
@@ -504,51 +574,51 @@ module.exports = (app) => {
     const targetVMG   = isUpwind ? beatVMG   : runVMG
 
     if (Number.isFinite(beatAngle)) {
-      if (settings.beatAngle) {
+      if (isOutputEnabled('beatAngle')) {
         add('performance.beatAngle', beatAngle * port, 'rad',
           'Optimal beat angle for current TWS, negative to port.')
       }
-      if (settings.targetTWA && isUpwind) {
+      if (isOutputEnabled('targetTWA') && isUpwind) {
         add('performance.targetAngle', beatAngle * port, 'rad',
           'Target TWA — auto-switches between beat and run, negative to port.')
       }
     }
 
     if (Number.isFinite(runAngle)) {
-      if (settings.beatAngle) {
+      if (isOutputEnabled('beatAngle')) {
         add('performance.gybeAngle', runAngle * port, 'rad',
           'Optimal run/gybe angle for current TWS, negative to port.')
       }
-      if (settings.targetTWA && !isUpwind) {
+      if (isOutputEnabled('targetTWA') && !isUpwind) {
         add('performance.targetAngle', runAngle * port, 'rad',
           'Target TWA — auto-switches between beat and run, negative to port.')
       }
     }
 
     if (Number.isFinite(beatVMG)) {
-      if (settings.beatVMG) {
+      if (isOutputEnabled('beatVMG')) {
         add('performance.beatAngleVelocityMadeGood', beatVMG, 'm/s',
           'Optimal beat VMG for current TWS.')
       }
-      if (settings.targetTWA && isUpwind) {
+      if (isOutputEnabled('targetTWA') && isUpwind) {
         add('performance.targetVelocityMadeGood', beatVMG, 'm/s',
           'Target VMG — auto-switches between beat and run.')
       }
     }
 
     if (Number.isFinite(runVMG)) {
-      if (settings.beatVMG) {
+      if (isOutputEnabled('beatVMG')) {
         add('performance.gybeAngleVelocityMadeGood', runVMG, 'm/s',
           'Optimal run VMG for current TWS.')
       }
-      if (settings.targetTWA && !isUpwind) {
+      if (isOutputEnabled('targetTWA') && !isUpwind) {
         add('performance.targetVelocityMadeGood', runVMG, 'm/s',
           'Target VMG — auto-switches between beat and run.')
       }
     }
 
     // Optimum wind angle: angular difference between current TWA and optimal angle
-    if (settings.optimumWindAngle) {
+    if (isOutputEnabled('optimumWindAngle')) {
       if (isUpwind && Number.isFinite(beatAngle)) {
         add('performance.optimumWindAngle', (TWA - beatAngle) * port, 'rad',
           'Difference between TWA and beat angle, negative to port.')
@@ -561,7 +631,7 @@ module.exports = (app) => {
     // Polar speed and performance ratios
     const polarSpeed = polarTable.getBoatSpeed(TWS, TWA)
     if (Number.isFinite(polarSpeed) && polarSpeed > 0) {
-      if (settings.polarSpeed) {
+      if (isOutputEnabled('polarSpeed')) {
         add('performance.polarSpeed', polarSpeed, 'm/s',
           'Polar chart boat speed for current TWS and TWA.')
 
@@ -581,7 +651,7 @@ module.exports = (app) => {
       }
 
       if (Number.isFinite(BSP)) {
-        if (settings.VMG && Number.isFinite(targetVMG) && targetVMG > 0) {
+        if (isOutputEnabled('VMG') && Number.isFinite(targetVMG) && targetVMG > 0) {
           const vmg = BSP * Math.cos(TWA)
           add('performance.velocityMadeGood', vmg, 'm/s',
             'Actual VMG based on current boat speed and TWA.')
@@ -595,7 +665,7 @@ module.exports = (app) => {
       }
     } else {
       // Clear these paths so no stale non-zero value remains on the SK bus
-      if (settings.polarSpeed) {
+      if (isOutputEnabled('polarSpeed')) {
         values.push({ path: 'performance.polarSpeed', value: null })
         values.push({ path: 'performance.polarSpeedRatio', value: null })
         values.push({ path: 'performance.targetSpeed', value: null })
@@ -603,7 +673,7 @@ module.exports = (app) => {
     }
 
     // Max speed for current TWS
-    if (settings.maxSpeed) {
+    if (isOutputEnabled('maxSpeed')) {
       const maxSpeed = polarTable.getMaxSpeed(TWS)
       const maxSpeedAngle = polarTable.getMaxSpeedAngle(TWS)
       if (Number.isFinite(maxSpeed)) {
@@ -615,7 +685,7 @@ module.exports = (app) => {
     }
 
     // Opposite tack heading
-    if (settings.tackTrue && Number.isFinite(HDG) && Number.isFinite(targetAngle)) {
+    if (isOutputEnabled('tackTrue') && Number.isFinite(HDG) && Number.isFinite(targetAngle)) {
       let tack = port < 0 ? HDG - targetAngle : HDG + targetAngle
       tack = ((tack % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
       add('performance.tackTrue', tack, 'rad',
@@ -628,7 +698,7 @@ module.exports = (app) => {
       const vmc = polarTable.getVmcPerformance({
         tws: TWS,
         twd: twdSmoother?.value,
-        course: bearingSmoother?.value,
+        course: bearingHandler?.value,
         sog: ground?.magnitude,
         cog: ground?.angle,
         currentTwaSigned: TWAsigned,
@@ -1340,7 +1410,7 @@ module.exports = (app) => {
         const rawSog = si(groundSmoother?.polar?.magnitudeHandler?.value ?? null)
         const rawCog = si(groundSmoother?.polar?.angleHandler?.value ?? null)
         const rawTwd = si(twdSmoother?.handler?.value ?? null)
-        const rawBearing = si(bearingSmoother?.handler?.value ?? null)
+        const rawBearing = si(bearingHandler?.value ?? null)
         const rawCurrentDrift = si(currentSmoother?.polar?.magnitudeHandler?.value ?? null)
         const rawCurrentSet = si(currentSmoother?.polar?.angleHandler?.value ?? null)
 
@@ -1353,7 +1423,7 @@ module.exports = (app) => {
         const SOG       = ground ? ground.magnitude : null
         const COG       = ground ? ground.angle : null
         const TWD       = twdSmoother ? twdSmoother.value : null
-        const BEARING   = bearingSmoother ? bearingSmoother.value : null
+        const BEARING   = bearingHandler ? bearingHandler.value : null
         const current = currentSmoother?.polarValue
         const CURRENT_DRIFT = current ? current.magnitude : null
         const CURRENT_SET = current ? current.angle : null
@@ -1368,7 +1438,7 @@ module.exports = (app) => {
         // computed in the last cycle (present in lastOutputs).
         const outputs = {}
         Object.entries(OUTPUT_PATHS).forEach(([key, paths]) => {
-          if (!settings[key]) return
+          if (!isOutputEnabled(key)) return
           paths.forEach(path => {
             const v = lastOutputs[path]
             outputs[path] = Number.isFinite(v) ? si(v) : null
@@ -1381,7 +1451,7 @@ module.exports = (app) => {
               tws: rawTws,
               twa: rawTwa,
               bsp: rawBsp,
-              ...(settings.tackTrue ? { hdg: rawHdg } : {}),
+              ...(isOutputEnabled('tackTrue') ? { hdg: rawHdg } : {}),
               ...(settings.vmcNavigation ? {
                 sog: rawSog,
                 cog: rawCog,
@@ -1395,7 +1465,7 @@ module.exports = (app) => {
               tws: si(TWS),
               twa: si(TWAsigned),
               bsp: si(BSP),
-              ...(settings.tackTrue && HDG != null ? { hdg: si(HDG) } : {}),
+              ...(isOutputEnabled('tackTrue') && HDG != null ? { hdg: si(HDG) } : {}),
               ...(settings.vmcNavigation ? {
                 sog: si(SOG),
                 cog: si(COG),
@@ -1409,7 +1479,7 @@ module.exports = (app) => {
               tws: 'environment.wind.speedTrue',
               twa: 'environment.wind.angleTrueWater',
               bsp: bspPath,
-              ...(settings.tackTrue ? { hdg: 'navigation.headingTrue' } : {}),
+              ...(isOutputEnabled('tackTrue') ? { hdg: 'navigation.headingTrue' } : {}),
               ...(settings.vmcNavigation ? {
                 sog: 'navigation.speedOverGround',
                 cog: 'navigation.courseOverGroundTrue',
@@ -1422,7 +1492,8 @@ module.exports = (app) => {
           },
           outputs,
           polarState,
-          lifecycleWarnings
+          lifecycleWarnings,
+          vmcRouteSuppressed
         })
       })
 
@@ -1554,6 +1625,7 @@ module.exports = (app) => {
       metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
+      vmcRouteSuppressed = false
 
       store = new PolarFileStore(app.getDataDirPath())
       importService = new ImportService(store)
@@ -1627,7 +1699,7 @@ module.exports = (app) => {
       // Optional heading handler for opposite-tack computation.
       // Uses SmoothedAngle (vector-based) to avoid the 0/2π wraparound
       // discontinuity that scalar smoothing would produce near north.
-      if (settings.tackTrue) {
+      if (isOutputEnabled('tackTrue')) {
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
           SmootherClass,
@@ -1643,6 +1715,12 @@ module.exports = (app) => {
 
       if (settings.vmcNavigation) {
         _publishOutputMetadata(VMC_OUTPUT_META)
+        const groundWatchdog = _wireHandlerWatchdog({
+          id: 'ground.smoothed',
+          getPath: () => `${groundSmoother?.polar?.pathMagnitude ?? 'navigation.speedOverGround'}, ${groundSmoother?.polar?.pathAngle ?? 'navigation.courseOverGroundTrue'}`,
+          unsubscribe: () => groundSmoother?.unsubscribe(),
+          subscribe: () => groundSmoother?.subscribe(true, true),
+        })
         groundSmoother = createSmoothedPolar({
           id: 'ground',
           pathMagnitude: 'navigation.speedOverGround',
@@ -1652,60 +1730,57 @@ module.exports = (app) => {
           pluginId: plugin.id,
           SmootherClass,
           smootherOptions,
-          ..._wireHandlerWatchdog({
-            id: 'ground.smoothed',
-            getPath: () => `${groundSmoother?.polar?.pathMagnitude ?? 'navigation.speedOverGround'}, ${groundSmoother?.polar?.pathAngle ?? 'navigation.courseOverGroundTrue'}`,
-            unsubscribe: () => groundSmoother?.unsubscribe(),
-            subscribe: () => groundSmoother?.subscribe(true, true),
-          }),
-          onDelta: computeAndSend
+          ...groundWatchdog,
+          onDelta: () => {
+            groundWatchdog.onDelta()
+            computeAndSend()
+          }
         })
 
-        bearingSmoother = new SmoothedAngle(app, plugin.id, 'bearing', 'navigation.course.calcValues.bearingTrue', {
-          angleRange: '0to2pi',
-          subscribe: true,
-          SmootherClass,
-          smootherOptions,
-          ..._wireHandlerWatchdog({
-            id: 'bearing.smoothed',
-            getPath: () => bearingSmoother?.handler?.path ?? 'navigation.course.calcValues.bearingTrue',
-            unsubscribe: () => bearingSmoother?.unsubscribe(),
-            subscribe: () => bearingSmoother?.subscribe(false, true),
-          }),
-          onDelta: computeAndSend
-        })
+        bearingHandler = _buildBearingHandler(computeAndSend)
 
+        const twdWatchdog = _wireHandlerWatchdog({
+          id: 'twd.smoothed',
+          getPath: () => twdSmoother?.handler?.path ?? 'environment.wind.directionTrue',
+          unsubscribe: () => twdSmoother?.unsubscribe(),
+          subscribe: () => twdSmoother?.subscribe(false, true),
+        })
         twdSmoother = new SmoothedAngle(app, plugin.id, 'twd', 'environment.wind.directionTrue', {
           angleRange: '0to2pi',
           subscribe: true,
           SmootherClass,
           smootherOptions,
-          ..._wireHandlerWatchdog({
-            id: 'twd.smoothed',
-            getPath: () => twdSmoother?.handler?.path ?? 'environment.wind.directionTrue',
-            unsubscribe: () => twdSmoother?.unsubscribe(),
-            subscribe: () => twdSmoother?.subscribe(false, true),
-          }),
-          onDelta: computeAndSend
+          ...twdWatchdog,
+          onDelta: () => {
+            twdWatchdog.onDelta()
+            computeAndSend()
+          }
         })
 
-        currentSmoother = createSmoothedPolar({
-          id: 'current',
-          pathMagnitude: 'environment.current.drift',
-          pathAngle: 'environment.current.setTrue',
-          subscribe: true,
-          app,
-          pluginId: plugin.id,
-          SmootherClass,
-          smootherOptions,
-          ..._wireHandlerWatchdog({
+        if (!settings.ignoreCurrent) {
+          const currentWatchdog = _wireHandlerWatchdog({
             id: 'current.smoothed',
             getPath: () => `${currentSmoother?.polar?.pathMagnitude ?? 'environment.current.drift'}, ${currentSmoother?.polar?.pathAngle ?? 'environment.current.setTrue'}`,
             unsubscribe: () => currentSmoother?.unsubscribe(),
             subscribe: () => currentSmoother?.subscribe(true, true),
-          }),
-          onDelta: computeAndSend
-        })
+          })
+          currentSmoother = createSmoothedPolar({
+            id: 'current',
+            pathMagnitude: 'environment.current.drift',
+            pathAngle: 'environment.current.setTrue',
+            angleRange: '0to2pi',
+            subscribe: true,
+            app,
+            pluginId: plugin.id,
+            SmootherClass,
+            smootherOptions,
+            ...currentWatchdog,
+            onDelta: () => {
+              currentWatchdog.onDelta()
+              computeAndSend()
+            }
+          })
+        }
       }
 
       isRunning = true
@@ -1721,10 +1796,11 @@ module.exports = (app) => {
       if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }
       if (groundSmoother)  { groundSmoother.terminate();  groundSmoother = null  }
       if (twdSmoother)  { twdSmoother.terminate();  twdSmoother = null  }
-      if (bearingSmoother) { bearingSmoother.terminate(); bearingSmoother = null }
+      if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
       if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
+      vmcRouteSuppressed = false
       app.debug('Plugin stopped')
     }
   }

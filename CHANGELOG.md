@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `/live` and `/status` endpoints now return `null` for `tws`/`twa` (and downstream fields) when the wind smoother has no data or is stale, instead of `0`. The guard was checking for the presence of the smoother object rather than its `ready` state.
 - `computeAndSend`: when the polar table lookup fails (boat outside polar range — in irons or above max TWS), the `performance.polarSpeed`, `performance.polarSpeedRatio`, and `performance.targetSpeed` SK paths are now written with `null` instead of `0`. Writing `0` was misleading because it is a valid-looking value rather than an explicit "no data" signal.
 - Live input subscriptions are now re-established after prolonged silence for all subscribed inputs, not just true wind. Boat speed and optional true heading use the same recovery path, and the plugin now reports their lifecycle state through the webapp/status endpoints.
+- VMC/current lifecycle warnings now clear correctly when delayed deltas resume (watchdog and compute callbacks are composed instead of overwriting each other), current set smoothing is normalized to `0..2π`, and VMC target solving now follows the shared boat-speed computability gate (including supported TWS extrapolation).
 
 ### Changed
 - Idle input recovery is now always enabled; the temporary `detectStaleData` setting has been removed from the runtime settings UI.

@@ -54,6 +54,74 @@ class PolarTable {
     return a.x * b.x + a.y * b.y
   }
 
+  getBoatSpeedState(tws, twa) {
+    const normalizedTwa = Math.abs(twa)
+    const twsInterpolation = this._findTwsInterpolation(tws)
+    if (!twsInterpolation) {
+      return {
+        canCompute: false,
+        speed: null,
+        state: null,
+        twsState: null,
+        twaState: null
+      }
+    }
+
+    const lowerEntry = this.table[twsInterpolation.lowerIndex]
+    const upperEntry = this.table[twsInterpolation.upperIndex]
+
+    // ── Run extrap limit: interpolate the limit between the two TWS brackets ───
+    // Moving the check here (rather than per-entry) prevents a discontinuity
+    // where the lower bracket's tighter limit would otherwise cause a sudden jump
+    // to the upper bracket's value.
+    const lowerLastTwa = lowerEntry.twa?.length ? lowerEntry.twa[lowerEntry.twa.length - 1].twa : 0
+    const upperLastTwa = upperEntry.twa?.length ? upperEntry.twa[upperEntry.twa.length - 1].twa : 0
+    if (normalizedTwa > lowerLastTwa || normalizedTwa > upperLastTwa) {
+      const lowerLimit = lowerEntry._runExtrap?.extrapLimit ?? lowerLastTwa
+      const upperLimit = upperEntry._runExtrap?.extrapLimit ?? upperLastTwa
+      const limit = lowerLimit + twsInterpolation.ratio * (upperLimit - lowerLimit)
+      if (normalizedTwa > limit) {
+        return {
+          canCompute: false,
+          speed: null,
+          state: this.getInterpolationState(tws, twa),
+          twsState: null,
+          twaState: 'above_range'
+        }
+      }
+    }
+
+    const lowerBoatSpeed = this._getSpeedFromEntry(lowerEntry, normalizedTwa)
+    if (lowerBoatSpeed === null) {
+      return {
+        canCompute: false,
+        speed: null,
+        state: this.getInterpolationState(tws, twa),
+        twsState: null,
+        twaState: null
+      }
+    }
+
+    const upperBoatSpeed = this._getSpeedFromEntry(upperEntry, normalizedTwa)
+    if (upperBoatSpeed === null) {
+      return {
+        canCompute: false,
+        speed: null,
+        state: this.getInterpolationState(tws, twa),
+        twsState: null,
+        twaState: null
+      }
+    }
+
+    return {
+      canCompute: true,
+      speed: (lowerBoatSpeed + twsInterpolation.ratio * (upperBoatSpeed - lowerBoatSpeed)) * this.perfAdjust,
+      state: this.getInterpolationState(tws, twa),
+      twsState: null,
+      twaState: null
+    }
+  }
+
   solveVmcByTack({
     tws,
     twd,
@@ -87,13 +155,13 @@ class PolarTable {
       const headingTrue = this._wrap2Pi(theta)
       const twaSigned = this._wrapPi(headingTrue - twd)
       const twa = Math.abs(twaSigned)
-      const state = this.getInterpolationState(tws, twa)
 
-      // VMC solver is intentionally constrained to valid polar domain only.
-      if (!state || state.tws !== 'in_range' || state.twa !== 'in_range') continue
-
-      const bspPolar = this.getBoatSpeed(tws, twa)
-      if (!Number.isFinite(bspPolar)) continue
+      // Keep VMC domain aligned with performance domain:
+      // if the shared boat-speed gate can produce a value (including supported
+      // extrapolation), navigation can be computed for that sample.
+      const boatSpeedState = this.getBoatSpeedState(tws, twa)
+      if (!boatSpeedState.canCompute || !Number.isFinite(boatSpeedState.speed)) continue
+      const bspPolar = boatSpeedState.speed
 
       const vbw = this._vectorFromPolar(bspPolar, headingTrue)
       const vgPred = { x: vbw.x + current.x, y: vbw.y + current.y }
@@ -107,7 +175,7 @@ class PolarTable {
         tack: twaSigned >= 0 ? 'starboard' : 'port'
       }
 
-      if (includePoints) {
+      if (includePoints && vmc > 0) {
         points.push({
           headingTrue: Number(headingTrue.toFixed(5)),
           twaSigned: Number(twaSigned.toFixed(5)),
@@ -165,7 +233,9 @@ class PolarTable {
       includePoints: false
     })
 
-    const currentTack = currentTwaSigned >= 0 ? 'starboard' : 'port'
+    // Signal K wind-angle sign convention in live data is opposite to the
+    // solver's internal tack sign, so invert mapping here.
+    const currentTack = currentTwaSigned >= 0 ? 'port' : 'starboard'
     const currentBest = currentTack === 'starboard' ? solved.starboard : solved.port
     const oppositeBest = currentTack === 'starboard' ? solved.port : solved.starboard
     const actualVmc = sog * Math.cos(cog - course)
@@ -570,35 +640,8 @@ class PolarTable {
   }
 
   getBoatSpeed(tws, twa) {
-    // Handle negative angles by using symmetry (port tack = starboard tack performance)
-    const normalizedTwa = Math.abs(twa)
-
-    const twsInterpolation = this._findTwsInterpolation(tws)
-    if (!twsInterpolation) return null
-
-    const lowerEntry = this.table[twsInterpolation.lowerIndex]
-    const upperEntry = this.table[twsInterpolation.upperIndex]
-
-    // ── Run extrap limit: interpolate the limit between the two TWS brackets ───
-    // Moving the check here (rather than per-entry) prevents a discontinuity
-    // where the lower bracket's tighter limit would otherwise cause a sudden jump
-    // to the upper bracket's value.
-    const lowerLastTwa = lowerEntry.twa?.length ? lowerEntry.twa[lowerEntry.twa.length - 1].twa : 0
-    const upperLastTwa = upperEntry.twa?.length ? upperEntry.twa[upperEntry.twa.length - 1].twa : 0
-    if (normalizedTwa > lowerLastTwa || normalizedTwa > upperLastTwa) {
-      const lowerLimit = lowerEntry._runExtrap?.extrapLimit ?? lowerLastTwa
-      const upperLimit = upperEntry._runExtrap?.extrapLimit ?? upperLastTwa
-      const limit = lowerLimit + twsInterpolation.ratio * (upperLimit - lowerLimit)
-      if (normalizedTwa > limit) return null
-    }
-
-    const lowerBoatSpeed = this._getSpeedFromEntry(lowerEntry, normalizedTwa)
-    if (lowerBoatSpeed === null) return null
-    const upperBoatSpeed = this._getSpeedFromEntry(upperEntry, normalizedTwa)
-    if (upperBoatSpeed === null) return null
-
-    // Interpolate between the two TWS values and scale by performance adjustment
-    return (lowerBoatSpeed + twsInterpolation.ratio * (upperBoatSpeed - lowerBoatSpeed)) * this.perfAdjust
+    const state = this.getBoatSpeedState(tws, twa)
+    return state.canCompute ? state.speed : null
   }
 
   /**

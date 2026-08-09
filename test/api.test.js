@@ -477,6 +477,43 @@ describe('Polar manager/query API', () => {
     assert.equal(typeof res.body.starboardBest, 'object')
   })
 
+  it('allows vmc-targets below and above TWS table bounds when polar speed is still computable', () => {
+    let res = makeResponse()
+    router.routes.post['/polars']({ body: CANONICAL_BODY }, res)
+    assert.equal(res.statusCode, 201)
+    const storedId = res.body.id
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/queries/vmc-targets']({
+      params: { id: storedId },
+      query: {
+        tws: '1.5',
+        twd: '0',
+        course: '0.9'
+      }
+    }, res)
+    assert.equal(res.statusCode, 200)
+    assert.ok(
+      (typeof res.body.port?.vmc === 'number') ||
+      (typeof res.body.starboard?.vmc === 'number')
+    )
+
+    res = makeResponse()
+    router.routes.get['/polars/:id/queries/vmc-targets']({
+      params: { id: storedId },
+      query: {
+        tws: '8.0',
+        twd: '0',
+        course: '0.9'
+      }
+    }, res)
+    assert.equal(res.statusCode, 200)
+    assert.ok(
+      (typeof res.body.port?.vmc === 'number') ||
+      (typeof res.body.starboard?.vmc === 'number')
+    )
+  })
+
   it('searches the official ORC source and imports a certificate by RefNo', async () => {
     const calls = []
     global.fetch = async (url, opts) => {
