@@ -50,6 +50,10 @@
       "./docs/outputs.png",
       "./docs/polar_management.png",
       "./docs/import.png"
+    ],
+    "recommends": [
+      "speedandcurrent",
+      "advancedwind"
     ]
   },
   "keywords": [
