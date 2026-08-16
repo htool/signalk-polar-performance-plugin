@@ -84,3 +84,9 @@ tr.stale td { color: #aaa; font-style: italic; }
 
 /* ─── ORC search results spacing ───────────────────────────────────────────── */
 #orc-results { max-height: 360px; overflow-y: auto; }
+
+/* Keep ORC search button width stable when label changes to Searching... */
+.orc-search-btn {
+  min-width: 8.5rem;
+  text-align: center;
+}

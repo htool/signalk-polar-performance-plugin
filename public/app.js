@@ -1518,11 +1518,27 @@ function _buildPolarsPage() {
 
     const orcSearchInp = makeTextInput('RefNo, boat name, sail number, or class', '320px')
     const orcSearchBtn = document.createElement('button')
-    orcSearchBtn.className = 'btn btn-sm btn-secondary'
+    orcSearchBtn.className = 'btn btn-sm btn-secondary orc-search-btn'
     orcSearchBtn.textContent = 'Search'
     searchRow.appendChild(orcSearchInp)
     searchRow.appendChild(orcSearchBtn)
     orcWrap.appendChild(searchRow)
+
+    const orcStatusLine = document.createElement('div')
+    orcStatusLine.className = 'text-muted small mb-2 d-none'
+    orcWrap.appendChild(orcStatusLine)
+
+    const setOrcSearchBusy = (busy) => {
+      orcSearchBtn.disabled = busy
+      orcSearchBtn.textContent = busy ? 'Searching...' : 'Search'
+      if (busy) {
+        orcStatusLine.textContent = 'Rebuilding cache and searching...'
+        orcStatusLine.classList.remove('d-none')
+      } else {
+        orcStatusLine.textContent = ''
+        orcStatusLine.classList.add('d-none')
+      }
+    }
 
     const orcResults = document.createElement('div')
     orcResults.id = 'orc-results'
@@ -1593,16 +1609,25 @@ function _buildPolarsPage() {
       orcResults.appendChild(table)
     }
 
+    let orcSearchInFlight = false
     const runOrcSearch = async () => {
+      if (orcSearchInFlight) return
       const q = orcSearchInp.value.trim()
       if (!q) {
         showMessage('Enter an ORC search term first')
         return
       }
 
-      const query = new URLSearchParams({ q })
-      const results = await apiGet('/imports/sources/orc/search?' + query.toString())
-      if (results) renderOrcResults(results)
+      orcSearchInFlight = true
+      setOrcSearchBusy(true)
+      try {
+        const query = new URLSearchParams({ q })
+        const results = await apiGet('/imports/sources/orc/search?' + query.toString())
+        if (results) renderOrcResults(results)
+      } finally {
+        setOrcSearchBusy(false)
+        orcSearchInFlight = false
+      }
     }
 
     orcSearchBtn.addEventListener('click', runOrcSearch)
