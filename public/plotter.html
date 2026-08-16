@@ -361,6 +361,10 @@
       function buildNavigationLive(status) {
         var out = status && status.outputs ? status.outputs : {}
         var smoothed = status && status.inputs && status.inputs.smoothed ? status.inputs.smoothed : {}
+        var currentTack = isFiniteNumber(smoothed.twa) ? (smoothed.twa >= 0 ? 'port' : 'starboard') : null
+        var oppositeTack = currentTack === 'port' ? 'starboard' : (currentTack === 'starboard' ? 'port' : null)
+        var currentBest = navCurve && currentTack ? navCurve[currentTack + 'Best'] : null
+        var oppositeBest = navCurve && oppositeTack ? navCurve[oppositeTack + 'Best'] : null
         var routeSuppressed = !!(status && status.vmcRouteSuppressed)
         var message = ''
 
@@ -373,9 +377,9 @@
         return {
           actualAngle: smoothed.cog,
           actualValue: out['performance.velocityMadeGoodOnCourse'],
-          targetAngle: out['performance.targetHeadingTrue'],
+          targetAngle: currentBest ? currentBest.headingTrue : null,
           targetValue: out['performance.targetVelocityMadeGoodOnCourse'],
-          oppositeAngle: out['performance.oppositeTackHeadingTrue'],
+          oppositeAngle: oppositeBest ? oppositeBest.headingTrue : null,
           oppositeValue: out['performance.oppositeTackVelocityMadeGoodOnCourse'],
           course: smoothed.bearingTrue,
           twd: smoothed.twd,

@@ -402,9 +402,11 @@ const PERFORMANCE_OUTPUT_DEFS = [
       { sk: 'performance/maxSpeed',      label: 'Max speed',         mk: 'bsp',         fb: SPEED_DEFAULT },
       { sk: 'performance/maxSpeedAngle', label: 'Max speed angle',   mk: 'twa',         fb: ANGLE_DEFAULT },
     ]},
-  { key: 'tackTrue',         label: 'Opposite tack heading',
+  { key: 'targetHeadings',   label: 'Target headings (true)',
     paths: [
-      { sk: 'performance/tackTrue',     label: 'Tack heading',       mk: 'twa',         fb: ANGLE_DEFAULT },
+      { sk: 'performance/targetHeadingTrue/port',      label: 'Port tack target',     mk: 'performance.targetHeadingTrue.port',      fb: ANGLE_DEFAULT },
+      { sk: 'performance/targetHeadingTrue/starboard', label: 'Starboard tack target', mk: 'performance.targetHeadingTrue.starboard', fb: ANGLE_DEFAULT },
+      { sk: 'performance/tackTrue',                    label: 'Opposite tack heading', mk: 'performance.tackTrue',                    fb: ANGLE_DEFAULT },
     ]},
   { key: 'smoothedInputs',   label: 'Smoothed inputs',
     paths: [
@@ -418,8 +420,6 @@ const NAVIGATION_OUTPUT_DEFS = [
   { sk: 'performance/targetVelocityMadeGoodOnCourse',       label: 'Target VMC',              mk: 'performance.targetVelocityMadeGoodOnCourse',       fb: SPEED_DEFAULT },
   { sk: 'performance/oppositeTackVelocityMadeGoodOnCourse', label: 'Opposite tack VMC',       mk: 'performance.oppositeTackVelocityMadeGoodOnCourse', fb: SPEED_DEFAULT },
   { sk: 'performance/velocityMadeGoodOnCourseRatio',        label: 'VMC ratio',               mk: 'performance.velocityMadeGoodOnCourseRatio',        fb: RATIO_DEFAULT },
-  { sk: 'performance/targetHeadingTrue',                    label: 'Target heading (true)',   mk: 'performance.targetHeadingTrue',                    fb: ANGLE_DEFAULT },
-  { sk: 'performance/oppositeTackHeadingTrue',              label: 'Opposite tack heading',   mk: 'performance.oppositeTackHeadingTrue',              fb: ANGLE_DEFAULT },
 ]
 
 // Unique SK path id used as DOM element id (slashes → dashes)
@@ -537,12 +537,17 @@ async function refreshVmcCurve() {
 
 function updateOverviewNavigationCanvas() {
   if (!navPolar) return
+  const twa = Number(smoothedValues?.twa)
+  const currentTack = Number.isFinite(twa) ? (twa >= 0 ? 'port' : 'starboard') : null
+  const oppositeTack = currentTack === 'port' ? 'starboard' : (currentTack === 'starboard' ? 'port' : null)
+  const currentBest = currentTack ? liveVmcCurve?.[currentTack + 'Best'] : null
+  const oppositeBest = oppositeTack ? liveVmcCurve?.[oppositeTack + 'Best'] : null
   const navLive = {
     actualAngle: smoothedValues?.cog,
     actualValue: outputValues['performance/velocityMadeGoodOnCourse'],
-    targetAngle: outputValues['performance/targetHeadingTrue'],
+    targetAngle: currentBest?.headingTrue,
     targetValue: outputValues['performance/targetVelocityMadeGoodOnCourse'],
-    oppositeAngle: outputValues['performance/oppositeTackHeadingTrue'],
+    oppositeAngle: oppositeBest?.headingTrue,
     oppositeValue: outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'],
     course: smoothedValues?.bearingTrue,
     twd: smoothedValues?.twd,
@@ -705,8 +710,6 @@ function _buildOverviewPage() {
     { label: 'Target VMC',             id: 'ov-nav-target' },
     { label: 'Opposite tack VMC',      id: 'ov-nav-opp'    },
     { label: 'VMC ratio',              id: 'ov-nav-ratio'  },
-    { label: 'Target heading (true)',  id: 'ov-nav-hdg'    },
-    { label: 'Opposite heading (true)',id: 'ov-nav-opp-hdg' },
   ]))
   const navWarningsDiv = document.createElement('div'); navWarningsDiv.id = 'ov-nav-warnings'
   navRight.appendChild(navWarningsDiv)
@@ -820,9 +823,6 @@ function _tickOverview() {
   setVal('ov-nav-target',  fmtVal(outputValues['performance/targetVelocityMadeGoodOnCourse'], 'performance.targetVelocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-opp',     fmtVal(outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'], 'performance.oppositeTackVelocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-ratio',   fmtVal(outputValues['performance/velocityMadeGoodOnCourseRatio'], 'performance.velocityMadeGoodOnCourseRatio', RATIO_DEFAULT))
-  setVal('ov-nav-hdg',     fmtVal(outputValues['performance/targetHeadingTrue'], 'performance.targetHeadingTrue', ANGLE_DEFAULT))
-  setVal('ov-nav-opp-hdg', fmtVal(outputValues['performance/oppositeTackHeadingTrue'], 'performance.oppositeTackHeadingTrue', ANGLE_DEFAULT))
-
   const navWarns = []
   if (!settings?.vmcNavigation) {
     navWarns.push('VMC navigation outputs are disabled')
@@ -881,7 +881,7 @@ function _buildInputsPage() {
   wrap.appendChild(buildTable([
     {
       label: 'Raw — navigation.headingTrue',
-      desc: 'Required only when Opposite tack heading output is enabled.',
+      desc: 'Required when performance outputs are enabled.',
       id: 'in-hdg-raw'
     },
     { label: 'Smoothed — plugin', id: 'in-hdg-smo' },

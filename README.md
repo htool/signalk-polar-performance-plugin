@@ -94,7 +94,7 @@ Choose between **speed through water** (`navigation.speedThroughWater`) and **sp
 
 ### Navigation / VMC outputs
 
-Enable the `vmcNavigation` output group to publish VMC-related navigation values. These calculations use the active polar together with the current course and current estimate from Signal K, and they are suppressed when no usable course bearing is available. The Navigation page and the plotter's Navigation mode use these outputs directly.
+Enable the `vmcNavigation` output group to publish VMC-related navigation values. These calculations use the active polar together with the current course and current estimate from Signal K, and they are suppressed when no usable course bearing is available. The Navigation page uses these outputs, while its graph and the plotter's Navigation mode obtain heading markers from the VMC curve query.
 
 ---
 
@@ -156,13 +156,15 @@ Automatically selects between beat and run depending on whether you are sailing 
 | `performance.maxSpeed` | Maximum polar boat speed achievable at the current TWS. |
 | `performance.maxSpeedAngle` | The TWA at which maximum speed is achieved. |
 
-### Opposite tack heading
+### Target headings
 
 | Path | Description |
 |------|-------------|
-| `performance.tackTrue` | True heading on the opposite tack, calculated from the beat angle and current heading. Useful for tactical displays and layline charts. |
+| `performance.targetHeadingTrue.port` | Polar-derived target true heading on port tack. |
+| `performance.targetHeadingTrue.starboard` | Polar-derived target true heading on starboard tack. |
+| `performance.tackTrue` | Standard Signal K true heading on the opposite tack, selected from the port/starboard targets. |
 
-Requires `navigation.headingTrue` to be available.
+These outputs use TWS, signed TWA, true heading, and the polar beat/run target. They do not use current or a waypoint. `navigation.headingTrue` is required to resolve the wind-relative target angles to true headings.
 
 ### VMC navigation outputs
 
@@ -172,8 +174,6 @@ Requires `navigation.headingTrue` to be available.
 | `performance.targetVelocityMadeGoodOnCourse` | Best achievable VMC on the current tack. |
 | `performance.oppositeTackVelocityMadeGoodOnCourse` | Best achievable VMC on the opposite tack. |
 | `performance.velocityMadeGoodOnCourseRatio` | Actual VMC divided by target VMC on the current tack. |
-| `performance.targetHeadingTrue` | Target true heading for maximum VMC on the current tack. |
-| `performance.oppositeTackHeadingTrue` | Target true heading for maximum VMC on the opposite tack. |
 
 These outputs are published when the VMC navigation output group is enabled. They depend on a valid course bearing and a usable current/ground-speed estimate, and they are used by the Navigation page and Navigation mode in the plotter.
 

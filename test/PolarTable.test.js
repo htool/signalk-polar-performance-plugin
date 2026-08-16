@@ -120,6 +120,59 @@ describe('PolarTable — loading', () => {
   })
 })
 
+describe('PolarTable — performance target headings', () => {
+  const polar = new PolarTable().loadFromCanonical(CANONICAL)
+  const tws = SI.fromKnots(12)
+
+  it('returns fixed port and starboard beat headings around true wind direction', () => {
+    const twd = SI.fromDegrees(10)
+    const beatAngle = polar.getBeatAngle(tws)
+    const headings = polar.getTargetHeadingsTrue({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(-45)
+    })
+
+    assert.ok(approxEqual(headings.port, twd + beatAngle, 1e-9))
+    assert.ok(approxEqual(headings.starboard, 2 * Math.PI + twd - beatAngle, 1e-9))
+  })
+
+  it('uses the run target and normalizes both headings', () => {
+    const twd = SI.fromDegrees(350)
+    const runAngle = polar.getRunAngle(tws)
+    const headings = polar.getTargetHeadingsTrue({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(135)
+    })
+
+    assert.ok(approxEqual(headings.port, (twd + runAngle) % (2 * Math.PI), 1e-9))
+    assert.ok(approxEqual(headings.starboard, twd - runAngle, 1e-9))
+  })
+
+  it('does not accept incomplete wind inputs', () => {
+    assert.equal(polar.getTargetHeadingsTrue({ tws, twd: null, currentTwaSigned: 0 }), null)
+  })
+
+  it('is independent of current and waypoint-related arguments', () => {
+    const windOnly = polar.getTargetHeadingsTrue({
+      tws,
+      twd: SI.fromDegrees(220),
+      currentTwaSigned: SI.fromDegrees(-60)
+    })
+    const withNavigationData = polar.getTargetHeadingsTrue({
+      tws,
+      twd: SI.fromDegrees(220),
+      currentTwaSigned: SI.fromDegrees(-60),
+      currentDrift: SI.fromKnots(3),
+      currentSetTrue: SI.fromDegrees(90),
+      course: SI.fromDegrees(10)
+    })
+
+    assert.deepEqual(withNavigationData, windOnly)
+  })
+})
+
 describe('PolarTable — interpolation', () => {
   let polar
 

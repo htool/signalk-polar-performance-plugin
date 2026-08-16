@@ -54,6 +54,22 @@ class PolarTable {
     return a.x * b.x + a.y * b.y
   }
 
+  getTargetHeadingsTrue({ tws, twd, currentTwaSigned }) {
+    if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(currentTwaSigned)) {
+      return null
+    }
+
+    const targetAngle = Math.abs(currentTwaSigned) < Math.PI / 2
+      ? this.getBeatAngle(tws)
+      : this.getRunAngle(tws)
+    if (!Number.isFinite(targetAngle)) return null
+
+    return {
+      port: this._wrap2Pi(twd + targetAngle),
+      starboard: this._wrap2Pi(twd - targetAngle)
+    }
+  }
+
   getBoatSpeedState(tws, twa) {
     const normalizedTwa = Math.abs(twa)
     const twsInterpolation = this._findTwsInterpolation(tws)

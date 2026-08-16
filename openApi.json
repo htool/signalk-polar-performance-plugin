@@ -3,7 +3,7 @@
   "info": {
     "title": "Polar Performance Plugin API",
     "version": "1.0.0",
-    "description": "REST API for polar library management and polar performance queries.\nAll speed values are in m/s, all angles in radians."
+    "description": "REST API for polar library management and polar performance queries.\nAll speed values are in m/s, all angles in radians.\nRuntime endpoints are internal support interfaces for this plugin's webapp. Other consumers must use the Signal K API to read vessel inputs and published performance values."
   },
   "servers": [
     { "url": "/plugins/signalk-polar-performance-plugin" }
@@ -20,9 +20,98 @@
     {
       "name": "polar-import",
       "description": "Optional polar ingestion extension: discover supported external sources and text formats (including Native Polar JSON), convert them to canonical polar resources, and store them in the library."
+    },
+    {
+      "name": "runtime",
+      "description": "Internal webapp support endpoints. They are not a public vessel-data integration API and may change with the webapp. Other consumers must read vessel inputs and published performance values through the Signal K API."
     }
   ],
   "paths": {
+
+    "/live": {
+      "get": {
+        "tags": ["runtime"],
+        "x-internal": true,
+        "operationId": "getLiveState",
+        "summary": "Get current performance state",
+        "description": "Internal webapp endpoint returning current smoothed wind and boat-performance values in SI units. Other consumers must use the Signal K API.",
+        "responses": {
+          "200": {
+            "description": "Current performance state",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LiveState" } } }
+          }
+        }
+      }
+    },
+
+    "/status": {
+      "get": {
+        "tags": ["runtime"],
+        "x-internal": true,
+        "operationId": "getRuntimeStatus",
+        "summary": "Get runtime inputs and outputs",
+        "description": "Internal webapp endpoint returning raw and smoothed inputs plus the currently enabled output snapshot. Performance target headings are current-independent and waypoint-independent. Other consumers must read these values through the Signal K API.",
+        "responses": {
+          "200": {
+            "description": "Runtime status snapshot",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuntimeStatus" } } }
+          }
+        }
+      }
+    },
+
+    "/meta": {
+      "get": {
+        "tags": ["runtime"],
+        "x-internal": true,
+        "operationId": "getRuntimeMeta",
+        "summary": "Get display metadata",
+        "description": "Internal webapp endpoint returning SI units and preferred display conversions. Other consumers must use Signal K path metadata through the Signal K API.",
+        "responses": {
+          "200": {
+            "description": "Runtime display metadata",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuntimeMeta" } } }
+          }
+        }
+      }
+    },
+
+    "/settings": {
+      "get": {
+        "tags": ["runtime"],
+        "x-internal": true,
+        "operationId": "getRuntimeSettings",
+        "summary": "Get runtime settings",
+        "description": "Internal endpoint used by this plugin's webapp to read its runtime settings.",
+        "responses": {
+          "200": {
+            "description": "Current settings and defaults",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuntimeSettings" } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["runtime"],
+        "x-internal": true,
+        "operationId": "updateRuntimeSettings",
+        "summary": "Update runtime settings",
+        "description": "Internal endpoint used by this plugin's webapp. Stages a partial settings update and applies it immediately when the plugin is running.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SettingsValues" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings and defaults",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuntimeSettings" } } }
+          },
+          "400": {
+            "description": "Request body is not a JSON object",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
 
     "/polars": {
       "get": {
@@ -720,8 +809,8 @@
       "get": {
         "tags": ["polar-query"],
         "operationId": "getVmcPerformance",
-        "summary": "Compute six VMC performance outputs",
-        "description": "Computes actual VMC, target/opposite-tack VMC and headings, and VMC ratio. Current is optional; when omitted, current is assumed zero.",
+        "summary": "Compute VMC performance query values",
+        "description": "Computes actual VMC, target/opposite-tack VMC and headings, and VMC ratio. Heading fields in this query response are navigation results and are not published as Signal K output paths. Current is optional; when omitted, current is assumed zero.",
         "parameters": [
           { "$ref": "#/components/parameters/polarId" },
           {
@@ -901,6 +990,164 @@
         "properties": {
           "id": { "type": "string" }
         }
+      },
+
+      "InterpolationState": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "tws": { "type": "string", "enum": ["below_range", "in_range", "above_range"] },
+          "twa": { "type": "string", "enum": ["in_irons", "pinching", "in_range", "extrapolated", "above_range"] }
+        }
+      },
+
+      "LiveState": {
+        "type": "object",
+        "properties": {
+          "tws": { "type": "number", "nullable": true, "description": "Smoothed true wind speed (m/s)." },
+          "twa": { "type": "number", "nullable": true, "description": "Smoothed signed true wind angle (rad)." },
+          "bsp": { "type": "number", "nullable": true, "description": "Smoothed boat speed (m/s)." },
+          "polarSpeed": { "type": "number", "nullable": true, "description": "Polar boat speed at current TWS/TWA (m/s)." },
+          "performance": { "type": "number", "nullable": true, "description": "Actual boat speed divided by polar speed." },
+          "polarState": { "$ref": "#/components/schemas/InterpolationState" }
+        }
+      },
+
+      "RuntimeInputValues": {
+        "type": "object",
+        "properties": {
+          "tws": { "type": "number", "nullable": true },
+          "twa": { "type": "number", "nullable": true },
+          "bsp": { "type": "number", "nullable": true },
+          "hdg": { "type": "number", "nullable": true },
+          "sog": { "type": "number", "nullable": true },
+          "cog": { "type": "number", "nullable": true },
+          "twd": { "type": "number", "nullable": true },
+          "bearingTrue": { "type": "number", "nullable": true },
+          "currentDrift": { "type": "number", "nullable": true },
+          "currentSetTrue": { "type": "number", "nullable": true }
+        }
+      },
+
+      "RuntimeInputPaths": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      },
+
+      "SignalKOutputSnapshot": {
+        "type": "object",
+        "description": "Enabled Signal K outputs keyed by full path. Missing computations are represented as null.",
+        "additionalProperties": false,
+        "properties": {
+          "performance.beatAngle": { "type": "number", "nullable": true },
+          "performance.gybeAngle": { "type": "number", "nullable": true },
+          "performance.beatAngleVelocityMadeGood": { "type": "number", "nullable": true },
+          "performance.gybeAngleVelocityMadeGood": { "type": "number", "nullable": true },
+          "performance.targetAngle": { "type": "number", "nullable": true },
+          "performance.targetVelocityMadeGood": { "type": "number", "nullable": true },
+          "performance.optimumWindAngle": { "type": "number", "nullable": true },
+          "performance.velocityMadeGood": { "type": "number", "nullable": true },
+          "performance.polarVelocityMadeGood": { "type": "number", "nullable": true },
+          "performance.polarVelocityMadeGoodRatio": { "type": "number", "nullable": true },
+          "performance.polarSpeed": { "type": "number", "nullable": true },
+          "performance.targetSpeed": { "type": "number", "nullable": true },
+          "performance.polarSpeedRatio": { "type": "number", "nullable": true },
+          "performance.maxSpeed": { "type": "number", "nullable": true },
+          "performance.maxSpeedAngle": { "type": "number", "nullable": true },
+          "performance.targetHeadingTrue.port": { "type": "number", "nullable": true, "description": "Current-independent polar target true heading on port tack (rad)." },
+          "performance.targetHeadingTrue.starboard": { "type": "number", "nullable": true, "description": "Current-independent polar target true heading on starboard tack (rad)." },
+          "performance.tackTrue": { "type": "number", "nullable": true, "description": "Standard Signal K true heading on the opposite tack (rad)." },
+          "environment.wind.angleTrueWaterDamped": { "type": "number", "nullable": true },
+          "performance.boatSpeedDamped": { "type": "number", "nullable": true },
+          "performance.velocityMadeGoodOnCourse": { "type": "number", "nullable": true },
+          "performance.targetVelocityMadeGoodOnCourse": { "type": "number", "nullable": true },
+          "performance.oppositeTackVelocityMadeGoodOnCourse": { "type": "number", "nullable": true },
+          "performance.velocityMadeGoodOnCourseRatio": { "type": "number", "nullable": true }
+        }
+      },
+
+      "RuntimeStatus": {
+        "type": "object",
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "properties": {
+              "raw": { "$ref": "#/components/schemas/RuntimeInputValues" },
+              "smoothed": { "$ref": "#/components/schemas/RuntimeInputValues" },
+              "paths": { "$ref": "#/components/schemas/RuntimeInputPaths" }
+            }
+          },
+          "outputs": { "$ref": "#/components/schemas/SignalKOutputSnapshot" },
+          "polarState": { "$ref": "#/components/schemas/InterpolationState" },
+          "lifecycleWarnings": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "vmcRouteSuppressed": { "type": "boolean" }
+        }
+      },
+
+      "DisplayUnits": {
+        "type": "object",
+        "properties": {
+          "formula": { "type": "string" },
+          "symbol": { "type": "string" },
+          "displayFormat": { "type": "string" }
+        }
+      },
+
+      "MetricMeta": {
+        "type": "object",
+        "properties": {
+          "units": { "type": "string" },
+          "displayUnits": { "$ref": "#/components/schemas/DisplayUnits" }
+        }
+      },
+
+      "RuntimeMeta": {
+        "type": "object",
+        "additionalProperties": { "$ref": "#/components/schemas/MetricMeta" },
+        "properties": {
+          "performance.targetHeadingTrue.port": { "$ref": "#/components/schemas/MetricMeta" },
+          "performance.targetHeadingTrue.starboard": { "$ref": "#/components/schemas/MetricMeta" },
+          "performance.tackTrue": { "$ref": "#/components/schemas/MetricMeta" }
+        }
+      },
+
+      "SettingsValues": {
+        "type": "object",
+        "properties": {
+          "settingsVersion": { "type": "integer" },
+          "activePolar": { "type": "string" },
+          "perfAdjust": { "type": "number" },
+          "performanceOutputs": { "type": "boolean" },
+          "plotterGraphMode": { "type": "string", "enum": ["performance", "navigation"] },
+          "showAllTwsLines": { "type": "boolean" },
+          "smootherType": { "type": "string", "enum": ["None", "Exponential", "MovingAverage", "Kalman"] },
+          "smootherParamExponential": { "type": "number" },
+          "smootherParamMovingAverage": { "type": "number" },
+          "smootherParamKalman": { "type": "number" },
+          "beatAngle": { "type": "boolean" },
+          "beatVMG": { "type": "boolean" },
+          "targetTWA": { "type": "boolean" },
+          "optimumWindAngle": { "type": "boolean" },
+          "VMG": { "type": "boolean" },
+          "maxSpeed": { "type": "boolean" },
+          "polarSpeed": { "type": "boolean" },
+          "useSOG": { "type": "boolean" },
+          "smoothedInputs": { "type": "boolean" },
+          "vmcNavigation": { "type": "boolean", "description": "Enables waypoint-dependent VMC navigation outputs." },
+          "ignoreCurrent": { "type": "boolean", "description": "Navigation setting: use a zero-current assumption for VMC calculations." }
+        }
+      },
+
+      "RuntimeSettings": {
+        "allOf": [
+          { "$ref": "#/components/schemas/SettingsValues" },
+          {
+            "type": "object",
+            "properties": {
+              "_defaults": { "$ref": "#/components/schemas/SettingsValues" }
+            }
+          }
+        ]
       },
 
       "ImportFormatDescriptor": {

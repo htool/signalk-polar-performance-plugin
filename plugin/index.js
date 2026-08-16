@@ -45,7 +45,6 @@ const DEFAULT_SETTINGS = {
   polarSpeed: false,
   useSOG: false,
   ignoreCurrent: false,
-  tackTrue: false,
   smoothedInputs: false,
   vmcNavigation: false
 }
@@ -86,15 +85,17 @@ module.exports = (app) => {
     VMG:             ['performance.velocityMadeGood', 'performance.polarVelocityMadeGood', 'performance.polarVelocityMadeGoodRatio'],
     polarSpeed:      ['performance.polarSpeed', 'performance.targetSpeed', 'performance.polarSpeedRatio'],
     maxSpeed:        ['performance.maxSpeed', 'performance.maxSpeedAngle'],
-    tackTrue:        ['performance.tackTrue'],
+    targetHeadings:  [
+      'performance.targetHeadingTrue.port',
+      'performance.targetHeadingTrue.starboard',
+      'performance.tackTrue'
+    ],
     smoothedInputs:  ['environment.wind.angleTrueWaterDamped', 'performance.boatSpeedDamped'],
     vmcNavigation:   [
       'performance.velocityMadeGoodOnCourse',
       'performance.targetVelocityMadeGoodOnCourse',
       'performance.oppositeTackVelocityMadeGoodOnCourse',
-      'performance.velocityMadeGoodOnCourseRatio',
-      'performance.targetHeadingTrue',
-      'performance.oppositeTackHeadingTrue'
+      'performance.velocityMadeGoodOnCourseRatio'
     ],
   }
 
@@ -106,7 +107,7 @@ module.exports = (app) => {
     'VMG',
     'polarSpeed',
     'maxSpeed',
-    'tackTrue',
+    'targetHeadings',
     'smoothedInputs'
   ]
 
@@ -137,16 +138,6 @@ module.exports = (app) => {
       path: 'performance.velocityMadeGoodOnCourseRatio',
       units: 'ratio',
       description: 'Actual VMC divided by target VMC on the current tack.'
-    },
-    {
-      path: 'performance.targetHeadingTrue',
-      units: 'rad',
-      description: 'Target true heading for maximum VMC on the current tack.'
-    },
-    {
-      path: 'performance.oppositeTackHeadingTrue',
-      units: 'rad',
-      description: 'Target true heading for maximum VMC on the opposite tack.'
     }
   ]
 
@@ -369,9 +360,9 @@ module.exports = (app) => {
       bspSmoother.subscribe()
     }
 
-    // Tack heading toggle
-    if (keys.includes('tackTrue') || keys.includes('performanceOutputs')) {
-      if (isOutputEnabled('tackTrue') && !hdgSmoother) {
+    // Performance target headings require true heading to resolve TWD from signed TWA.
+    if (keys.includes('performanceOutputs')) {
+      if (isOutputEnabled('targetHeadings') && !hdgSmoother) {
         const SC = getSmootherClass(settings.smootherType)
         const so = getSmootherOptions(settings.smootherType, settings)
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
@@ -382,9 +373,10 @@ module.exports = (app) => {
             get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
             unsubscribe: () => hdgSmoother?.unsubscribe(),
             subscribe: () => hdgSmoother?.subscribe(false, true),
-          })
+          }),
+          onDelta: computeAndSend
         })
-      } else if (!isOutputEnabled('tackTrue') && hdgSmoother) {
+      } else if (!isOutputEnabled('targetHeadings') && hdgSmoother) {
         hdgSmoother.terminate()
         hdgSmoother = null
       }
@@ -688,12 +680,20 @@ module.exports = (app) => {
       }
     }
 
-    // Opposite tack heading
-    if (isOutputEnabled('tackTrue') && Number.isFinite(HDG) && Number.isFinite(targetAngle)) {
-      let tack = port < 0 ? HDG - targetAngle : HDG + targetAngle
-      tack = ((tack % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
-      add('performance.tackTrue', tack, 'rad',
-        'Opposite tack heading relative to true north.')
+    if (isOutputEnabled('targetHeadings') && Number.isFinite(HDG)) {
+      const targetHeadings = polarTable.getTargetHeadingsTrue({
+        tws: TWS,
+        twd: ((HDG + TWAsigned) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI),
+        currentTwaSigned: TWAsigned
+      })
+      if (targetHeadings) {
+        add('performance.targetHeadingTrue.port', targetHeadings.port, 'rad',
+          'Polar-derived target true heading on port tack.')
+        add('performance.targetHeadingTrue.starboard', targetHeadings.starboard, 'rad',
+          'Polar-derived target true heading on starboard tack.')
+        add('performance.tackTrue', port < 0 ? targetHeadings.starboard : targetHeadings.port, 'rad',
+          'True heading on opposite tack.')
+      }
     }
 
     if (settings.vmcNavigation) {
@@ -716,8 +716,6 @@ module.exports = (app) => {
       addNullable(VMC_OUTPUT_META[1].path, vmc?.targetVmc, VMC_OUTPUT_META[1].units, VMC_OUTPUT_META[1].description)
       addNullable(VMC_OUTPUT_META[2].path, vmc?.oppositeTackVmc, VMC_OUTPUT_META[2].units, VMC_OUTPUT_META[2].description)
       addNullable(VMC_OUTPUT_META[3].path, vmc?.ratio, VMC_OUTPUT_META[3].units, VMC_OUTPUT_META[3].description)
-      addNullable(VMC_OUTPUT_META[4].path, vmc?.targetHeadingTrue, VMC_OUTPUT_META[4].units, VMC_OUTPUT_META[4].description)
-      addNullable(VMC_OUTPUT_META[5].path, vmc?.oppositeTackHeadingTrue, VMC_OUTPUT_META[5].units, VMC_OUTPUT_META[5].description)
     }
 
     if (values.length === 0) return
@@ -1545,7 +1543,7 @@ module.exports = (app) => {
               tws: rawTws,
               twa: rawTwa,
               bsp: rawBsp,
-              ...(isOutputEnabled('tackTrue') ? { hdg: rawHdg } : {}),
+              ...(isOutputEnabled('targetHeadings') ? { hdg: rawHdg } : {}),
               ...(settings.vmcNavigation ? {
                 sog: rawSog,
                 cog: rawCog,
@@ -1559,7 +1557,7 @@ module.exports = (app) => {
               tws: si(TWS),
               twa: si(TWAsigned),
               bsp: si(BSP),
-              ...(isOutputEnabled('tackTrue') && HDG != null ? { hdg: si(HDG) } : {}),
+              ...(isOutputEnabled('targetHeadings') && HDG != null ? { hdg: si(HDG) } : {}),
               ...(settings.vmcNavigation ? {
                 sog: si(SOG),
                 cog: si(COG),
@@ -1573,7 +1571,7 @@ module.exports = (app) => {
               tws: 'environment.wind.speedTrue',
               twa: 'environment.wind.angleTrueWater',
               bsp: bspPath,
-              ...(isOutputEnabled('tackTrue') ? { hdg: 'navigation.headingTrue' } : {}),
+              ...(isOutputEnabled('targetHeadings') ? { hdg: 'navigation.headingTrue' } : {}),
               ...(settings.vmcNavigation ? {
                 sog: 'navigation.speedOverGround',
                 cog: 'navigation.courseOverGroundTrue',
@@ -1612,8 +1610,9 @@ module.exports = (app) => {
           'performance.targetVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
           'performance.oppositeTackVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
           'performance.velocityMadeGoodOnCourseRatio': { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
-          'performance.targetHeadingTrue': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
-          'performance.oppositeTackHeadingTrue': { units: 'rad', displayUnits: META_ANGLE_DISPLAY }
+          'performance.targetHeadingTrue.port': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          'performance.targetHeadingTrue.starboard': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          'performance.tackTrue': { units: 'rad', displayUnits: META_ANGLE_DISPLAY }
         })
       })
 
@@ -1805,10 +1804,8 @@ module.exports = (app) => {
         })
       })
 
-      // Optional heading handler for opposite-tack computation.
-      // Uses SmoothedAngle (vector-based) to avoid the 0/2π wraparound
-      // discontinuity that scalar smoothing would produce near north.
-      if (isOutputEnabled('tackTrue')) {
+      // Uses vector-based smoothing to avoid the 0/2π discontinuity near north.
+      if (isOutputEnabled('targetHeadings')) {
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
           SmootherClass,
@@ -1818,7 +1815,8 @@ module.exports = (app) => {
             getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
             unsubscribe: () => hdgSmoother?.unsubscribe(),
             subscribe: () => hdgSmoother?.subscribe(false, true),
-          })
+          }),
+          onDelta: computeAndSend
         })
       }
 

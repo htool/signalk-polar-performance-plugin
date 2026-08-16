@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 - ORC searches now show a busy state and ignore duplicate submissions while a cache rebuild and search are in progress.
 
+### Changed
+- Replaced current-relative custom target-heading outputs with current-independent `performance.targetHeadingTrue.port` and `.starboard` outputs, while retaining standard `performance.tackTrue` compatibility and moving the headings to the Performance webapp view.
+
 ## [1.4.0] - 2026-08-09
 
 ### Added
