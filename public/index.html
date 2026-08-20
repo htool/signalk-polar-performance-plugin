@@ -16,29 +16,44 @@
         el.href = href
         document.head.appendChild(el)
       }
+      let manifestFailure = 'manifest contained no CSS assets'
       try {
         const res = await fetch('/admin/.vite/manifest.json')
         if (res.ok) {
           const manifest = await res.json()
-          let found = false
+          const stylesheets = new Set()
           for (const entry of Object.values(manifest)) {
-            if (!entry.isEntry) continue
-            for (const css of entry.css ?? []) {
-              appendStylesheet('/admin/' + css)
-              found = true
+            if (entry.file?.endsWith('.css')) {
+              stylesheets.add(entry.file)
+            }
+            if (entry.isEntry) {
+              for (const css of entry.css ?? []) {
+                stylesheets.add(css)
+              }
             }
           }
-          if (found) return
+          if (stylesheets.size > 0) {
+            for (const css of stylesheets) appendStylesheet('/admin/' + css)
+            return
+          }
+        } else {
+          manifestFailure = `manifest request returned ${res.status}`
         }
-      } catch (e) { /* fall through */ }
+      } catch (e) {
+        manifestFailure = `manifest request failed: ${e.message}`
+      }
       try {
         const res  = await fetch('/')
         const html = await res.text()
         const doc  = new DOMParser().parseFromString(html, 'text/html')
         const link = doc.querySelector('link[rel="stylesheet"]')
-        if (link) appendStylesheet(new URL(link.getAttribute('href'), res.url).href)
+        if (link) {
+          appendStylesheet(new URL(link.getAttribute('href'), res.url).href)
+          return
+        }
+        console.warn(`[polar] Could not load SignalK admin stylesheet: ${manifestFailure}; legacy admin page contained no stylesheet link.`)
       } catch (e) {
-        console.warn('[polar] Could not load SignalK admin stylesheet:', e)
+        console.warn(`[polar] Could not load SignalK admin stylesheet: ${manifestFailure}; legacy fallback failed: ${e.message}`)
       }
     })()
   </script>
