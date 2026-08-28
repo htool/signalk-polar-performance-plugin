@@ -208,13 +208,17 @@ class PolarTable {
       const maxTwa = Math.max(lowerLastTwa, upperLastTwa)
       const lowerLimit = lowerEntry._runExtrap?.extrapLimit ?? lowerLastTwa
       const upperLimit = upperEntry._runExtrap?.extrapLimit ?? upperLastTwa
+      // The interpolated limit is the effective polar boundary at this TWS —
+      // getBoatSpeed returns null above it, so report above_range even when the
+      // TWA is still tabulated for one of the brackets (the other bracket's
+      // tighter limit wins by design, keeping the boundary smooth across TWS).
       const extrapLimit = lowerLimit + twsInterp.ratio * (upperLimit - lowerLimit)
-      if (normalizedTwa <= maxTwa) {
-        twaState = 'in_range'
-      } else if (normalizedTwa <= extrapLimit) {
+      if (normalizedTwa > extrapLimit) {
+        twaState = 'above_range'
+      } else if (normalizedTwa > maxTwa) {
         twaState = 'extrapolated'
       } else {
-        twaState = 'above_range'
+        twaState = 'in_range'
       }
     }
 
@@ -366,25 +370,29 @@ class PolarTable {
    * Handles beat-angle quadratic extrapolation, run-angle quadratic extrapolation,
    * and normal bilinear lookup.
    *
+   * The in-irons boundary itself is NOT checked here — getBoatSpeed evaluates it
+   * against the interpolated beat angle so both TWS brackets share one boundary.
+   * When this entry's own beat angle is above the requested TWA, the boat is
+   * treated as stopped (0) rather than "no data", so the other bracket can
+   * still contribute to the TWS interpolation.
+   *
    * @private
    * @param {Object} entry  - A single TWS table entry (this.table[i])
    * @param {number} twa    - True Wind Angle in radians (0–π, already normalised)
-   * @returns {number|null} Boat speed in m/s, or null when in irons / beyond π
+   * @returns {number|null} Boat speed in m/s, or null when no tabulated data
+   *   covers the angle
    */
   _getSpeedFromEntry(entry, twa) {
     const beatAngle = entry['Beat angle']
     const twaArray  = entry.twa
 
-    // ── In irons: below the pinch point — no polar data ──────────────────────
-    if (beatAngle && twa < this.pinchFactor * beatAngle) return null
-
     // ── Beat angle extrapolation zone (pinch point … beat angle) ─────────────
     // Quadratic ramp anchored at 0 speed at pinchAngle (25°) through beat angle
     // with C1 continuity at beat angle.
     if (beatAngle && twa < beatAngle) {
-      if (!entry._beatExtrap) return null
+      if (!entry._beatExtrap) return 0
       const u = twa - entry._beatExtrap.zeroAngle
-      if (u <= 0) return null                         // below the analytic zero — treat as in irons
+      if (u <= 0) return 0                            // below the analytic zero — stopped
       return Math.max(0, entry._beatExtrap.a * u * u + entry._beatExtrap.b * u)
     }
 
@@ -421,6 +429,14 @@ class PolarTable {
 
     const lowerEntry = this.table[twsInterpolation.lowerIndex]
     const upperEntry = this.table[twsInterpolation.upperIndex]
+
+    // ── In irons: below the pinch point of the interpolated beat angle ──────
+    // Evaluating the boundary against the interpolated beat angle (like
+    // getInterpolationState) keeps the two consistent and avoids a discontinuity
+    // when neighbouring TWS entries carry different beat angles: with per-entry
+    // boundaries, the stricter bracket would null the whole interpolation.
+    const beatAngle = this.getBeatAngle(tws)
+    if (beatAngle && normalizedTwa < this.pinchFactor * beatAngle) return null
 
     // ── Run extrap limit: interpolate the limit between the two TWS brackets ───
     // Moving the check here (rather than per-entry) prevents a discontinuity
@@ -471,25 +487,6 @@ class PolarTable {
 
 
   /**
-   * Helper method to process the TWS header row from CSV data.
-   * Creates the initial polar table structure with TWS entries.
-   * 
-   * @private
-   * @param {Array} row - CSV row containing 'twa/tws' and wind speed values
-   * @param {Object} app - Optional debug logging object
-   * @returns {Array} Array of polar entries with TWS values
-   */
-  _processTWSHeader(row, app) {
-    app && app.debug('First row with TWS columns')
-    const polar = []
-    for (let index = 1; index < row.length; index++) {
-      polar.push({ tws: SI.fromKnots(row[index]) })
-    }
-    app && app.debug('polar: %s', JSON.stringify(polar))
-    return polar
-  }
-
-  /**
    * Helper method to add speed data to a polar table entry.
    * Handles TWA data addition and max speed tracking.
    * 
@@ -531,47 +528,6 @@ class PolarTable {
   }
 
   /**
-   * Helper method to process a speed data row from CSV.
-   * Handles both regular speed data and optimal angle rows.
-   * 
-   * @private
-   * @param {Array} row - CSV row with angle and speed data
-   * @param {Array} polar - Polar table array to update
-   * @param {Object} app - Optional debug logging object
-   */
-  _processSpeedRow(row, polar, app) {
-    const angle = SI.fromDegrees(Number(row[0]))
-    const halfPi = Math.PI / 2
-    
-    // Check if this is a beat/run angle row (multiple zeros — trim before comparing)
-    const isOptimalAngle = row.filter(i => i.trim() === '0').length > 1
-    let angleName, VMGName
-    
-    if (isOptimalAngle) {
-      app && app.debug('beat and run angles are included')
-      if (angle < halfPi) {
-        angleName = 'Beat angle'
-        VMGName = 'Beat VMG'
-        app && app.debug('cvsToPolar: row includes Beat angle: %s', row.join(';'))
-      } else {
-        angleName = 'Run angle'
-        VMGName = 'Run VMG'
-        app && app.debug('cvsToPolar: row includes Run angle: %s', row.join(';'))
-      }
-    }
-
-    // Process each TWS column
-    for (let index = 0; index < row.length - 1; index++) {
-      const speedValue = (row[index + 1] || '').trim()
-      if (speedValue && speedValue !== '0') {
-        const tbs = SI.fromKnots(Number(speedValue))
-        const vmg = tbs * Math.abs(Math.cos(angle))
-        this._addSpeedData(polar[index], angle, tbs, vmg, angleName, VMGName, app)
-      }
-    }
-  }
-
-  /**
    * Helper method for decimal rounding.
    * 
    * @private
@@ -587,8 +543,10 @@ class PolarTable {
    * Computes quadratic extrapolation coefficients for each TWS entry and stores
    * them on the entry as `_beatExtrap` and `_runExtrap`.
    *
-   * Called after _sortAndOptimizePolar (needs sorted twa arrays and beat/run angles)
-   * and before _addPolarPadding (operates on the raw data, not the padded form).
+   * Called after _sortAndOptimizePolar (needs sorted twa arrays and beat/run
+   * angles) and after _addPolarPadding, so the zero-wind padding entry receives
+   * degenerate zero-valued coefficients — exactly what light-wind interpolation
+   * toward zero needs.
    *
    * Beat angle model — f(u) = a·u² + b·u, u = twa − zeroAngle (pinchAngle = 25°):
    *   f(d)  = beatSpeed   where d = beatAngle − zeroAngle
@@ -771,6 +729,67 @@ class PolarTable {
   }
 
   /**
+   * Builds a complete per-TWS derived target table, filling gaps by interpolation.
+   *
+   * Many polar sources (Jieter/Expedition CSV exports, ORC data) only emit
+   * beat/run target rows for a subset of the TWS columns.  Without this pass,
+   * TWS entries lacking a target fall back to _sortAndOptimizePolar's
+   * argmax-VMG-over-tabulated-angles heuristic, which pins the beat angle to
+   * the lowest tabulated angle and disagrees sharply with neighbouring TWS
+   * entries — nulling out the pinch zone for every TWS interpolated against
+   * the gap (polar speed reads 0 while sailing).
+   *
+   * For each TWS axis value missing a beat (or run) target, the target is
+   * linearly interpolated from the nearest entries below and above that have
+   * one; at the ends of the axis the nearest available target is used as-is.
+   *
+   * @private
+   * @param {number[]} twsAxis - TWS axis values in m/s (ascending)
+   * @param {Array} derivedRows - Derived rows from the canonical resource
+   * @returns {Array<Object>} Array aligned with twsAxis; each item has optional
+   *   `beat`/`run` targets ({twa, tbs, vmg} in SI units)
+   */
+  _interpolateDerivedTargets(twsAxis, derivedRows) {
+    const targets = twsAxis.map(tws => {
+      const row = derivedRows.find(candidate => Math.abs(candidate.tws - tws) < 1e-6)
+      const target = {}
+      if (row?.beat && Number.isFinite(row.beat.twa) && Number.isFinite(row.beat.tbs)) {
+        target.beat = { ...row.beat }
+      }
+      if (row?.run && Number.isFinite(row.run.twa) && Number.isFinite(row.run.tbs)) {
+        target.run = { ...row.run }
+      }
+      return target
+    })
+
+    for (const key of ['beat', 'run']) {
+      for (let i = 0; i < targets.length; i++) {
+        if (targets[i][key]) continue
+
+        let lo = -1
+        let hi = -1
+        for (let j = i - 1; j >= 0; j--) { if (targets[j][key]) { lo = j; break } }
+        for (let j = i + 1; j < targets.length; j++) { if (targets[j][key]) { hi = j; break } }
+
+        if (lo >= 0 && hi >= 0 && twsAxis[hi] - twsAxis[lo] > 1e-9) {
+          const ratio = (twsAxis[i] - twsAxis[lo]) / (twsAxis[hi] - twsAxis[lo])
+          const a = targets[lo][key]
+          const b = targets[hi][key]
+          const twa = a.twa + ratio * (b.twa - a.twa)
+          const tbs = a.tbs + ratio * (b.tbs - a.tbs)
+          targets[i][key] = { twa, tbs, vmg: tbs * Math.abs(Math.cos(twa)) }
+        } else if (lo >= 0) {
+          targets[i][key] = { ...targets[lo][key] }
+        } else if (hi >= 0) {
+          targets[i][key] = { ...targets[hi][key] }
+        }
+      }
+    }
+
+    return targets
+  }
+
+  /**
    * Loads polar table data from the canonical PolarResource representation.
    *
    * @param {Object} resource - Canonical polar resource with axes and boatSpeedMatrix in SI units.
@@ -789,6 +808,12 @@ class PolarTable {
     }
 
     const derivedRows = Array.isArray(resource?.derived?.rows) ? resource.derived.rows : []
+    // Fill gaps in derived beat/run targets across TWS so entries without an
+    // explicit target get an interpolated one instead of falling back to the
+    // argmax-VMG-over-tabulated-angles heuristic (which pins the beat angle to
+    // the lowest tabulated angle and disagrees sharply with neighbouring TWS,
+    // nulling out the pinch zone for every TWS interpolated against the gap).
+    const derivedTargets = this._interpolateDerivedTargets(twsAxis, derivedRows)
     const polar = twsAxis.map(tws => ({ tws, twa: [] }))
 
     for (let rowIndex = 0; rowIndex < twsAxis.length; rowIndex++) {
@@ -808,9 +833,7 @@ class PolarTable {
         this._addSpeedData(polar[rowIndex], angle, tbs, vmg, null, null, null)
       }
 
-      const derivedRow = derivedRows[rowIndex] && Math.abs(derivedRows[rowIndex].tws - twsAxis[rowIndex]) < 1e-6
-        ? derivedRows[rowIndex]
-        : derivedRows.find(candidate => Math.abs(candidate.tws - twsAxis[rowIndex]) < 1e-6)
+      const derivedRow = derivedTargets[rowIndex]
 
       if (derivedRow?.beat && Number.isFinite(derivedRow.beat.twa) && Number.isFinite(derivedRow.beat.tbs)) {
         const beatVmg = Number.isFinite(derivedRow.beat.vmg)
@@ -848,8 +871,12 @@ class PolarTable {
     }
 
     this._sortAndOptimizePolar(polar, null)
-    this._computeExtrapolationCoefficients(polar, null)
+    // Padding must be in place before coefficients are computed so the zero-wind
+    // entry gets zero-valued _beatExtrap/_runExtrap models; without them, any
+    // low-wind lookup in the pinch or run-extrapolation zone returns null
+    // instead of interpolating smoothly toward zero.
     this._addPolarPadding(polar, null)
+    this._computeExtrapolationCoefficients(polar, null)
     this.table = polar
     return this
   }
