@@ -69,10 +69,12 @@ jobs:
           fi
       - name: Skip publish (not main)
         if: ${{ github.ref != 'refs/heads/main' }}
-        run: echo "Publish is restricted to main. Current ref: ${GITHUB_REF}"
+        run: |
+          echo "Publish is restricted to main. Current ref is ${GITHUB_REF}"
       - name: Skip publish (already on npm)
         if: ${{ github.ref == 'refs/heads/main' && steps.pkg.outputs.already_published == 'true' }}
-        run: echo "signalk-polar-performance-plugin@${{ steps.pkg.outputs.version }} is already on npm; nothing to publish."
+        run: |
+          echo "signalk-polar-performance-plugin@${{ steps.pkg.outputs.version }} is already on npm; nothing to publish."
       - name: Dry run validation
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish != true }}
         run: echo "Manual workflow validation only; npm publish skipped."
