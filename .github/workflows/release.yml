@@ -1,6 +1,10 @@
 # Publishes to npmjs.com with Trusted Publishing (OIDC).
 # No NPM_TOKEN and no 90-day granular access token.
 #
+# Publish runs only after a push to main (normally a merged PR) when
+# package.json's version is not already on the registry. Tag pushes and
+# feature-branch workflows never publish.
+#
 # One-time setup (package owner, with 2FA):
 #   npmjs.com → Package → Settings → Trusted Publisher → GitHub Actions
 #     Organization or user: htool
@@ -21,14 +25,13 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish to npm'
+        description: 'Publish to npm (main branch only)'
         required: false
         default: false
         type: boolean
   push:
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+*'
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+    branches:
+      - main
 
 jobs:
   publish:
@@ -54,14 +57,30 @@ jobs:
             sed -i '/_authToken/d' "$NPMRC_PATH"
           fi
       - run: npm ci
+      - name: Resolve package version
+        id: pkg
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "signalk-polar-performance-plugin@${VERSION}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Skip publish (not main)
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: echo "Publish is restricted to main. Current ref: ${GITHUB_REF}"
+      - name: Skip publish (already on npm)
+        if: ${{ github.ref == 'refs/heads/main' && steps.pkg.outputs.already_published == 'true' }}
+        run: echo "signalk-polar-performance-plugin@${{ steps.pkg.outputs.version }} is already on npm; nothing to publish."
       - name: Dry run validation
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish != true }}
         run: echo "Manual workflow validation only; npm publish skipped."
       - name: Publish to npm
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish == true }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.pkg.outputs.already_published == 'false' && (github.event_name == 'push' || inputs.publish == true) }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          if [[ "$tag" == *beta* ]]; then
+          VERSION="${{ steps.pkg.outputs.version }}"
+          if [[ "$VERSION" == *beta* ]]; then
             npm publish --access public --tag beta
           else
             npm publish --access public

@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [1.3.3] - 2026-08-28
 
 ### Changed
-- npm publishes now use GitHub Actions OIDC trusted publishing instead of a long-lived `NPM_TOKEN`.
+- npm publishes now use GitHub Actions OIDC trusted publishing instead of a long-lived `NPM_TOKEN`, and only run after a merge to `main`.
 - Idle input recovery is now always enabled; the temporary `detectStaleData` setting has been removed from the runtime settings UI.
 
 ### Fixed
