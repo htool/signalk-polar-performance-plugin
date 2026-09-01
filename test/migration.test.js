@@ -40,7 +40,13 @@ function makeApp(dataDir) {
     error: () => {},
     setPluginStatus: () => {},
     setPluginError: (msg) => errors.push(msg),
-    savePluginOptions: (opts) => saved.push(JSON.parse(JSON.stringify(opts))),
+    savePluginOptions: (opts, callback) => {
+      if (typeof callback !== 'function') {
+        throw new TypeError('callback is not a function')
+      }
+      saved.push(JSON.parse(JSON.stringify(opts)))
+      callback(null)
+    },
     getDataDirPath: () => dataDir,
     subscriptionmanager: {
       subscribe: (_sub, unsubscribes, _onErr, _onDelta) => {

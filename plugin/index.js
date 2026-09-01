@@ -182,10 +182,16 @@ module.exports = (app) => {
       app.debug('Settings migrated from v0 to v1')
     }
 
-    // Persist if any migration ran, so migrations don't repeat on next start
+    // Persist if any migration ran, so migrations don't repeat on next start.
+    // Signal K requires a callback; omitting it throws TypeError and aborts start().
     if ((s.settingsVersion ?? 0) > version) {
-      app.savePluginOptions(s)
-      app.debug('Migrated settings saved (v%d → v%d)', version, s.settingsVersion)
+      app.savePluginOptions(s, (err) => {
+        if (err) {
+          app.error('Failed to save migrated settings: ' + err.message)
+        } else {
+          app.debug('Migrated settings saved (v%d → v%d)', version, s.settingsVersion)
+        }
+      })
     }
 
     return s

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Plugin start no longer fails with `TypeError: callback is not a function` when migrating existing settings. `savePluginOptions` now receives the callback Signal K requires.
+
 ## [1.3.3] - 2026-08-28
 
 ### Changed
