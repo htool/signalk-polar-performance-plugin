@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed dead CSV-era helpers (`_processTWSHeader`, `_processSpeedRow`) that could insert zero-speed points into the table if ever reused with `0.0`-padded CSV.
 
 ### Changed
+- The webapp Navigation page now reads the target and opposite-tack headings from the `performance.targetHeadingTrue`/`performance.oppositeTackHeadingTrue` outputs instead of deriving them from the live VMC curve, and the Performance page keeps only the opposite tack heading.
 - Replaced current-relative custom target-heading outputs with current-independent `performance.targetHeadingTrue.port` and `.starboard` outputs, while retaining standard `performance.tackTrue` compatibility and moving the headings to the Performance webapp view.
 
 ## [1.4.0] - 2026-08-09
