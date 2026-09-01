@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## Unreleased
 
+### Added
+- Added layline navigation outputs `navigation.racing.layline.distance`/`.time` and `navigation.racing.oppositeLayline.distance`/`.time`, published with the navigation output group. Values are signed: positive means the crossing is ahead, zero means tack or gybe now, negative means the layline has been overstood. Geometry uses a local north/east tangent plane between `navigation.position` and `navigation.courseGreatCircle.nextPoint.position`, with target tack/gybe vectors taken from the polar beat/run targets.
+
 ### Fixed
+- `performance.optimumWindAngle` now uses a consistent sign convention downwind: the value is the signed difference between the current TWA and the optimum gybe angle, matching the upwind case instead of being inverted.
+- Disabling a navigation output group or stopping the plugin now clears only the paths that were actually active, via `MessageHandler.clear`, instead of blanket-nulling every known output path.
+- Navigation outputs are now recomputed when an input goes stale or the route bearing disappears, so stale VMC and layline values are cleared instead of being left at their last value.
 - ORC searches now show a busy state and ignore duplicate submissions while a cache rebuild and search are in progress.
 - Signal K admin styling now loads from standalone CSS records in current Vite manifests while retaining support for entry-associated CSS and older server fallbacks.
 - Polar interpolation no longer reports 0 kn when the polar lacks derived beat/run target rows for some TWS columns (common in Jieter/Expedition exports that only emit targets when they change). Missing targets are now interpolated across TWS during load; previously the fallback pinned the beat angle to the lowest tabulated angle (e.g. 52° between 44° and 38° neighbours), which nulled the pinch zone for every TWS bracket interpolated against the gap — upwind polar speed read 0 kn at 11–15 kt for affected polars.

@@ -70,6 +70,44 @@ class PolarTable {
     }
   }
 
+  getTargetSailingVectors({ tws, twd, currentTwaSigned }) {
+    if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(currentTwaSigned)) {
+      return null
+    }
+
+    const twa = Math.abs(currentTwaSigned)
+    const sailingMode = twa < Math.PI / 3
+      ? 'upwind'
+      : (twa > 2 * Math.PI / 3 ? 'downwind' : 'reaching')
+    if (sailingMode === 'reaching') {
+      return { sailingMode, port: null, starboard: null }
+    }
+
+    const targetAngle = sailingMode === 'upwind'
+      ? this.getBeatAngle(tws)
+      : this.getRunAngle(tws)
+    if (!Number.isFinite(targetAngle)) return null
+
+    const speedThroughWater = this.getBoatSpeed(tws, targetAngle)
+    if (!Number.isFinite(speedThroughWater) || speedThroughWater <= 0) return null
+
+    const portHeading = this._wrap2Pi(twd + targetAngle)
+    const starboardHeading = this._wrap2Pi(twd - targetAngle)
+    return {
+      sailingMode,
+      port: {
+        headingTrue: portHeading,
+        speedThroughWater,
+        vector: this._vectorFromPolar(speedThroughWater, portHeading)
+      },
+      starboard: {
+        headingTrue: starboardHeading,
+        speedThroughWater,
+        vector: this._vectorFromPolar(speedThroughWater, starboardHeading)
+      }
+    }
+  }
+
   getBoatSpeedState(tws, twa) {
     const normalizedTwa = Math.abs(twa)
     const twsInterpolation = this._findTwsInterpolation(tws)
@@ -239,6 +277,7 @@ class PolarTable {
     currentDrift,
     currentSetTrue,
     ignoreCurrent = false,
+    currentTack,
     stepRad = Math.PI / 90,
     ratioEpsilon = 1e-6
   }) {
@@ -266,9 +305,11 @@ class PolarTable {
 
     // Signal K wind-angle sign convention in live data is opposite to the
     // solver's internal tack sign, so invert mapping here.
-    const currentTack = currentTwaSigned >= 0 ? 'port' : 'starboard'
-    const currentBest = currentTack === 'starboard' ? solved.starboard : solved.port
-    const oppositeBest = currentTack === 'starboard' ? solved.port : solved.starboard
+    const resolvedTack = currentTack === 'port' || currentTack === 'starboard'
+      ? currentTack
+      : (currentTwaSigned >= 0 ? 'port' : 'starboard')
+    const currentBest = resolvedTack === 'starboard' ? solved.starboard : solved.port
+    const oppositeBest = resolvedTack === 'starboard' ? solved.port : solved.starboard
     const actualVmc = sog * Math.cos(cog - course)
 
     let ratio = null

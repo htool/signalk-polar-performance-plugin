@@ -173,6 +173,62 @@ describe('PolarTable — performance target headings', () => {
   })
 })
 
+describe('PolarTable — navigation target vectors', () => {
+  const polar = new PolarTable().loadFromCanonical(CANONICAL)
+  const tws = SI.fromKnots(12)
+  const twd = SI.fromDegrees(15)
+
+  it('returns port and starboard beat vectors through the water', () => {
+    const targets = polar.getTargetSailingVectors({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(45)
+    })
+
+    assert.equal(targets.sailingMode, 'upwind')
+    assert.ok(approxEqual(targets.port.speedThroughWater, polar.getBoatSpeed(tws, polar.getBeatAngle(tws)), 1e-9))
+    assert.ok(approxEqual(Math.hypot(targets.port.vector.x, targets.port.vector.y), targets.port.speedThroughWater, 1e-9))
+    assert.ok(approxEqual(Math.hypot(targets.starboard.vector.x, targets.starboard.vector.y), targets.starboard.speedThroughWater, 1e-9))
+  })
+
+  it('uses strict VMG mode gates for reaching', () => {
+    for (const degrees of [60, 90, 120]) {
+      const targets = polar.getTargetSailingVectors({
+        tws,
+        twd,
+        currentTwaSigned: SI.fromDegrees(degrees)
+      })
+
+      assert.deepEqual(targets, { sailingMode: 'reaching', port: null, starboard: null })
+    }
+  })
+
+  it('returns run vectors outside the downwind gate', () => {
+    const targets = polar.getTargetSailingVectors({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(-135)
+    })
+
+    assert.equal(targets.sailingMode, 'downwind')
+    assert.ok(approxEqual(targets.port.speedThroughWater, polar.getBoatSpeed(tws, polar.getRunAngle(tws)), 1e-9))
+  })
+
+  it('does not include current or waypoint data in target vectors', () => {
+    const windOnly = polar.getTargetSailingVectors({ tws, twd, currentTwaSigned: SI.fromDegrees(45) })
+    const withNavigationData = polar.getTargetSailingVectors({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(45),
+      currentDrift: SI.fromKnots(2),
+      currentSetTrue: SI.fromDegrees(90),
+      waypoint: { latitude: 1, longitude: 2 }
+    })
+
+    assert.deepEqual(withNavigationData, windOnly)
+  })
+})
+
 describe('PolarTable — interpolation', () => {
   let polar
 

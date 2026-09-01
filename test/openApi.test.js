@@ -48,6 +48,23 @@ describe('OpenAPI runtime contract', () => {
     assert.ok(response.oppositeTackHeadingTrue)
   })
 
+  it('documents standard layline outputs and structured navigation state', () => {
+    const outputs = openApi.components.schemas.SignalKOutputSnapshot.properties
+    const meta = openApi.components.schemas.RuntimeMeta.properties
+    const status = openApi.components.schemas.RuntimeStatus.properties
+
+    for (const path of [
+      'navigation.racing.layline.distance',
+      'navigation.racing.layline.time',
+      'navigation.racing.oppositeLayline.distance',
+      'navigation.racing.oppositeLayline.time'
+    ]) {
+      assert.ok(outputs[path])
+      assert.ok(meta[path])
+    }
+    assert.deepEqual(status.navigationState, { '$ref': '#/components/schemas/NavigationState' })
+  })
+
   it('has resolvable local schema references', () => {
     const document = JSON.stringify(openApi)
     const refs = Array.from(document.matchAll(/"\$ref":"#\/components\/schemas\/([^"/]+)"/g), match => match[1])

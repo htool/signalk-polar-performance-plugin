@@ -1025,7 +1025,18 @@
           "twd": { "type": "number", "nullable": true },
           "bearingTrue": { "type": "number", "nullable": true },
           "currentDrift": { "type": "number", "nullable": true },
-          "currentSetTrue": { "type": "number", "nullable": true }
+          "currentSetTrue": { "type": "number", "nullable": true },
+          "position": { "nullable": true, "$ref": "#/components/schemas/Position" },
+          "waypoint": { "nullable": true, "$ref": "#/components/schemas/Position" }
+        }
+      },
+
+      "Position": {
+        "type": "object",
+        "required": ["latitude", "longitude"],
+        "properties": {
+          "latitude": { "type": "number" },
+          "longitude": { "type": "number" }
         }
       },
 
@@ -1062,7 +1073,53 @@
           "performance.velocityMadeGoodOnCourse": { "type": "number", "nullable": true },
           "performance.targetVelocityMadeGoodOnCourse": { "type": "number", "nullable": true },
           "performance.oppositeTackVelocityMadeGoodOnCourse": { "type": "number", "nullable": true },
-          "performance.velocityMadeGoodOnCourseRatio": { "type": "number", "nullable": true }
+          "performance.velocityMadeGoodOnCourseRatio": { "type": "number", "nullable": true },
+          "navigation.racing.layline.distance": { "type": "number", "nullable": true, "description": "Signed distance to the crossing layline (m); negative after overstanding." },
+          "navigation.racing.layline.time": { "type": "number", "nullable": true, "description": "Signed time to the crossing layline (s); negative after overstanding." },
+          "navigation.racing.oppositeLayline.distance": { "type": "number", "nullable": true, "description": "Signed distance to the opposite layline after changing tack or gybe now (m)." },
+          "navigation.racing.oppositeLayline.time": { "type": "number", "nullable": true, "description": "Signed time to the opposite layline after changing tack or gybe now (s)." }
+        }
+      },
+
+      "LaylineResultState": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["valid", "unavailable"] },
+          "reason": { "type": "string", "nullable": true },
+          "distance": { "type": "number", "nullable": true },
+          "time": { "type": "number", "nullable": true },
+          "onwardTime": { "type": "number", "nullable": true }
+        }
+      },
+
+      "NavigationState": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["disabled", "valid", "partial", "unavailable"] },
+          "structural": {
+            "type": "object",
+            "properties": {
+              "ready": { "type": "boolean" },
+              "missing": { "type": "array", "items": { "type": "string" } },
+              "stale": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "temporal": {
+            "type": "object",
+            "properties": {
+              "sailingMode": { "type": "string", "nullable": true, "enum": ["upwind", "downwind", "reaching", null] },
+              "currentTack": { "type": "string", "nullable": true, "enum": ["port", "starboard", null] },
+              "layline": { "$ref": "#/components/schemas/LaylineResultState" },
+              "oppositeLayline": { "$ref": "#/components/schemas/LaylineResultState" }
+            }
+          },
+          "current": {
+            "type": "object",
+            "properties": {
+              "mode": { "type": "string", "enum": ["used", "ignored", "fallbackZero"] },
+              "warning": { "type": "boolean" }
+            }
+          }
         }
       },
 
@@ -1080,7 +1137,8 @@
           "outputs": { "$ref": "#/components/schemas/SignalKOutputSnapshot" },
           "polarState": { "$ref": "#/components/schemas/InterpolationState" },
           "lifecycleWarnings": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-          "vmcRouteSuppressed": { "type": "boolean" }
+          "vmcRouteSuppressed": { "type": "boolean" },
+          "navigationState": { "$ref": "#/components/schemas/NavigationState" }
         }
       },
 
@@ -1107,7 +1165,11 @@
         "properties": {
           "performance.targetHeadingTrue.port": { "$ref": "#/components/schemas/MetricMeta" },
           "performance.targetHeadingTrue.starboard": { "$ref": "#/components/schemas/MetricMeta" },
-          "performance.tackTrue": { "$ref": "#/components/schemas/MetricMeta" }
+          "performance.tackTrue": { "$ref": "#/components/schemas/MetricMeta" },
+          "navigation.racing.layline.distance": { "$ref": "#/components/schemas/MetricMeta" },
+          "navigation.racing.layline.time": { "$ref": "#/components/schemas/MetricMeta" },
+          "navigation.racing.oppositeLayline.distance": { "$ref": "#/components/schemas/MetricMeta" },
+          "navigation.racing.oppositeLayline.time": { "$ref": "#/components/schemas/MetricMeta" }
         }
       },
 
@@ -1133,8 +1195,8 @@
           "polarSpeed": { "type": "boolean" },
           "useSOG": { "type": "boolean" },
           "smoothedInputs": { "type": "boolean" },
-          "vmcNavigation": { "type": "boolean", "description": "Enables waypoint-dependent VMC navigation outputs." },
-          "ignoreCurrent": { "type": "boolean", "description": "Navigation setting: use a zero-current assumption for VMC calculations." }
+          "vmcNavigation": { "type": "boolean", "description": "Enables waypoint-dependent VMC and layline navigation outputs." },
+          "ignoreCurrent": { "type": "boolean", "description": "Navigation setting: use a zero-current assumption for VMC and layline calculations." }
         }
       },
 

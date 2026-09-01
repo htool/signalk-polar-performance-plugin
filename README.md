@@ -37,7 +37,7 @@ The webapp is the primary interface for the plugin. Open it from the Signal K da
 
 A polar diagram on the left and live performance numbers on the right. The diagram shows a live TWS curve interpolated for the current wind speed, and two dots — the polar target speed (what the polar says you should be doing) and your actual boat speed — both at the current TWA. The targets section shows the beat and run angle and VMG interpolated from the polar for the current wind speed. Any data quality warnings appear at the bottom.
 
-The webapp also includes a dedicated Navigation page for VMC-related sailing decisions. It displays the live heading-to-VMC curve for the current polar and wind conditions, the current/target/opposite-tack VMC values, and the corresponding target headings. The full-screen plotter provides a Graph mode toggle so you can switch between Performance and Navigation overlays.
+The webapp also includes a dedicated Navigation page for waypoint-related sailing decisions. It displays the live heading-to-VMC curve, current/target/opposite-tack VMC, and signed time and distance to both waypoint laylines. The full-screen plotter provides a Graph mode toggle so you can switch between Performance and Navigation overlays.
 
 For external clients such as KIP or SKIP race steer widgets, the plugin also exposes live curve endpoints that return curve points only, driven by the plugin's current Signal K state:
 
@@ -92,9 +92,11 @@ All three input channels — true wind speed, true wind angle, and boat speed �
 
 Choose between **speed through water** (`navigation.speedThroughWater`) and **speed over ground** (`navigation.speedOverGround`). Use SOG when a working paddlewheel is not available, but be aware that SOG includes current — this makes boat speed appear higher or lower depending on the tidal state.
 
-### Navigation / VMC outputs
+### Navigation outputs
 
-Enable the `vmcNavigation` output group to publish VMC-related navigation values. These calculations use the active polar together with the current course and current estimate from Signal K, and they are suppressed when no usable course bearing is available. The Navigation page uses these outputs, while its graph and the plotter's Navigation mode obtain heading markers from the VMC curve query.
+Enable the `vmcNavigation` output group to publish VMC and layline navigation values. VMC uses the current course bearing. Laylines use `navigation.position` and `navigation.courseGreatCircle.nextPoint.position`; no separate waypoint can be selected in the plugin. Disabling the group clears its active output paths once and stops navigation publication until it is enabled again.
+
+Wind and current use the same input smoother selected for performance calculations. Position, next-point position, and calculated layline distance/time are not smoothed. When current is enabled but unavailable, navigation falls back to zero current and reports a warning in the Navigation page. Selecting **Ignore current** intentionally uses zero current without a warning.
 
 ---
 
@@ -131,7 +133,9 @@ Automatically selects between beat and run depending on whether you are sailing 
 
 | Path | Description |
 |------|-------------|
-| `performance.optimumWindAngle` | Difference between your current TWA and the optimal angle. Negative = bear away, positive = head up. Zero means you are sailing at the optimal angle. |
+| `performance.optimumWindAngle` | Signed difference between the current TWA and the applicable optimum beat/gybe angle. Zero means the target angle is being sailed; either sign is valid and identifies the side/direction of the error. |
+
+Despite its historical path name, this is an angular **error**, not the optimum angle itself. Use `performance.targetAngle` for the optimum beat or gybe angle.
 
 ### VMG and polar VMG ratio
 
@@ -175,7 +179,20 @@ These outputs use TWS, signed TWA, true heading, and the polar beat/run target. 
 | `performance.oppositeTackVelocityMadeGoodOnCourse` | Best achievable VMC on the opposite tack. |
 | `performance.velocityMadeGoodOnCourseRatio` | Actual VMC divided by target VMC on the current tack. |
 
-These outputs are published when the VMC navigation output group is enabled. They depend on a valid course bearing and a usable current/ground-speed estimate, and they are used by the Navigation page and Navigation mode in the plotter.
+These outputs are published when the navigation output group is enabled. They depend on a valid course bearing and ground-speed estimate, and they are used by the Navigation page and Navigation mode in the plotter.
+
+### Layline navigation outputs
+
+| Path | Description |
+|------|-------------|
+| `navigation.racing.layline.distance` | Signed distance while continuing on the current target tack or gybe until crossing the other waypoint layline. |
+| `navigation.racing.layline.time` | Signed time to that crossing. |
+| `navigation.racing.oppositeLayline.distance` | Signed distance when changing tack or gybe now and sailing to the opposite crossing. |
+| `navigation.racing.oppositeLayline.time` | Signed time to that crossing. |
+
+Positive values place the crossing ahead, zero means tack or gybe now, and negative values mean the layline has been overstood. Invalid or stale results are published as `null`. Upwind and downwind calculations use the polar beat and run targets; reaching follows the VMG mode gates and has no layline result.
+
+Layline geometry uses a local north/east tangent plane centred on the vessel. It assumes locally constant wind, current, and polar performance. This is appropriate for tactical estimates, but accuracy naturally decreases for distant waypoints. Tack and gybe duration or speed loss are not included.
 
 ### Smoothed inputs
 
