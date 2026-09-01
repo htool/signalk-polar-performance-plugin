@@ -243,6 +243,121 @@ describe('PolarTable — interpolation state', () => {
   })
 })
 
+describe('PolarTable — derived target gap filling', () => {
+  // Polar shaped like real Jieter/Expedition exports: derived beat/run targets
+  // only exist for a subset of TWS columns (here 6 kt has both, 12 kt only a
+  // run target, 16 kt only a beat target). Before the fix, the missing targets
+  // fell back to argmax-VMG over tabulated angles (beat angle = 52°, the lowest
+  // tabulated angle), nulling the pinch zone for every TWS interpolated
+  // against the gap — polar speed read 0 kn while sailing upwind at 11–15 kt.
+  const GAPPED = {
+    kind: 'polarTable',
+    schemaVersion: '1.0.0',
+    name: 'Gapped Polar',
+    units: { tws: 'm/s', twa: 'rad', boatSpeed: 'm/s' },
+    symmetry: { portStarboardSymmetric: true },
+    axes: {
+      tws: [6, 12, 16].map(SI.fromKnots),
+      twa: [52, 60, 75, 90, 110, 120, 135, 150, 160].map(SI.fromDegrees)
+    },
+    values: {
+      boatSpeedMatrix: [
+        [3.3, 3.2, 3.59, 3.51, 3.38, 2.95, 2.93, 2.56, 2.65].map(SI.fromKnots),
+        [4.84, 5.32, 5.52, 5.69, 5.46, 5.22, 4.93, 4.82, 4.98].map(SI.fromKnots),
+        [5.41, 5.8, 6.18, 6.18, 6.03, 6.02, 5.87, 5.62, 5.7].map(SI.fromKnots)
+      ]
+    },
+    derived: {
+      rows: [
+        { tws: SI.fromKnots(6), beat: targetPoint(39, 3.308), run: targetPoint(175, 4.435) },
+        { tws: SI.fromKnots(12), run: targetPoint(177, 5.177) },
+        { tws: SI.fromKnots(16), beat: targetPoint(38, 5.316) }
+      ]
+    }
+  }
+  let polar
+
+  before(() => { polar = new PolarTable().loadFromCanonical(GAPPED) })
+
+  it('interpolates a missing beat target across TWS (12 kt: between 39° and 38°)', () => {
+    const beat = polar.getBeatAngle(SI.fromKnots(12))
+    assert.ok(approxEqual(SI.toDegrees(beat), 38.4, 0.5),
+      `Expected ~38.4°, got ${SI.toDegrees(beat).toFixed(1)}°`)  
+  })
+
+  it('does not snap a gapped beat angle to the lowest tabulated angle (52°)', () => {
+    for (const tws of [7, 9, 11, 13, 15]) {
+      const beat = SI.toDegrees(polar.getBeatAngle(SI.fromKnots(tws)))
+      assert.ok(beat < 45, `Beat angle ${beat.toFixed(1)}° at ${tws} kt should stay below 45°`)
+    }
+  })
+
+  it('clamps a missing run target at the end of the TWS axis (16 kt ← 12 kt)', () => {
+    const run = polar.getRunAngle(SI.fromKnots(16))
+    assert.ok(approxEqual(SI.toDegrees(run), 177, 0.5),
+      `Expected ~177°, got ${SI.toDegrees(run).toFixed(1)}°`)
+  })
+
+  it('returns polar speed upwind between gapped TWS brackets (was 0 kn / null)', () => {
+    for (const tws of [9, 11, 13, 15]) {
+      const speed = polar.getBoatSpeed(SI.fromKnots(tws), SI.fromDegrees(40))
+      assert.ok(speed !== null && SI.toKnots(speed) > 3,
+        `Expected > 3 kn at ${tws} kt / 40°, got ${speed === null ? 'null' : SI.toKnots(speed).toFixed(2) + ' kn'}`)
+    }
+  })
+
+  it('keeps dead-downwind data at TWS interpolated against a run-angle gap', () => {
+    // 14–15 kt interpolate against the 16 kt bracket whose run target is filled
+    const speed = polar.getBoatSpeed(SI.fromKnots(15), SI.fromDegrees(170))
+    assert.ok(speed !== null && SI.toKnots(speed) > 4,
+      `Expected > 4 kn at 15 kt / 170°, got ${speed === null ? 'null' : SI.toKnots(speed).toFixed(2) + ' kn'}`)
+  })
+
+  it('interpolates toward zero below the first TWS column in the pinch zone', () => {
+    // 3 kt is below the 6 kt minimum: pinch zone (35.1° … 39°) must ramp
+    // toward zero instead of returning null
+    const speed = polar.getBoatSpeed(SI.fromKnots(3), SI.fromDegrees(37))
+    assert.ok(speed !== null && SI.toKnots(speed) > 0 && SI.toKnots(speed) < 3.308,
+      `Expected 0 < speed < 3.3 kn at 3 kt / 37°, got ${speed === null ? 'null' : SI.toKnots(speed).toFixed(2) + ' kn'}`)
+  })
+
+  it('interpolates toward zero below the first TWS column beyond the last TWA', () => {
+    const speed = polar.getBoatSpeed(SI.fromKnots(3), SI.fromDegrees(176))
+    assert.ok(speed !== null && SI.toKnots(speed) > 0 && SI.toKnots(speed) < 4.435,
+      `Expected 0 < speed < 4.4 kn at 3 kt / 176°, got ${speed === null ? 'null' : SI.toKnots(speed).toFixed(2) + ' kn'}`)
+  })
+})
+
+describe('PolarTable — getBoatSpeed / getInterpolationState consistency', () => {
+  // getBoatSpeed must return null exactly when the state machine reports
+  // in_irons or above_range — the two share the interpolated beat angle and
+  // the interpolated run-extrapolation limit.
+  let polar
+
+  before(() => { polar = new PolarTable().loadFromCanonical(CANONICAL) })
+
+  it('null ⇔ in_irons or above_range across a TWS/TWA sweep', () => {
+    for (let tws = 3; tws <= 26; tws += 0.5) {
+      for (let twa = 5; twa <= 180; twa += 1) {
+        const speed = polar.getBoatSpeed(SI.fromKnots(tws), SI.fromDegrees(twa))
+        const state = polar.getInterpolationState(SI.fromKnots(tws), SI.fromDegrees(twa))
+        const expectNull = state.twa === 'in_irons' || state.twa === 'above_range'
+        assert.equal(speed === null, expectNull,
+          `TWS ${tws} kt / ${twa}°: speed=${speed} but state=${state.tws}/${state.twa}`)
+      }
+    }
+  })
+
+  it('pinching zone returns a speed between 0 and the beat-angle speed', () => {
+    const tws = SI.fromKnots(12)
+    const beatAngle = polar.getBeatAngle(tws)
+    const speed = polar.getBoatSpeed(tws, 0.95 * beatAngle)
+    const beatSpeed = polar.getBoatSpeed(tws, beatAngle)
+    assert.ok(speed !== null && speed > 0 && speed < beatSpeed,
+      `Expected 0 < speed < ${SI.toKnots(beatSpeed).toFixed(2)} kn, got ${speed}`)
+  })
+})
+
 describe('PolarTable — port/starboard symmetry', () => {
   let polar
 
