@@ -16,7 +16,12 @@ function makeApp(dataDir) {
     error: () => {},
     setPluginStatus: () => {},
     setPluginError: () => {},
-    savePluginOptions: () => {},
+    savePluginOptions: (_options, callback) => {
+      if (typeof callback !== 'function') {
+        throw new TypeError('callback is not a function')
+      }
+      callback(null)
+    },
     getDataDirPath: () => dataDir,
     handleMessage: () => {},
     config: { port: 3000 },
