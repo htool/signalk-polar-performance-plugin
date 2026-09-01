@@ -8,13 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 - Plugin start no longer fails with `TypeError: callback is not a function` when migrating existing settings. `savePluginOptions` now receives the callback Signal K requires.
+
+## [1.3.3] - 2026-08-28
+
+### Changed
+- npm publishes now use GitHub Actions OIDC trusted publishing instead of a long-lived `NPM_TOKEN`, and only run after a merge to `main`.
+- Idle input recovery is now always enabled; the temporary `detectStaleData` setting has been removed from the runtime settings UI.
+
+### Fixed
+- Polar interpolation no longer reports 0 kn when the polar lacks derived beat/run target rows for some TWS columns (common in Jieter/Expedition exports that only emit targets when they change). Missing targets are now interpolated across TWS during load; previously the fallback pinned the beat angle to the lowest tabulated angle (e.g. 52° between 44° and 38° neighbours), which nulled the pinch zone for every TWS bracket interpolated against the gap — upwind polar speed read 0 kn at 11–15 kt for affected polars.
+- `getBoatSpeed` now evaluates the in-irons boundary against the interpolated beat angle, matching `getInterpolationState`, instead of each TWS bracket's own angle. A bracket whose own pinch zone is stricter no longer nulls the entire interpolated result.
+- The zero-wind padding entry is now created before extrapolation coefficients are computed, so light-wind lookups (below the polar's lowest TWS) in the pinch and run-extrapolation zones interpolate smoothly toward zero instead of returning null.
+- `getInterpolationState` now reports `above_range` consistently with `getBoatSpeed`'s interpolated run-extrapolation limit, even when the TWA is still tabulated for one of the TWS brackets.
+- Removed dead CSV-era helpers (`_processTWSHeader`, `_processSpeedRow`) that could insert zero-speed points into the table if ever reused with `0.0`-padded CSV.
 - Signal K admin styling now loads from standalone CSS records in current Vite manifests while retaining support for entry-associated CSS and older server fallbacks.
 - `/live` and `/status` endpoints now return `null` for `tws`/`twa` (and downstream fields) when the wind smoother has no data or is stale, instead of `0`. The guard was checking for the presence of the smoother object rather than its `ready` state.
 - `computeAndSend`: when the polar table lookup fails (boat outside polar range — in irons or above max TWS), the `performance.polarSpeed`, `performance.polarSpeedRatio`, and `performance.targetSpeed` SK paths are now written with `null` instead of `0`. Writing `0` was misleading because it is a valid-looking value rather than an explicit "no data" signal.
 - Live input subscriptions are now re-established after prolonged silence for all subscribed inputs, not just true wind. Boat speed and optional true heading use the same recovery path, and the plugin now reports their lifecycle state through the webapp/status endpoints.
-
-### Changed
-- Idle input recovery is now always enabled; the temporary `detectStaleData` setting has been removed from the runtime settings UI.
 
 ## [1.2.1] - 2026-07-25
 
