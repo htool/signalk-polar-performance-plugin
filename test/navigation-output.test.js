@@ -134,7 +134,7 @@ describe('navigation layline publication', () => {
         mode: 'fallbackZero',
         warning: true
       })
-      assert.ok(statusResponse.body.inputs.smoothed.cog > 2 * Math.PI - 0.21)
+      assert.ok(((statusResponse.body.inputs.smoothed.cog % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) > 2 * Math.PI - 0.21)
       assert.deepEqual(statusResponse.body.inputs.raw.position, { latitude: 0, longitude: 0 })
       assert.deepEqual(statusResponse.body.inputs.raw.waypoint, { latitude: 0.01, longitude: 0 })
 

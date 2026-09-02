@@ -418,8 +418,8 @@ const NAVIGATION_OUTPUT_DEFS = [
   { sk: 'performance/targetVelocityMadeGoodOnCourse',       label: 'Target VMC',              mk: 'performance.targetVelocityMadeGoodOnCourse',       fb: SPEED_DEFAULT },
   { sk: 'performance/oppositeTackVelocityMadeGoodOnCourse', label: 'Opposite tack VMC',       mk: 'performance.oppositeTackVelocityMadeGoodOnCourse', fb: SPEED_DEFAULT },
   { sk: 'performance/velocityMadeGoodOnCourseRatio',        label: 'VMC ratio',               mk: 'performance.velocityMadeGoodOnCourseRatio',        fb: RATIO_DEFAULT },
-  { sk: 'performance/targetHeadingTrue',                    label: 'Target heading (true)',   mk: 'performance.targetHeadingTrue',                    fb: ANGLE_DEFAULT },
-  { sk: 'performance/oppositeTackHeadingTrue',              label: 'Opposite tack heading',   mk: 'performance.oppositeTackHeadingTrue',              fb: ANGLE_DEFAULT },
+  { sk: 'performance/targetHeadingTrue',                    label: 'Target heading (true)',   mk: 'performance.targetHeadingTrue.port',               fb: ANGLE_DEFAULT, pathLabel: 'performance.targetHeadingTrue.port / .starboard', getValue: (_, headings) => headings.targetHeading },
+  { sk: 'performance/oppositeTackHeadingTrue',              label: 'Opposite tack heading',   mk: 'performance.targetHeadingTrue.starboard',          fb: ANGLE_DEFAULT, pathLabel: 'performance.targetHeadingTrue.port / .starboard', getValue: (_, headings) => headings.oppositeHeading },
 ]
 
 // Unique SK path id used as DOM element id (slashes → dashes)
@@ -535,14 +535,33 @@ async function refreshVmcCurve() {
   }
 }
 
+function getNavigationTargetHeadings(outputs = outputValues, twaSigned = (liveData?.twa ?? smoothedValues?.twa ?? rawValues?.twa)) {
+  if (twaSigned == null || !Number.isFinite(+twaSigned)) {
+    return { targetHeading: null, oppositeHeading: null }
+  }
+
+  const portHdg = outputs['performance/targetHeadingTrue/port'] ?? outputs['performance.targetHeadingTrue.port']
+  const stbdHdg = outputs['performance/targetHeadingTrue/starboard'] ?? outputs['performance.targetHeadingTrue.starboard']
+
+  const isPortTack = +twaSigned < 0
+  const rawTarget = isPortTack ? portHdg : stbdHdg
+  const rawOpposite = isPortTack ? stbdHdg : portHdg
+
+  const targetHeading = (rawTarget != null && Number.isFinite(+rawTarget)) ? +rawTarget : null
+  const oppositeHeading = (rawOpposite != null && Number.isFinite(+rawOpposite)) ? +rawOpposite : null
+
+  return { targetHeading, oppositeHeading }
+}
+
 function updateOverviewNavigationCanvas() {
   if (!navPolar) return
+  const { targetHeading, oppositeHeading } = getNavigationTargetHeadings()
   const navLive = {
     actualAngle: smoothedValues?.cog,
     actualValue: outputValues['performance/velocityMadeGoodOnCourse'],
-    targetAngle: outputValues['performance/targetHeadingTrue'],
+    targetAngle: targetHeading,
     targetValue: outputValues['performance/targetVelocityMadeGoodOnCourse'],
-    oppositeAngle: outputValues['performance/oppositeTackHeadingTrue'],
+    oppositeAngle: oppositeHeading,
     oppositeValue: outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'],
     course: smoothedValues?.bearingTrue,
     twd: smoothedValues?.twd,
@@ -816,12 +835,14 @@ function _tickOverview() {
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
 
+  const { targetHeading, oppositeHeading } = getNavigationTargetHeadings()
+
   setVal('ov-nav-actual',  fmtVal(outputValues['performance/velocityMadeGoodOnCourse'], 'performance.velocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-target',  fmtVal(outputValues['performance/targetVelocityMadeGoodOnCourse'], 'performance.targetVelocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-opp',     fmtVal(outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'], 'performance.oppositeTackVelocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-ratio',   fmtVal(outputValues['performance/velocityMadeGoodOnCourseRatio'], 'performance.velocityMadeGoodOnCourseRatio', RATIO_DEFAULT))
-  setVal('ov-nav-hdg',     fmtVal(outputValues['performance/targetHeadingTrue'], 'performance.targetHeadingTrue', ANGLE_DEFAULT))
-  setVal('ov-nav-opp-hdg', fmtVal(outputValues['performance/oppositeTackHeadingTrue'], 'performance.oppositeTackHeadingTrue', ANGLE_DEFAULT))
+  setVal('ov-nav-hdg',     fmtVal(targetHeading, 'performance.targetHeadingTrue.port', ANGLE_DEFAULT))
+  setVal('ov-nav-opp-hdg', fmtVal(oppositeHeading, 'performance.targetHeadingTrue.starboard', ANGLE_DEFAULT))
 
   const navWarns = []
   if (!settings?.vmcNavigation) {
@@ -1312,7 +1333,7 @@ function _buildNavigationPage() {
 
   wrap.appendChild(sectionHeading('VMC Outputs'))
   wrap.appendChild(buildTable(NAVIGATION_OUTPUT_DEFS.map(def => ({
-    label: def.label + '\u2002(' + def.sk.replace(/\//g, '.') + ')',
+    label: def.label + '\u2002(' + (def.pathLabel || def.sk.replace(/\//g, '.')) + ')',
     id: 'nav-' + skId(def.sk),
   }))))
 
@@ -1327,6 +1348,8 @@ function _tickNavigation() {
   const vmcEnabled = !!settings?.vmcNavigation
   const requiresCurrent = vmcEnabled && !settings?.ignoreCurrent
 
+  const navHeadings = getNavigationTargetHeadings()
+
   NAVIGATION_OUTPUT_DEFS.forEach(def => {
     const id = 'nav-' + skId(def.sk)
     if (!vmcEnabled) {
@@ -1334,8 +1357,9 @@ function _tickNavigation() {
       setStale(id, true)
       return
     }
-    setVal(id, fmtVal(outputValues[def.sk], def.mk, def.fb))
-    setStale(id, outputValues[def.sk] == null)
+    const val = def.getValue ? def.getValue(outputValues, navHeadings) : outputValues[def.sk]
+    setVal(id, fmtVal(val, def.mk, def.fb))
+    setStale(id, val == null)
   })
 
   const warns = new Set()
@@ -1805,5 +1829,14 @@ async function init() {
   startPolling()
 }
 
-init()
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    getNavigationTargetHeadings,
+    NAVIGATION_OUTPUT_DEFS
+  }
+}
+
+if (typeof window !== 'undefined') {
+  init()
+}
 

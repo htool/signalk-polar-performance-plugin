@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Added layline navigation outputs `navigation.racing.layline.distance`/`.time` and `navigation.racing.oppositeLayline.distance`/`.time`, published with the navigation output group. Values are signed: positive means the crossing is ahead, zero means tack or gybe now, negative means the layline has been overstood. Geometry uses a local north/east tangent plane between `navigation.position` and `navigation.courseGreatCircle.nextPoint.position`, with target tack/gybe vectors taken from the polar beat/run targets.
 
 ### Changed
-- The webapp Navigation page now reads the target and opposite-tack headings from the `performance.targetHeadingTrue`/`performance.oppositeTackHeadingTrue` outputs instead of deriving them from the live VMC curve, and the Performance page keeps only the opposite tack heading.
+- The webapp Navigation page now reads target and opposite-tack headings from `performance.targetHeadingTrue.port` and `.starboard` plugin outputs instead of retired scalar paths, selecting the target heading based on current tack.
 - Replaced current-relative custom target-heading outputs with current-independent `performance.targetHeadingTrue.port` and `.starboard` outputs, while retaining standard `performance.tackTrue` compatibility and moving the headings to the Performance webapp view.
 
 ### Fixed
