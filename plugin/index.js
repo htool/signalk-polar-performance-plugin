@@ -9,13 +9,13 @@ const { exportNativePolarResource, inferNativeExportUnits } = require('./import/
 const { parseMatrixPolarText } = require('./import/matrixText')
 const {
   MessageHandler,
+  PolarSmoother,
   createSmoothedPolar,
   createSmoothedHandler,
   SmoothedAngle,
   BaseSmoother,
   ExponentialSmoother,
-  MovingAverageSmoother,
-  KalmanSmoother
+  MovingAverageSmoother
 } = require('signalkutilities')
 
 const CURRENT_SETTINGS_VERSION = 1
@@ -36,9 +36,13 @@ const DEFAULT_SETTINGS = {
   plotterGraphMode: 'performance',
   showAllTwsLines: true,
   smootherType: 'Exponential',
-  smootherParamExponential: 1,
+  smootherParamExponential: 5,
   smootherParamMovingAverage: 10,
   smootherParamKalman: 0.1,
+  navigationSmootherType: 'MovingAverage',
+  navigationSmootherParamExponential: 5,
+  navigationSmootherParamMovingAverage: 30,
+  navigationSmootherParamKalman: 0.1,
   beatAngle: false,
   beatVMG: false,
   targetTWA: false,
@@ -64,6 +68,7 @@ module.exports = (app) => {
   let importService = null
   let windSmoother = null
   let bspSmoother = null
+  let navigationWindSmoother = null
   let hdgSmoother = null
   let groundSmoother = null
   let twdSmoother = null
@@ -326,7 +331,7 @@ module.exports = (app) => {
       else if (!handler?.ready || !valid) missing.push(id)
     }
 
-    classify(windSmoother, 'wind', Number.isFinite(windSmoother?.polarValue?.magnitude) && Number.isFinite(windSmoother?.polarValue?.angle))
+    classify(navigationWindSmoother, 'wind', Number.isFinite(navigationWindSmoother?.polarValue?.magnitude) && Number.isFinite(navigationWindSmoother?.polarValue?.angle))
     classify(twdSmoother, 'windDirection', Number.isFinite(twdSmoother?.value))
     classify(positionHandler, 'position', _isPosition(positionHandler?.value))
     classify(waypointHandler, 'waypoint', _isPosition(waypointHandler?.value))
@@ -336,22 +341,54 @@ module.exports = (app) => {
     return { ready: missing.length === 0 && stale.length === 0, missing, stale }
   }
 
+  function getPerformanceSmootherOptions(s) {
+    return getSmootherOptions(s.smootherType, s, 'smootherParam')
+  }
+
+  function getNavigationSmootherOptions(s) {
+    return getSmootherOptions(s.navigationSmootherType, s, 'navigationSmootherParam')
+  }
+
   function getSmootherClass(type) {
     switch (type) {
-      case 'None':          return BaseSmoother
+      case 'None': return BaseSmoother
       case 'MovingAverage': return MovingAverageSmoother
-      case 'Kalman':        return KalmanSmoother
-      default:              return ExponentialSmoother
+      case 'Kalman': return KalmanSmoother
+      default: return ExponentialSmoother
     }
   }
 
-  function getSmootherOptions(type, s) {
+  function getSmootherOptions(type, source, keyPrefix) {
     switch (type) {
-      case 'None':          return {}
-      case 'MovingAverage': return { timeSpan: s.smootherParamMovingAverage ?? 10 }
-      case 'Kalman':        return { steadyState: s.smootherParamKalman ?? 0.1 }
-      default:              return { tau: s.smootherParamExponential ?? 1 }
+      case 'None': return {}
+      case 'MovingAverage': return { timeSpan: Number.isFinite(source[`${keyPrefix}MovingAverage`]) ? source[`${keyPrefix}MovingAverage`] : 30 }
+      case 'Kalman': return { steadyState: Number.isFinite(source[`${keyPrefix}Kalman`]) ? source[`${keyPrefix}Kalman`] : 0.1 }
+      default: return { tau: Number.isFinite(source[`${keyPrefix}Exponential`]) ? source[`${keyPrefix}Exponential`] : 5 }
     }
+  }
+
+  function hasFinitePolarInput(smoother) {
+    const polar = smoother?.polar
+    return Number.isFinite(polar?.magnitudeHandler?.value) && Number.isFinite(polar?.angleHandler?.value)
+  }
+
+  function createNavigationWindSmoother() {
+    if (navigationWindSmoother || !windSmoother?.polar) return
+    navigationWindSmoother = new PolarSmoother(
+      windSmoother.polar,
+      getSmootherClass(settings.navigationSmootherType),
+      getNavigationSmootherOptions(settings),
+      { onDelta: computeAndSend }
+    )
+    navigationWindSmoother.setAngleRange('-piToPi')
+    if (windSmoother.polar.ready) navigationWindSmoother.sample()
+  }
+
+  function detachNavigationWindSmoother() {
+    if (!navigationWindSmoother) return
+    navigationWindSmoother.polar.removeDeltaListener(navigationWindSmoother._handleSourceDelta)
+    navigationWindSmoother._deactivateLifecycle()
+    navigationWindSmoother = null
   }
 
   /** Migrate legacy settings in-place, returning the updated object. */
@@ -441,17 +478,20 @@ module.exports = (app) => {
       }
     }
 
-    // Smoother type or parameter changes — update all running smoothers in-place
-    const SMOOTHER_KEYS = ['smootherType', 'smootherParamExponential', 'smootherParamMovingAverage', 'smootherParamKalman']
-    if (keys.some(k => SMOOTHER_KEYS.includes(k))) {
-      const SC = getSmootherClass(settings.smootherType)
-      const so = getSmootherOptions(settings.smootherType, settings)
-      if (windSmoother) { windSmoother.setSmootherClass(SC); windSmoother.setSmootherOptions(so) }
-      if (bspSmoother)  { bspSmoother.setSmootherClass(SC);  bspSmoother.setSmootherOptions(so)  }
-      if (hdgSmoother)  { hdgSmoother.setSmootherClass(SC);  hdgSmoother.setSmootherOptions(so)  }
-      if (groundSmoother)  { groundSmoother.setSmootherClass(SC);  groundSmoother.setSmootherOptions(so)  }
-      if (twdSmoother)  { twdSmoother.setSmootherClass(SC);  twdSmoother.setSmootherOptions(so)  }
-      if (currentSmoother) { currentSmoother.setSmootherClass(SC); currentSmoother.setSmootherOptions(so) }
+    // Domain damping changes reset only the filters they govern.
+    const PERFORMANCE_SMOOTHER_KEYS = ['smootherType', 'smootherParamExponential', 'smootherParamMovingAverage', 'smootherParamKalman']
+    const NAVIGATION_SMOOTHER_KEYS = ['navigationSmootherType', 'navigationSmootherParamExponential', 'navigationSmootherParamMovingAverage', 'navigationSmootherParamKalman']
+    if (keys.some(key => PERFORMANCE_SMOOTHER_KEYS.includes(key))) {
+      const options = getPerformanceSmootherOptions(settings)
+      const SmootherClass = getSmootherClass(settings.smootherType)
+      if (windSmoother) { windSmoother.setSmootherClass(SmootherClass); windSmoother.setSmootherOptions(options) }
+      if (bspSmoother) { bspSmoother.setSmootherClass(SmootherClass); bspSmoother.setSmootherOptions(options) }
+    }
+    if (keys.some(key => NAVIGATION_SMOOTHER_KEYS.includes(key))) {
+      const options = getNavigationSmootherOptions(settings)
+      const SmootherClass = getSmootherClass(settings.navigationSmootherType)
+      if (navigationWindSmoother) { navigationWindSmoother.setSmootherClass(SmootherClass); navigationWindSmoother.setSmootherOptions(options) }
+      if (twdSmoother) { twdSmoother.setSmootherClass(SmootherClass); twdSmoother.setSmootherOptions(options) }
     }
 
     // Speed source change — re-point the BSP handler with an explicit unsubscribe/subscribe cycle.
@@ -466,8 +506,6 @@ module.exports = (app) => {
     // Performance target headings require true heading to resolve TWD from signed TWA.
     if (keys.includes('performanceOutputs')) {
       if (isOutputEnabled('targetHeadings') && !hdgSmoother) {
-        const SC = getSmootherClass(settings.smootherType)
-        const so = getSmootherOptions(settings.smootherType, settings)
         const headingWatchdog = _wireHandlerWatchdog({
           id: 'hdg.smoothed',
           getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
@@ -476,8 +514,8 @@ module.exports = (app) => {
         })
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
-          SmootherClass: SC,
-          smootherOptions: so,
+          SmootherClass: BaseSmoother,
+          smootherOptions: {},
           ...headingWatchdog,
           onDelta: () => {
             headingWatchdog.onDelta()
@@ -493,9 +531,6 @@ module.exports = (app) => {
     if (keys.includes('vmcNavigation') || keys.includes('ignoreCurrent')) {
       if (settings.vmcNavigation) {
         _publishOutputMetadata([...VMC_OUTPUT_META, ...LAYLINE_OUTPUT_META])
-        const SC = getSmootherClass(settings.smootherType)
-        const so = getSmootherOptions(settings.smootherType, settings)
-
         if (!groundSmoother) {
           const groundWatchdog = _wireHandlerWatchdog({
             id: 'ground.smoothed',
@@ -512,8 +547,8 @@ module.exports = (app) => {
             subscribe: true,
             app,
             pluginId: plugin.id,
-            SmootherClass: SC,
-            smootherOptions: so,
+            SmootherClass: BaseSmoother,
+            smootherOptions: {},
             ...groundWatchdog,
             onDelta: () => {
               groundWatchdog.onDelta()
@@ -530,6 +565,9 @@ module.exports = (app) => {
         if (!waypointHandler) {
           waypointHandler = _buildNavigationPositionHandler('waypoint', 'navigation.courseGreatCircle.nextPoint.position', 0)
         }
+        if (!navigationWindSmoother) {
+          createNavigationWindSmoother()
+        }
         if (!twdSmoother) {
           const twdWatchdog = _wireHandlerWatchdog({
             id: 'twd.smoothed',
@@ -541,8 +579,8 @@ module.exports = (app) => {
           twdSmoother = new SmoothedAngle(app, plugin.id, 'twd', 'environment.wind.directionTrue', {
             angleRange: '0to2pi',
             subscribe: true,
-            SmootherClass: SC,
-            smootherOptions: so,
+            SmootherClass: getSmootherClass(settings.navigationSmootherType),
+            smootherOptions: getNavigationSmootherOptions(settings),
             ...twdWatchdog,
             onDelta: () => {
               twdWatchdog.onDelta()
@@ -567,8 +605,8 @@ module.exports = (app) => {
               subscribe: true,
               app,
               pluginId: plugin.id,
-              SmootherClass: SC,
-              smootherOptions: so,
+              SmootherClass: BaseSmoother,
+              smootherOptions: {},
               ...currentWatchdog,
               onDelta: () => {
                 currentWatchdog.onDelta()
@@ -585,6 +623,7 @@ module.exports = (app) => {
         }
       } else {
         if (groundSmoother) { groundSmoother.terminate(); groundSmoother = null }
+        detachNavigationWindSmoother()
         if (twdSmoother) { twdSmoother.terminate(); twdSmoother = null }
         if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
         if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
@@ -643,9 +682,22 @@ module.exports = (app) => {
     if (hasPendingChanges) applyOptionChanges()
     if (!polarTable) return
 
-    const wind = windSmoother?.polarValue
-    const TWS = wind?.magnitude
-    const TWAsigned = wind?.angle
+    if (!hasFinitePolarInput(windSmoother)) {
+      windSmoother?.setSmootherOptions(getPerformanceSmootherOptions(settings))
+      navigationWindSmoother?.setSmootherOptions(getNavigationSmootherOptions(settings))
+      if (settings.vmcNavigation) {
+        navigationState = laylineCalculator.calculate({
+          enabled: true,
+          structural: _navigationStructuralState(null)
+        })
+        _clearNavigationOutputs()
+      }
+      return
+    }
+
+    const performanceWind = windSmoother?.polarValue
+    const TWS = performanceWind?.magnitude
+    const TWAsigned = performanceWind?.angle
     if (!Number.isFinite(TWS) || !Number.isFinite(TWAsigned)) {
       if (settings.vmcNavigation) {
         navigationState = laylineCalculator.calculate({
@@ -832,22 +884,25 @@ module.exports = (app) => {
     if (settings.vmcNavigation) {
       const ground = groundSmoother?.polarValue
       const current = currentSmoother?.polarValue
+      const navigationWind = navigationWindSmoother?.polarValue
+      const navigationTWS = navigationWind?.magnitude
+      const navigationTWAsigned = navigationWind?.angle
       const currentAvailable = currentSmoother?.ready && Number.isFinite(current?.magnitude) && Number.isFinite(current?.angle)
       const targets = polarTable.getTargetSailingVectors({
-        tws: TWS,
+        tws: navigationTWS,
         twd: twdSmoother?.value,
-        currentTwaSigned: TWAsigned
+        currentTwaSigned: navigationTWAsigned
       })
       const structural = _navigationStructuralState(targets)
-      const currentTack = _resolveNavigationTack(TWAsigned)
-      const vmcReady = twdSmoother?.ready && groundSmoother?.ready && bearingHandler?.ready
+      const currentTack = _resolveNavigationTack(navigationTWAsigned)
+      const vmcReady = navigationWindSmoother?.ready && twdSmoother?.ready && groundSmoother?.ready && bearingHandler?.ready
       const vmc = vmcReady ? polarTable.getVmcPerformance({
-        tws: TWS,
+        tws: navigationTWS,
         twd: twdSmoother?.value,
         course: bearingHandler?.value,
         sog: ground?.magnitude,
         cog: ground?.angle,
-        currentTwaSigned: TWAsigned,
+        currentTwaSigned: navigationTWAsigned,
         currentDrift: current?.magnitude,
         currentSetTrue: current?.angle,
         ignoreCurrent: !!settings.ignoreCurrent || !currentAvailable,
@@ -1233,7 +1288,13 @@ module.exports = (app) => {
       }
 
       function buildLiveVmcCurveResult() {
-        const live = getLiveStateSnapshot()
+        const navigationWind = navigationWindSmoother?.ready ? navigationWindSmoother.polarValue : null
+        const live = {
+          ...getLiveStateSnapshot(),
+          tws: navigationWind?.magnitude ?? null,
+          twd: twdSmoother?.value ?? null,
+          stale: !polarTable || !Number.isFinite(navigationWind?.magnitude) || !Number.isFinite(twdSmoother?.value)
+        }
         if (
           !polarTable ||
           !Number.isFinite(live.tws) ||
@@ -1609,6 +1670,7 @@ module.exports = (app) => {
       // no BSP source, polar not loaded, or boat in irons).
       router.get('/live', (req, res) => {
         const wind = windSmoother?.ready ? windSmoother.polarValue : null
+        const navigationWind = navigationWindSmoother?.ready ? navigationWindSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle : null
         const TWA       = Number.isFinite(TWAsigned) ? Math.abs(TWAsigned) : null
@@ -1671,6 +1733,7 @@ module.exports = (app) => {
         const waypoint = _isPosition(waypointHandler?.value) ? waypointHandler.value : null
 
         const wind = windSmoother?.ready ? windSmoother.polarValue : null
+        const navigationWind = navigationWindSmoother?.ready ? navigationWindSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle     : null
         const BSP       = bspSmoother ? bspSmoother.value : null
@@ -1733,6 +1796,16 @@ module.exports = (app) => {
                 currentSetTrue: si(CURRENT_SET)
               } : {})
             },
+            performance: {
+              tws: si(TWS),
+              twa: si(TWAsigned),
+              bsp: si(BSP)
+            },
+            navigation: settings.vmcNavigation ? {
+              tws: si(navigationWind?.magnitude),
+              twa: si(navigationWind?.angle),
+              twd: si(TWD)
+            } : {},
             paths: {
               tws: 'environment.wind.speedTrue',
               twa: 'environment.wind.angleTrueWater',
@@ -1763,29 +1836,44 @@ module.exports = (app) => {
       // SK server's path metadata so user unit preferences (kn vs m/s etc.) are
       // respected. Falls back to safe defaults when SK metadata is unavailable.
       router.get('/meta', (req, res) => {
+        const pathMeta = (path, fallback) => ({
+          ...fallback,
+          ...(app.getSelfPath?.(path)?.meta ?? {})
+        })
+        const handlerMeta = (handler, fallback) => ({
+          ...fallback,
+          ...(handler?.meta ?? {})
+        })
         res.json({
-          tws:         { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
-          twa:         { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
-          bsp:         { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
+          tws:         handlerMeta(windSmoother?.polar?.magnitudeHandler, { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          twa:         handlerMeta(windSmoother?.polar?.angleHandler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          bsp:         handlerMeta(bspSmoother?.handler, { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          hdg:         handlerMeta(hdgSmoother?.handler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          sog:         handlerMeta(groundSmoother?.polar?.magnitudeHandler, { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          cog:         handlerMeta(groundSmoother?.polar?.angleHandler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          twd:         handlerMeta(twdSmoother?.handler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          bearingTrue: handlerMeta(bearingHandler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          currentDrift: handlerMeta(currentSmoother?.polar?.magnitudeHandler, { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          currentSetTrue: handlerMeta(currentSmoother?.polar?.angleHandler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
           polarSpeed:  { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
           performance: { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
           'curve.tbs': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
           'curve.vmg': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
           'curve.twa': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
-          'vmc':         { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
-          'vmc.heading': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
+          'vmc':         handlerMeta(groundSmoother?.polar?.magnitudeHandler, { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          'vmc.heading': handlerMeta(groundSmoother?.polar?.angleHandler, { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
           'vmc.ratio':   { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
-          'performance.velocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
-          'performance.targetVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
-          'performance.oppositeTackVelocityMadeGoodOnCourse': { units: 'm/s', displayUnits: META_SPEED_DISPLAY },
-          'performance.velocityMadeGoodOnCourseRatio': { units: 'ratio', displayUnits: META_RATIO_DISPLAY },
-          'performance.targetHeadingTrue.port': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
-          'performance.targetHeadingTrue.starboard': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
-          'performance.tackTrue': { units: 'rad', displayUnits: META_ANGLE_DISPLAY },
-          'navigation.racing.layline.distance': { units: 'm', displayUnits: META_DISTANCE_DISPLAY },
-          'navigation.racing.layline.time': { units: 's', displayUnits: META_TIME_DISPLAY },
-          'navigation.racing.oppositeLayline.distance': { units: 'm', displayUnits: META_DISTANCE_DISPLAY },
-          'navigation.racing.oppositeLayline.time': { units: 's', displayUnits: META_TIME_DISPLAY }
+          'performance.velocityMadeGoodOnCourse': pathMeta('performance.velocityMadeGoodOnCourse', { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          'performance.targetVelocityMadeGoodOnCourse': pathMeta('performance.targetVelocityMadeGoodOnCourse', { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          'performance.oppositeTackVelocityMadeGoodOnCourse': pathMeta('performance.oppositeTackVelocityMadeGoodOnCourse', { units: 'm/s', displayUnits: META_SPEED_DISPLAY }),
+          'performance.velocityMadeGoodOnCourseRatio': pathMeta('performance.velocityMadeGoodOnCourseRatio', { units: 'ratio', displayUnits: META_RATIO_DISPLAY }),
+          'performance.targetHeadingTrue.port': pathMeta('performance.targetHeadingTrue.port', { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          'performance.targetHeadingTrue.starboard': pathMeta('performance.targetHeadingTrue.starboard', { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          'performance.tackTrue': pathMeta('performance.tackTrue', { units: 'rad', displayUnits: META_ANGLE_DISPLAY }),
+          'navigation.racing.layline.distance': pathMeta('navigation.racing.layline.distance', { units: 'm', displayUnits: META_DISTANCE_DISPLAY }),
+          'navigation.racing.layline.time': pathMeta('navigation.racing.layline.time', { units: 's', displayUnits: META_TIME_DISPLAY }),
+          'navigation.racing.oppositeLayline.distance': pathMeta('navigation.racing.oppositeLayline.distance', { units: 'm', displayUnits: META_DISTANCE_DISPLAY }),
+          'navigation.racing.oppositeLayline.time': pathMeta('navigation.racing.oppositeLayline.time', { units: 's', displayUnits: META_TIME_DISPLAY })
         })
       })
 
@@ -1914,8 +2002,8 @@ module.exports = (app) => {
 
       settings = migrateSettings({ ...DEFAULT_SETTINGS, ...options, settingsVersion: options.settingsVersion ?? 0 })
 
-      const SmootherClass = getSmootherClass(settings.smootherType)
-      const smootherOptions = getSmootherOptions(settings.smootherType, settings)
+      const performanceSmootherOptions = getPerformanceSmootherOptions(settings)
+      const navigationSmootherOptions = getNavigationSmootherOptions(settings)
 
       // Load the active polar table
       if (settings.activePolar) {
@@ -1945,8 +2033,8 @@ module.exports = (app) => {
         subscribe: true,
         app,
         pluginId: plugin.id,
-        SmootherClass,
-        smootherOptions,
+        SmootherClass: getSmootherClass(settings.smootherType),
+        smootherOptions: performanceSmootherOptions,
         ..._wireHandlerWatchdog({
           id: 'wind.smoothed',
           getPath: () => `${windSmoother?.polar?.pathMagnitude ?? 'environment.wind.speedTrue'}, ${windSmoother?.polar?.pathAngle ?? 'environment.wind.angleTrueWater'}`,
@@ -1969,8 +2057,8 @@ module.exports = (app) => {
         subscribe: true,
         app,
         pluginId: plugin.id,
-        SmootherClass,
-        smootherOptions,
+        SmootherClass: getSmootherClass(settings.smootherType),
+        smootherOptions: performanceSmootherOptions,
         ..._wireHandlerWatchdog({
           id: 'bsp.smoothed',
           getPath: () => bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'),
@@ -1979,7 +2067,7 @@ module.exports = (app) => {
         })
       })
 
-      // Uses vector-based smoothing to avoid the 0/2π discontinuity near north.
+      // Heading remains responsive; it only resolves target headings from performance wind.
       if (isOutputEnabled('targetHeadings')) {
         const headingWatchdog = _wireHandlerWatchdog({
           id: 'hdg.smoothed',
@@ -1989,8 +2077,8 @@ module.exports = (app) => {
         })
         hdgSmoother = new SmoothedAngle(app, plugin.id, 'hdg', 'navigation.headingTrue', {
           angleRange: '0to2pi',
-          SmootherClass,
-          smootherOptions,
+          SmootherClass: BaseSmoother,
+          smootherOptions: {},
           ...headingWatchdog,
           onDelta: () => {
             headingWatchdog.onDelta()
@@ -2016,8 +2104,8 @@ module.exports = (app) => {
           subscribe: true,
           app,
           pluginId: plugin.id,
-          SmootherClass,
-          smootherOptions,
+          SmootherClass: BaseSmoother,
+          smootherOptions: {},
           ...groundWatchdog,
           onDelta: () => {
             groundWatchdog.onDelta()
@@ -2029,6 +2117,8 @@ module.exports = (app) => {
         positionHandler = _buildNavigationPositionHandler('position', 'navigation.position')
         waypointHandler = _buildNavigationPositionHandler('waypoint', 'navigation.courseGreatCircle.nextPoint.position', 0)
 
+        createNavigationWindSmoother()
+
         const twdWatchdog = _wireHandlerWatchdog({
           id: 'twd.smoothed',
           getPath: () => twdSmoother?.handler?.path ?? 'environment.wind.directionTrue',
@@ -2039,8 +2129,8 @@ module.exports = (app) => {
         twdSmoother = new SmoothedAngle(app, plugin.id, 'twd', 'environment.wind.directionTrue', {
           angleRange: '0to2pi',
           subscribe: true,
-          SmootherClass,
-          smootherOptions,
+          SmootherClass: getSmootherClass(settings.navigationSmootherType),
+          smootherOptions: navigationSmootherOptions,
           ...twdWatchdog,
           onDelta: () => {
             twdWatchdog.onDelta()
@@ -2064,8 +2154,8 @@ module.exports = (app) => {
             subscribe: true,
             app,
             pluginId: plugin.id,
-            SmootherClass,
-            smootherOptions,
+            SmootherClass: BaseSmoother,
+            smootherOptions: {},
             ...currentWatchdog,
             onDelta: () => {
               currentWatchdog.onDelta()
@@ -2083,6 +2173,7 @@ module.exports = (app) => {
       isRunning = false
       importService = null
       nullifyOutputs()
+      detachNavigationWindSmoother()
       if (windSmoother) { windSmoother.terminate(); windSmoother = null }
       if (bspSmoother)  { bspSmoother.terminate();  bspSmoother = null  }
       if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }

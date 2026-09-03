@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { getNavigationTargetHeadings, NAVIGATION_OUTPUT_DEFS } = require('../public/app.js')
+const { getNavigationTargetHeadings, navigationPolarStateWarnings, NAVIGATION_OUTPUT_DEFS } = require('../public/app.js')
 
 describe('navigation UI target heading mapping', () => {
   it('selects port target heading on port tack (negative TWA)', () => {
@@ -68,6 +68,15 @@ describe('navigation UI target heading mapping', () => {
     assert.equal(result.oppositeHeading, null)
   })
 
+  it('omits irons and pinching warnings from navigation while retaining other polar warnings', () => {
+    assert.deepEqual(navigationPolarStateWarnings({ polarState: { twa: 'in_irons' } }), [])
+    assert.deepEqual(navigationPolarStateWarnings({ polarState: { twa: 'pinching' } }), [])
+    assert.deepEqual(
+      navigationPolarStateWarnings({ polarState: { tws: 'above_range', twa: 'extrapolated' } }),
+      ['Wind speed is above the polar table range — values are extrapolated', 'Running deeper than the polar table — values are extrapolated beyond run angle']
+    )
+  })
+
   it('NAVIGATION_OUTPUT_DEFS exposes port, starboard, and layline outputs directly', () => {
     const portDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'performance/targetHeadingTrue/port')
     const starboardDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'performance/targetHeadingTrue/starboard')
@@ -79,8 +88,8 @@ describe('navigation UI target heading mapping', () => {
     assert.ok(distanceDef, 'Distance to layline definition should exist')
     assert.ok(timeDef, 'Time to layline definition should exist')
 
-    assert.equal(portDef.label, 'Port heading (true)')
-    assert.equal(starboardDef.label, 'Starboard heading (true)')
+    assert.equal(portDef.label, 'Layline Port')
+    assert.equal(starboardDef.label, 'Layline Starboard')
     assert.equal(distanceDef.label, 'Distance to layline')
     assert.equal(timeDef.label, 'Time to layline')
   })

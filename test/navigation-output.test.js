@@ -77,17 +77,23 @@ function makeApp(dataDir) {
     subscriptionmanager: {
       subscribe: (request, unsubscribes, _onError, onDelta) => {
         const subscribedPath = request.subscribe[0].path
-        subscriptions.set(subscribedPath, onDelta)
-        unsubscribes.push(() => subscriptions.delete(subscribedPath))
+        const callbacks = subscriptions.get(subscribedPath) ?? new Set()
+        callbacks.add(onDelta)
+        subscriptions.set(subscribedPath, callbacks)
+        unsubscribes.push(() => {
+          callbacks.delete(onDelta)
+          if (callbacks.size === 0) subscriptions.delete(subscribedPath)
+        })
       }
     }
   }
 }
 
 function send(app, path, value) {
-  const callback = app.subscriptions.get(path)
-  assert.ok(callback, `No subscription for ${path}`)
-  callback({ updates: [{ values: [{ path, value }] }] })
+  const callbacks = app.subscriptions.get(path)
+  assert.ok(callbacks, `No subscription for ${path}`)
+  const delta = { updates: [{ values: [{ path, value }] }] }
+  callbacks.forEach(callback => callback(delta))
 }
 
 function publishedValues(messages) {
@@ -110,6 +116,8 @@ describe('navigation layline publication', () => {
         smootherType: 'None',
         ignoreCurrent: false
       })
+      assert.equal(app.subscriptions.get('environment.wind.speedTrue').size, 1)
+      assert.equal(app.subscriptions.get('environment.wind.angleTrueWater').size, 1)
 
       send(app, 'environment.wind.speedTrue', 5)
       send(app, 'environment.wind.angleTrueWater', Math.PI / 4)
@@ -119,6 +127,8 @@ describe('navigation layline publication', () => {
       send(app, 'navigation.course.calcValues.bearingTrue', 0)
       send(app, 'navigation.position', { latitude: 0, longitude: 0 })
       send(app, 'navigation.courseGreatCircle.nextPoint.position', { latitude: 0.01, longitude: 0 })
+      send(app, 'environment.current.drift', 2)
+      send(app, 'environment.current.setTrue', 0.3)
 
       const values = publishedValues(app.messages)
       for (const outputPath of LAYLINE_PATHS) {
@@ -131,12 +141,16 @@ describe('navigation layline publication', () => {
       router.routes.get['/status']({}, statusResponse)
       assert.equal(statusResponse.body.navigationState.status, 'valid')
       assert.deepEqual(statusResponse.body.navigationState.current, {
-        mode: 'fallbackZero',
-        warning: true
+        mode: 'used',
+        warning: false
       })
       assert.ok(((statusResponse.body.inputs.smoothed.cog % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) > 2 * Math.PI - 0.21)
       assert.deepEqual(statusResponse.body.inputs.raw.position, { latitude: 0, longitude: 0 })
       assert.deepEqual(statusResponse.body.inputs.raw.waypoint, { latitude: 0.01, longitude: 0 })
+      assert.equal(statusResponse.body.inputs.raw.currentDrift, statusResponse.body.inputs.smoothed.currentDrift)
+      assert.equal(statusResponse.body.inputs.raw.currentSetTrue, statusResponse.body.inputs.smoothed.currentSetTrue)
+      assert.equal(Number.isFinite(statusResponse.body.inputs.navigation.tws), true)
+      assert.equal(Number.isFinite(statusResponse.body.inputs.navigation.twa), true)
 
       const beforeDisable = app.messages.length
       router.routes.put['/settings']({ body: { vmcNavigation: false } }, makeResponse())

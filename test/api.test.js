@@ -335,6 +335,20 @@ describe('Polar manager/query API', () => {
     assert.equal(res.body.starboardBest, null)
   })
 
+  it('uses Signal K display preferences for layline distance and time metadata', () => {
+    const preferences = {
+      'navigation.racing.layline.distance': { displayUnits: { formula: 'value / 1852', symbol: 'NM', displayFormat: '0.2' } },
+      'navigation.racing.layline.time': { displayUnits: { formula: 'value / 3600', symbol: 'h', displayFormat: '0.1' } }
+    }
+    app.getSelfPath = path => preferences[path] ? { meta: preferences[path] } : null
+
+    const res = makeResponse()
+    router.routes.get['/meta']({}, res)
+
+    assert.deepEqual(res.body['navigation.racing.layline.distance'].displayUnits, preferences['navigation.racing.layline.distance'].displayUnits)
+    assert.deepEqual(res.body['navigation.racing.layline.time'].displayUnits, preferences['navigation.racing.layline.time'].displayUnits)
+  })
+
   it('lists supported text import formats and imports Jieter text', () => {
     let res = makeResponse()
     router.routes.get['/imports/formats']({}, res)

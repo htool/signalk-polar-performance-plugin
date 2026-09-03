@@ -344,6 +344,8 @@ let liveData     = null  // from /live — smoothed values (tws, twa, bsp, polar
 let statusData   = null  // from /status — raw inputs + computed outputs
 let rawValues    = {}    // raw sensor values from /status, keyed by short name (tws/twa/bsp/hdg)
 let smoothedValues = {}   // smoothed sensor values from /status, keyed by short name
+let performanceValues = {}
+let navigationValues = {}
 let inputPaths = {}       // input path map from /status
 let outputValues = {}    // computed output values from /status, keyed by SK path string
 let settings     = null
@@ -420,8 +422,8 @@ const NAVIGATION_OUTPUT_DEFS = [
   { sk: 'performance/targetVelocityMadeGoodOnCourse',       label: 'Target VMC',              mk: 'performance.targetVelocityMadeGoodOnCourse',       fb: SPEED_DEFAULT },
   { sk: 'performance/oppositeTackVelocityMadeGoodOnCourse', label: 'Opposite tack VMC',       mk: 'performance.oppositeTackVelocityMadeGoodOnCourse', fb: SPEED_DEFAULT },
   { sk: 'performance/velocityMadeGoodOnCourseRatio',        label: 'VMC ratio',               mk: 'performance.velocityMadeGoodOnCourseRatio',        fb: RATIO_DEFAULT },
-  { sk: 'performance/targetHeadingTrue/port',               label: 'Port heading (true)',     mk: 'performance.targetHeadingTrue.port',               fb: ANGLE_DEFAULT },
-  { sk: 'performance/targetHeadingTrue/starboard',          label: 'Starboard heading (true)', mk: 'performance.targetHeadingTrue.starboard',          fb: ANGLE_DEFAULT },
+  { sk: 'performance/targetHeadingTrue/port',               label: 'Layline Port',             mk: 'performance.targetHeadingTrue.port',               fb: ANGLE_DEFAULT },
+  { sk: 'performance/targetHeadingTrue/starboard',          label: 'Layline Starboard',        mk: 'performance.targetHeadingTrue.starboard',          fb: ANGLE_DEFAULT },
   { sk: 'navigation/racing/layline/distance',               label: 'Distance to layline',      mk: 'navigation.racing.layline.distance',               fb: DISTANCE_DEFAULT },
   { sk: 'navigation/racing/layline/time',                   label: 'Time to layline',          mk: 'navigation.racing.layline.time',                   fb: TIME_DEFAULT },
 ]
@@ -491,16 +493,17 @@ async function refreshLibrary() {
 
 async function refreshVmcCurve() {
   const activeId = settings?.activePolar
-  const smoothed = statusData?.inputs?.smoothed
-  if (!activeId || !settings?.vmcNavigation || !smoothed) {
+  const navigation = statusData?.inputs?.navigation
+  const responsive = statusData?.inputs?.smoothed
+  if (!activeId || !settings?.vmcNavigation || !navigation || !responsive) {
     liveVmcCurve = null
     liveVmcCurveKey = ''
     return
   }
 
-  const tws = smoothed.tws
-  const twd = smoothed.twd
-  const course = smoothed.bearingTrue
+  const tws = navigation.tws
+  const twd = navigation.twd
+  const course = responsive.bearingTrue
   if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(course)) {
     liveVmcCurve = null
     liveVmcCurveKey = ''
@@ -508,8 +511,8 @@ async function refreshVmcCurve() {
   }
 
   const includeCurrent = !settings?.ignoreCurrent
-  const currentDrift = smoothed.currentDrift
-  const currentSetTrue = smoothed.currentSetTrue
+  const currentDrift = responsive.currentDrift
+  const currentSetTrue = responsive.currentSetTrue
 
   const key = [
     activeId,
@@ -593,6 +596,8 @@ async function refreshLive() {
     if (st.inputs) {
       const raw = st.inputs.raw || {}
       const smoothed = st.inputs.smoothed || {}
+      const performance = st.inputs.performance || smoothed
+      const navigation = st.inputs.navigation || {}
       rawValues = {
         tws: raw.tws ?? null,
         twa: raw.twa ?? null,
@@ -617,10 +622,22 @@ async function refreshLive() {
         currentDrift: smoothed.currentDrift ?? null,
         currentSetTrue: smoothed.currentSetTrue ?? null
       }
+      performanceValues = {
+        tws: performance.tws ?? null,
+        twa: performance.twa ?? null,
+        bsp: performance.bsp ?? null
+      }
+      navigationValues = {
+        tws: navigation.tws ?? null,
+        twa: navigation.twa ?? null,
+        twd: navigation.twd ?? null
+      }
       inputPaths = st.inputs.paths || {}
     } else {
       rawValues = {}
       smoothedValues = {}
+      performanceValues = {}
+      navigationValues = {}
       inputPaths = {}
     }
     if (st.outputs) {
@@ -668,6 +685,14 @@ function polarStateWarnings(d) {
   if (s.twa === 'extrapolated') msgs.push('Running deeper than the polar table — values are extrapolated beyond run angle')
   if (s.twa === 'above_range') msgs.push('Wind angle is beyond the polar table range — values are extrapolated')
   return msgs
+}
+
+function navigationPolarStateWarnings(d) {
+  const state = d?.polarState
+  if (!state) return []
+  return polarStateWarnings(d).filter(message =>
+    state.twa !== 'in_irons' && state.twa !== 'pinching'
+  )
 }
 
 // ── Live-tick dispatcher ──────────────────────────────────────────────────────
@@ -866,21 +891,84 @@ function _tickOverview() {
       navWarns.push('Current vector — no data')
     }
     if (d?.tws != null && d?.polarState == null) navWarns.push('No polar loaded — configure in Polars')
-    navWarns.push(...polarStateWarnings(d))
+    navWarns.push(...navigationPolarStateWarnings(d))
   }
   updateWarnings(document.getElementById('ov-nav-warnings'), navWarns)
   updateOverviewNavigationCanvas()
 }
 
 // ── PAGE: Inputs ──────────────────────────────────────────────────────────────
+const DAMPER_TYPES = ['None', 'Exponential', 'MovingAverage', 'Kalman']
+const DAMPER_PARAMS = {
+  Exponential: { suffix: 'Exponential', label: 'Time constant (s)', min: 0.1, max: 60, step: 0.1 },
+  MovingAverage: { suffix: 'MovingAverage', label: 'Window (s)', min: 1, max: 120, step: 1 },
+  Kalman: { suffix: 'Kalman', label: 'Steady-state gain', min: 0.001, max: 0.999, step: 0.001 }
+}
+
+function createDamperControl(typeKey, parameterPrefix, defaults) {
+  const wrap = document.createElement('div')
+  wrap.className = 'd-flex align-items-center gap-1 flex-wrap'
+  const type = settings?.[typeKey] || defaults.type
+  const select = document.createElement('select')
+  select.className = 'form-select form-select-sm'
+  select.style.width = '145px'
+  DAMPER_TYPES.forEach(value => {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = value === 'MovingAverage' ? 'Moving average' : value
+    select.appendChild(option)
+  })
+  select.value = type
+  select.addEventListener('change', () => apiPut('/settings', { [typeKey]: select.value }).then(result => {
+    if (result) { settings = result; switchPage('inputs') }
+  }))
+  wrap.appendChild(select)
+
+  const parameter = DAMPER_PARAMS[type]
+  if (parameter) {
+    const key = parameterPrefix + parameter.suffix
+    const input = document.createElement('input')
+    input.type = 'number'
+    input.className = 'form-control form-control-sm'
+    input.style.width = '90px'
+    input.min = parameter.min; input.max = parameter.max; input.step = parameter.step
+    input.title = parameter.label
+    input.value = settings?.[key] ?? defaults[parameter.suffix]
+    input.addEventListener('change', () => {
+      const value = Number(input.value)
+      if (Number.isFinite(value)) apiPut('/settings', { [key]: value }).then(result => { if (result) settings = result })
+    })
+    wrap.appendChild(input)
+  }
+
+  const reset = document.createElement('button')
+  reset.type = 'button'
+  reset.className = 'btn btn-link btn-sm p-0 ms-1'
+  reset.title = 'Reset damping to default'
+  reset.textContent = '↺'
+  reset.addEventListener('click', () => apiPut('/settings', {
+    [typeKey]: defaults.type,
+    [parameterPrefix + 'Exponential']: defaults.Exponential,
+    [parameterPrefix + 'MovingAverage']: defaults.MovingAverage,
+    [parameterPrefix + 'Kalman']: defaults.Kalman
+  }).then(result => { if (result) { settings = result; switchPage('inputs') } }))
+  wrap.appendChild(reset)
+  return wrap
+}
+
 function _buildInputsPage() {
   const wrap = document.createElement('div'); wrap.id = 'inputs-wrap'
 
-  // Smoother settings (top)
-  wrap.appendChild(sectionHeading('Smoother'))
-  const smRows = [{ label: 'Smoother type', control: _smootherSelector() }]
-  const pm = SMOOTHER_PARAMS[settings?.smootherType || 'Exponential']
-  if (pm) smRows.push({ label: pm.label, control: createNumberInput(pm.key, settings?.[pm.key], pm, true) })
+  // Calculation input damping
+  wrap.appendChild(sectionHeading('Input Damping'))
+  const smRows = [
+    { label: 'Performance time constant (s)', desc: 'Exponential damping for true wind and boat speed.',
+      control: createNumberInput('smootherParamExponential', settings?.smootherParamExponential,
+        { min: 0.1, max: 60, step: 0.1, default: 5 }, true) },
+    { label: 'Navigation window (s)', desc: 'Moving average for true wind inputs used by VMC and laylines.',
+      control: createNumberInput('navigationDampingWindow', settings?.navigationDampingWindow,
+        { min: 1, max: 120, step: 1, default: 30 }, true) }
+  ]
   wrap.appendChild(_settingsTable(smRows))
 
   wrap.appendChild(sectionHeading('True Wind Vector'))
@@ -953,8 +1041,45 @@ function _buildInputsPage() {
     { label: 'Smoothed — plugin', id: 'in-current-smo' },
   ]))
 
+  const rawCard = createPageCard('Raw Inputs')
+  rawCard.body.appendChild(_settingsTable([{
+    label: 'Use speed over ground (SOG)',
+    control: createToggle(!!settings?.useSOG, value => apiPut('/settings', { useSOG: value }).then(result => {
+      if (result) { settings = result; switchPage('inputs') }
+    }))
+  }]))
+  rawCard.body.appendChild(buildTable([
+    { label: 'True wind vector', id: 'in-raw-tw' },
+    { label: 'Boat speed', id: 'in-raw-bsp' },
+    { label: 'Heading true', id: 'in-raw-hdg' },
+    { label: 'Ground vector', id: 'in-raw-ground' },
+    { label: 'True wind direction', id: 'in-raw-twd' },
+    { label: 'Course bearing true', id: 'in-raw-bearing' },
+    { label: 'Current vector', id: 'in-raw-current' }
+  ]))
+
+  const performanceCard = createPageCard('Performance Inputs')
+  performanceCard.body.appendChild(_settingsTable([{
+    label: 'Damping',
+    control: createDamperControl('smootherType', 'smootherParam', { type: 'Exponential', Exponential: 5, MovingAverage: 10, Kalman: 0.1 })
+  }]))
+  performanceCard.body.appendChild(buildTable([
+    { label: 'Damped true wind vector', id: 'in-performance-tw' },
+    { label: 'Damped boat speed', id: 'in-performance-bsp' }
+  ]))
+
+  const navigationCard = createPageCard('Navigation Inputs')
+  navigationCard.body.appendChild(_settingsTable([{
+    label: 'Damping',
+    control: createDamperControl('navigationSmootherType', 'navigationSmootherParam', { type: 'MovingAverage', Exponential: 5, MovingAverage: 30, Kalman: 0.1 })
+  }]))
+  navigationCard.body.appendChild(buildTable([
+    { label: 'Damped true wind vector', id: 'in-navigation-tw' },
+    { label: 'Damped true wind direction', id: 'in-navigation-twd' }
+  ]))
+
   const warningsDiv = document.createElement('div'); warningsDiv.id = 'in-warnings'
-  wrap.appendChild(warningsDiv)
+  wrap.replaceChildren(rawCard.card, performanceCard.card, navigationCard.card, warningsDiv)
 
   _tickInputs()
   return wrap
@@ -972,17 +1097,29 @@ function _tickInputs() {
   setRequiredValue('in-bsp-raw', true, fmtVal(rawValues.bsp, 'bsp', SPEED_DEFAULT))
   setRequiredValue('in-bsp-smo', true, fmtVal(smoothedValues.bsp, 'bsp', SPEED_DEFAULT))
 
-  setRequiredValue('in-hdg-raw', requiresHeading, fmtVal(rawValues.hdg, 'twa', ANGLE_DEFAULT))
-  setRequiredValue('in-hdg-smo', requiresHeading, fmtVal(smoothedValues.hdg, 'twa', ANGLE_DEFAULT))
+  setRequiredValue('in-hdg-raw', requiresHeading, fmtVal(rawValues.hdg, 'hdg', ANGLE_DEFAULT))
+  setRequiredValue('in-hdg-smo', requiresHeading, fmtVal(smoothedValues.hdg, 'hdg', ANGLE_DEFAULT))
 
-  setRequiredValue('in-ground-raw', requiresVmc, fmtVectorPolar(rawValues.sog, rawValues.cog, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
-  setRequiredValue('in-ground-smo', requiresVmc, fmtVectorPolar(smoothedValues.sog, smoothedValues.cog, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
-  setRequiredValue('in-twd-raw', requiresVmc, fmtVal(rawValues.twd, 'vmc.heading', ANGLE_DEFAULT))
-  setRequiredValue('in-twd-smo', requiresVmc, fmtVal(smoothedValues.twd, 'vmc.heading', ANGLE_DEFAULT))
-  setRequiredValue('in-bearing-raw', requiresVmc, fmtVal(rawValues.bearingTrue, 'vmc.heading', ANGLE_DEFAULT))
-  setRequiredValue('in-bearing-smo', requiresVmc, fmtVal(smoothedValues.bearingTrue, 'vmc.heading', ANGLE_DEFAULT))
-  setRequiredValue('in-current-raw', requiresCurrent, fmtVectorPolar(rawValues.currentDrift, rawValues.currentSetTrue, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
-  setRequiredValue('in-current-smo', requiresCurrent, fmtVectorPolar(smoothedValues.currentDrift, smoothedValues.currentSetTrue, 'tws', 'vmc.heading', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-ground-raw', requiresVmc, fmtVectorPolar(rawValues.sog, rawValues.cog, 'sog', 'cog', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-ground-smo', requiresVmc, fmtVectorPolar(smoothedValues.sog, smoothedValues.cog, 'sog', 'cog', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-twd-raw', requiresVmc, fmtVal(rawValues.twd, 'twd', ANGLE_DEFAULT))
+  setRequiredValue('in-twd-smo', requiresVmc, fmtVal(smoothedValues.twd, 'twd', ANGLE_DEFAULT))
+  setRequiredValue('in-bearing-raw', requiresVmc, fmtVal(rawValues.bearingTrue, 'bearingTrue', ANGLE_DEFAULT))
+  setRequiredValue('in-bearing-smo', requiresVmc, fmtVal(smoothedValues.bearingTrue, 'bearingTrue', ANGLE_DEFAULT))
+  setRequiredValue('in-current-raw', requiresCurrent, fmtVectorPolar(rawValues.currentDrift, rawValues.currentSetTrue, 'currentDrift', 'currentSetTrue', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-current-smo', requiresCurrent, fmtVectorPolar(smoothedValues.currentDrift, smoothedValues.currentSetTrue, 'currentDrift', 'currentSetTrue', SPEED_DEFAULT, ANGLE_DEFAULT))
+
+  setRequiredValue('in-raw-tw', true, fmtVectorPolar(rawValues.tws, rawValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-raw-bsp', true, fmtVal(rawValues.bsp, 'bsp', SPEED_DEFAULT))
+  setRequiredValue('in-raw-hdg', true, fmtVal(rawValues.hdg, 'hdg', ANGLE_DEFAULT))
+  setRequiredValue('in-raw-ground', requiresVmc, fmtVectorPolar(rawValues.sog, rawValues.cog, 'sog', 'cog', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-raw-twd', requiresVmc, fmtVal(rawValues.twd, 'twd', ANGLE_DEFAULT))
+  setRequiredValue('in-raw-bearing', requiresVmc, fmtVal(rawValues.bearingTrue, 'bearingTrue', ANGLE_DEFAULT))
+  setRequiredValue('in-raw-current', requiresCurrent, fmtVectorPolar(rawValues.currentDrift, rawValues.currentSetTrue, 'currentDrift', 'currentSetTrue', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-performance-tw', true, fmtVectorPolar(performanceValues.tws, performanceValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-performance-bsp', true, fmtVal(performanceValues.bsp, 'bsp', SPEED_DEFAULT))
+  setRequiredValue('in-navigation-tw', requiresVmc, fmtVectorPolar(navigationValues.tws, navigationValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-navigation-twd', requiresVmc, fmtVal(navigationValues.twd, 'twd', ANGLE_DEFAULT))
 
   // Update boat speed raw label to show actual path
   const bspLabelEl = document.querySelector('#in-bsp-raw')?.closest('tr')?.cells?.[0]
@@ -1005,6 +1142,17 @@ function _tickInputs() {
   setStale('in-bearing-smo', !requiresVmc || smoothedValues.bearingTrue == null)
   setStale('in-current-raw', !requiresCurrent || rawValues.currentDrift == null || rawValues.currentSetTrue == null)
   setStale('in-current-smo', !requiresCurrent || smoothedValues.currentDrift == null || smoothedValues.currentSetTrue == null)
+  setStale('in-raw-tw', rawValues.tws == null || rawValues.twa == null)
+  setStale('in-raw-bsp', rawValues.bsp == null)
+  setStale('in-raw-hdg', rawValues.hdg == null)
+  setStale('in-raw-ground', !requiresVmc || rawValues.sog == null || rawValues.cog == null)
+  setStale('in-raw-twd', !requiresVmc || rawValues.twd == null)
+  setStale('in-raw-bearing', !requiresVmc || rawValues.bearingTrue == null)
+  setStale('in-raw-current', !requiresCurrent || rawValues.currentDrift == null || rawValues.currentSetTrue == null)
+  setStale('in-performance-tw', performanceValues.tws == null || performanceValues.twa == null)
+  setStale('in-performance-bsp', performanceValues.bsp == null)
+  setStale('in-navigation-tw', !requiresVmc || navigationValues.tws == null || navigationValues.twa == null)
+  setStale('in-navigation-twd', !requiresVmc || navigationValues.twd == null)
 
   const warns = new Set()
 
@@ -1050,12 +1198,6 @@ function _tickInputs() {
 }
 
 // ── PAGE: Settings ─────────────────────────────────────────────────────────────
-const SMOOTHER_PARAMS = {
-  Exponential:   { key: 'smootherParamExponential',   label: 'Time constant τ (s)',      min: 0.1,   max: 60,  step: 0.1,   default: 1    },
-  MovingAverage: { key: 'smootherParamMovingAverage', label: 'Window size (s)',           min: 1,     max: 120, step: 1,     default: 10   },
-  Kalman:        { key: 'smootherParamKalman',        label: 'Steady-state gain (0–1)',   min: 0.001, max: 1,   step: 0.001, default: 0.1  },
-}
-
 function _buildSettingsPage() {
   if (!settings) {
     const p = document.createElement('p'); p.className = 'text-muted small mt-2'
@@ -1223,21 +1365,6 @@ function _polarSelector() {
   return sel
 }
 
-function _smootherSelector() {
-  const sel = document.createElement('select')
-  sel.className = 'form-select form-select-sm'; sel.style.width = '100%'
-  ;['None', 'Exponential', 'MovingAverage', 'Kalman'].forEach(opt => {
-    const o = document.createElement('option'); o.value = opt; o.textContent = opt; sel.appendChild(o)
-  })
-  sel.value = settings?.smootherType || 'Exponential'
-  sel.addEventListener('change', () => {
-    apiPut('/settings', { smootherType: sel.value }).then(s => {
-      if (s) { settings = s; switchPage('inputs') }
-    })
-  })
-  return sel
-}
-
 // ── PAGE: Performance ──────────────────────────────────────────────────────────
 function _buildPerformancePage() {
   const wrap = document.createElement('div'); wrap.id = 'performance-wrap'
@@ -1382,7 +1509,7 @@ function _tickNavigation() {
     warns.add('No active route - VMC navigation is enabled but route-based targets are suppressed until course bearing is available')
   }
   if (d?.tws != null && d?.polarState == null) warns.add('No polar loaded - configure in Polars')
-  polarStateWarnings(d).forEach(msg => warns.add(msg))
+  navigationPolarStateWarnings(d).forEach(msg => warns.add(msg))
 
   const relevantLifecycleIds = new Set(['wind.smoothed', 'ground.smoothed', 'twd.smoothed', 'bearing.smoothed'])
   if (requiresCurrent) relevantLifecycleIds.add('current.smoothed')
@@ -1837,6 +1964,7 @@ async function init() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     getNavigationTargetHeadings,
+    navigationPolarStateWarnings,
     NAVIGATION_OUTPUT_DEFS
   }
 }

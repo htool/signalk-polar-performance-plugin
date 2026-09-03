@@ -113,6 +113,14 @@ describe('performance output publication', () => {
       assert.equal(Number.isFinite(lastValue(validValues, 'performance.polarVelocityMadeGood')), true)
       assert.equal(Number.isFinite(lastValue(validValues, 'performance.polarVelocityMadeGoodRatio')), true)
 
+      const beforeInvalid = app.messages.length
+      sendValues(app, [
+        { path: 'environment.wind.speedTrue', value: NaN },
+        { path: 'environment.wind.angleTrueWater', value: NaN }
+      ])
+      const invalidValues = publishedValues(app.messages.slice(beforeInvalid))
+      assert.equal(invalidValues.every(entry => entry.value === null || Number.isFinite(entry.value)), true)
+
       const beforeIrons = app.messages.length
       sendValues(app, [
         { path: 'environment.wind.speedTrue', value: 0.05 },
