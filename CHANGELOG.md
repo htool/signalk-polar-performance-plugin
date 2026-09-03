@@ -10,12 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Added VMC navigation support with a dedicated Navigation page in the webapp, new navigation-oriented outputs for actual/target/opposite-tack VMC and headings, and a plotter Graph mode toggle for switching between Performance and Navigation overlays driven by live/status VMC data.
 - Added live curve endpoints for external widgets: `/live/curve` returns the current polar curve with beat/run optima, and `/live/vmc-curve` returns the current VMC curve with port/starboard optima, both derived from the plugin's current Signal K state.
 - Added layline navigation outputs `navigation.racing.layline.distance`/`.time` and `navigation.racing.oppositeLayline.distance`/`.time`, published with the navigation output group. Values are signed: positive means the crossing is ahead, zero means tack or gybe now, negative means the layline has been overstood. Geometry uses a local north/east tangent plane between `navigation.position` and `navigation.courseGreatCircle.nextPoint.position`, with target tack/gybe vectors taken from the polar beat/run targets.
+- Added current-layline distance and time rows to the Navigation page output table.
 
 ### Changed
 - The webapp Navigation page now reads target and opposite-tack headings from `performance.targetHeadingTrue.port` and `.starboard` plugin outputs instead of retired scalar paths, selecting the target heading based on current tack.
 - Replaced current-relative custom target-heading outputs with current-independent `performance.targetHeadingTrue.port` and `.starboard` outputs, while retaining standard `performance.tackTrue` compatibility and moving the headings to the Performance webapp view.
 
 ### Fixed
+- The navigation graph no longer displays a no-active-route warning, the overview navigation warning list now shows that warning first, and heading labels now use port/starboard terminology consistently.
 - `performance.optimumWindAngle` now uses a consistent sign convention downwind: the value is the signed difference between the current TWA and the optimum gybe angle, matching the upwind case instead of being inverted.
 - Disabling a navigation output group or stopping the plugin now clears only the paths that were actually active, via `MessageHandler.clear`, instead of blanket-nulling every known output path.
 - Navigation outputs are now recomputed when an input goes stale or the route bearing disappears, so stale VMC and layline values are cleared instead of being left at their last value.

@@ -68,19 +68,20 @@ describe('navigation UI target heading mapping', () => {
     assert.equal(result.oppositeHeading, null)
   })
 
-  it('NAVIGATION_OUTPUT_DEFS correctly extracts target and opposite headings', () => {
-    const targetDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'performance/targetHeadingTrue')
-    const oppositeDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'performance/oppositeTackHeadingTrue')
+  it('NAVIGATION_OUTPUT_DEFS exposes port, starboard, and layline outputs directly', () => {
+    const portDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'performance/targetHeadingTrue/port')
+    const starboardDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'performance/targetHeadingTrue/starboard')
+    const distanceDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'navigation/racing/layline/distance')
+    const timeDef = NAVIGATION_OUTPUT_DEFS.find(d => d.sk === 'navigation/racing/layline/time')
 
-    assert.ok(targetDef, 'Target heading definition should exist')
-    assert.ok(oppositeDef, 'Opposite tack heading definition should exist')
+    assert.ok(portDef, 'Port heading definition should exist')
+    assert.ok(starboardDef, 'Starboard heading definition should exist')
+    assert.ok(distanceDef, 'Distance to layline definition should exist')
+    assert.ok(timeDef, 'Time to layline definition should exist')
 
-    const headings = { targetHeading: 1.2345, oppositeHeading: 4.5678 }
-    assert.equal(targetDef.getValue({}, headings), 1.2345)
-    assert.equal(oppositeDef.getValue({}, headings), 4.5678)
-
-    const nullHeadings = { targetHeading: null, oppositeHeading: null }
-    assert.equal(targetDef.getValue({}, nullHeadings), null)
-    assert.equal(oppositeDef.getValue({}, nullHeadings), null)
+    assert.equal(portDef.label, 'Port heading (true)')
+    assert.equal(starboardDef.label, 'Starboard heading (true)')
+    assert.equal(distanceDef.label, 'Distance to layline')
+    assert.equal(timeDef.label, 'Time to layline')
   })
 })

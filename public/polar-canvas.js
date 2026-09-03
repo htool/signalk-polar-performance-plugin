@@ -739,7 +739,7 @@
 
     this._drawVectorLine(ctx, cx, cy, R, maxMs, nav.actualAngle, nav.actualValue, '#2563eb')
 
-    const message = nav.statusMessage || (nav.routeSuppressed ? 'No active route - VMC markers suppressed' : '')
+    const message = nav.statusMessage || ''
     if (message) this._drawNavigationMessage(ctx, message, '#fbbf24')
   }
 

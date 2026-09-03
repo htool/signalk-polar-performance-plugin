@@ -13,6 +13,8 @@ let meta = {}
 const SPEED_DEFAULT = { formula: 'value * 1.943844',          symbol: 'kn', displayFormat: '0.0' }
 const ANGLE_DEFAULT = { formula: 'value * 57.29577951308231', symbol: '°',  displayFormat: '0'   }
 const RATIO_DEFAULT = { formula: 'value * 100',               symbol: '%',  displayFormat: '0.1' }
+const DISTANCE_DEFAULT = { formula: 'value',                  symbol: 'm',  displayFormat: '0'   }
+const TIME_DEFAULT = { formula: 'value / 60',                 symbol: 'min', displayFormat: '0.0' }
 
 function isSafeFormula(f) {
   return typeof f === 'string' && /^[\d\s+\-*/.()eE]*$/.test(f.replace(/\bvalue\b/g, '0'))
@@ -418,8 +420,10 @@ const NAVIGATION_OUTPUT_DEFS = [
   { sk: 'performance/targetVelocityMadeGoodOnCourse',       label: 'Target VMC',              mk: 'performance.targetVelocityMadeGoodOnCourse',       fb: SPEED_DEFAULT },
   { sk: 'performance/oppositeTackVelocityMadeGoodOnCourse', label: 'Opposite tack VMC',       mk: 'performance.oppositeTackVelocityMadeGoodOnCourse', fb: SPEED_DEFAULT },
   { sk: 'performance/velocityMadeGoodOnCourseRatio',        label: 'VMC ratio',               mk: 'performance.velocityMadeGoodOnCourseRatio',        fb: RATIO_DEFAULT },
-  { sk: 'performance/targetHeadingTrue',                    label: 'Target heading (true)',   mk: 'performance.targetHeadingTrue.port',               fb: ANGLE_DEFAULT, pathLabel: 'performance.targetHeadingTrue.port / .starboard', getValue: (_, headings) => headings.targetHeading },
-  { sk: 'performance/oppositeTackHeadingTrue',              label: 'Opposite tack heading',   mk: 'performance.targetHeadingTrue.starboard',          fb: ANGLE_DEFAULT, pathLabel: 'performance.targetHeadingTrue.port / .starboard', getValue: (_, headings) => headings.oppositeHeading },
+  { sk: 'performance/targetHeadingTrue/port',               label: 'Port heading (true)',     mk: 'performance.targetHeadingTrue.port',               fb: ANGLE_DEFAULT },
+  { sk: 'performance/targetHeadingTrue/starboard',          label: 'Starboard heading (true)', mk: 'performance.targetHeadingTrue.starboard',          fb: ANGLE_DEFAULT },
+  { sk: 'navigation/racing/layline/distance',               label: 'Distance to layline',      mk: 'navigation.racing.layline.distance',               fb: DISTANCE_DEFAULT },
+  { sk: 'navigation/racing/layline/time',                   label: 'Time to layline',          mk: 'navigation.racing.layline.time',                   fb: TIME_DEFAULT },
 ]
 
 // Unique SK path id used as DOM element id (slashes → dashes)
@@ -568,7 +572,7 @@ function updateOverviewNavigationCanvas() {
     routeSuppressed: !!statusData?.vmcRouteSuppressed,
     statusMessage: !settings?.vmcNavigation
       ? 'VMC navigation outputs are disabled'
-      : (statusData?.vmcRouteSuppressed ? 'No active route - VMC markers suppressed' : '')
+      : ''
   }
   navPolar.setMode('navigation')
   navPolar.setNavigationData(liveVmcCurve, navLive)
@@ -724,8 +728,8 @@ function _buildOverviewPage() {
     { label: 'Target VMC',             id: 'ov-nav-target' },
     { label: 'Opposite tack VMC',      id: 'ov-nav-opp'    },
     { label: 'VMC ratio',              id: 'ov-nav-ratio'  },
-    { label: 'Target heading (true)',  id: 'ov-nav-hdg'    },
-    { label: 'Opposite heading (true)',id: 'ov-nav-opp-hdg' },
+    { label: 'Port heading (true)',    id: 'ov-nav-hdg'    },
+    { label: 'Starboard heading (true)', id: 'ov-nav-opp-hdg' },
   ]))
   const navWarningsDiv = document.createElement('div'); navWarningsDiv.id = 'ov-nav-warnings'
   navRight.appendChild(navWarningsDiv)
@@ -835,19 +839,23 @@ function _tickOverview() {
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
 
-  const { targetHeading, oppositeHeading } = getNavigationTargetHeadings()
+  const portHeading = outputValues['performance/targetHeadingTrue/port'] ?? outputValues['performance.targetHeadingTrue.port']
+  const starboardHeading = outputValues['performance/targetHeadingTrue/starboard'] ?? outputValues['performance.targetHeadingTrue.starboard']
 
   setVal('ov-nav-actual',  fmtVal(outputValues['performance/velocityMadeGoodOnCourse'], 'performance.velocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-target',  fmtVal(outputValues['performance/targetVelocityMadeGoodOnCourse'], 'performance.targetVelocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-opp',     fmtVal(outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'], 'performance.oppositeTackVelocityMadeGoodOnCourse', SPEED_DEFAULT))
   setVal('ov-nav-ratio',   fmtVal(outputValues['performance/velocityMadeGoodOnCourseRatio'], 'performance.velocityMadeGoodOnCourseRatio', RATIO_DEFAULT))
-  setVal('ov-nav-hdg',     fmtVal(targetHeading, 'performance.targetHeadingTrue.port', ANGLE_DEFAULT))
-  setVal('ov-nav-opp-hdg', fmtVal(oppositeHeading, 'performance.targetHeadingTrue.starboard', ANGLE_DEFAULT))
+  setVal('ov-nav-hdg',     fmtVal(portHeading, 'performance.targetHeadingTrue.port', ANGLE_DEFAULT))
+  setVal('ov-nav-opp-hdg', fmtVal(starboardHeading, 'performance.targetHeadingTrue.starboard', ANGLE_DEFAULT))
 
   const navWarns = []
   if (!settings?.vmcNavigation) {
     navWarns.push('VMC navigation outputs are disabled')
   } else {
+    if (statusData?.vmcRouteSuppressed) {
+      navWarns.push('No active route — VMC markers are suppressed until course bearing is available')
+    }
     if (d?.tws == null) navWarns.push('True wind speed — no data (environment.wind.speedTrue)')
     if (d?.twa == null) navWarns.push('True wind angle — no data (environment.wind.angleTrueWater)')
     if (d?.bsp == null) navWarns.push('Boat speed — no data')
@@ -856,9 +864,6 @@ function _tickOverview() {
     if (smoothedValues?.bearingTrue == null) navWarns.push('Course bearing true — no data')
     if (!settings?.ignoreCurrent && (smoothedValues?.currentDrift == null || smoothedValues?.currentSetTrue == null)) {
       navWarns.push('Current vector — no data')
-    }
-    if (statusData?.vmcRouteSuppressed) {
-      navWarns.push('No active route — VMC markers are suppressed until course bearing is available')
     }
     if (d?.tws != null && d?.polarState == null) navWarns.push('No polar loaded — configure in Polars')
     navWarns.push(...polarStateWarnings(d))
