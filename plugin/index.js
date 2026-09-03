@@ -2289,8 +2289,6 @@ module.exports = (app) => {
       }
 
       isRunning = true
-      app.debug('[%s] layline distance metadata: %o', plugin.id, app.getSelfPath?.('navigation.racing.layline.distance')?.meta)
-      app.debug('[%s] speed over ground metadata: %o', plugin.id, app.getSelfPath?.('navigation.speedOverGround')?.meta)
       app.debug('Plugin started')
     },
 
