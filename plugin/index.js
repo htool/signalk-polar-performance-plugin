@@ -759,6 +759,9 @@ module.exports = (app) => {
 
     // Polar speed and performance ratios
     const polarSpeed = polarTable.getBoatSpeed(TWS, TWA)
+    const polarSpeedValid = Number.isFinite(polarSpeed) && polarSpeed > 0
+    const actualVMG = Number.isFinite(BSP) ? BSP * Math.cos(TWA) : null
+    const polarVMG = polarSpeedValid && Number.isFinite(targetVMG) && targetVMG > 0 ? targetVMG : null
     if (Number.isFinite(polarSpeed) && polarSpeed > 0) {
       if (isOutputEnabled('polarSpeed')) {
         add('performance.polarSpeed', polarSpeed, 'm/s',
@@ -778,20 +781,6 @@ module.exports = (app) => {
             'Actual boat speed divided by polar speed.')
         }
       }
-
-      if (Number.isFinite(BSP)) {
-        if (isOutputEnabled('VMG') && Number.isFinite(targetVMG) && targetVMG > 0) {
-          const vmg = BSP * Math.cos(TWA)
-          add('performance.velocityMadeGood', vmg, 'm/s',
-            'Actual VMG based on current boat speed and TWA.')
-          add('performance.polarVelocityMadeGood', targetVMG, 'm/s',
-            'Polar VMG for current TWS.')
-          if (Number.isFinite(vmg)) {
-            add('performance.polarVelocityMadeGoodRatio', Math.abs(vmg) / targetVMG, 'ratio',
-              'Actual VMG divided by polar VMG.')
-          }
-        }
-      }
     } else {
       // Clear these paths so no stale non-zero value remains on the SK bus
       if (isOutputEnabled('polarSpeed')) {
@@ -799,6 +788,17 @@ module.exports = (app) => {
         values.push({ path: 'performance.polarSpeedRatio', value: null })
         values.push({ path: 'performance.targetSpeed', value: null })
       }
+    }
+
+    if (isOutputEnabled('VMG')) {
+      addNullable('performance.velocityMadeGood', actualVMG, 'm/s',
+        'Actual VMG based on current boat speed and TWA.')
+      addNullable('performance.polarVelocityMadeGood', polarVMG, 'm/s',
+        'Polar VMG for current TWS.')
+      addNullable('performance.polarVelocityMadeGoodRatio',
+        Number.isFinite(actualVMG) && Number.isFinite(polarVMG) ? Math.abs(actualVMG) / polarVMG : null,
+        'ratio',
+        'Actual VMG divided by polar VMG.')
     }
 
     // Max speed for current TWS

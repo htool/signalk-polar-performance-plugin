@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 - The navigation graph no longer displays a no-active-route warning, the overview navigation warning list now shows that warning first, and heading labels now use port/starboard terminology consistently.
+- Polar-derived VMG outputs now clear to `null` when polar speed is unavailable, while actual VMG remains published from boat speed and wind angle.
 - `performance.optimumWindAngle` now uses a consistent sign convention downwind: the value is the signed difference between the current TWA and the optimum gybe angle, matching the upwind case instead of being inverted.
 - Disabling a navigation output group or stopping the plugin now clears only the paths that were actually active, via `MessageHandler.clear`, instead of blanket-nulling every known output path.
 - Navigation outputs are now recomputed when an input goes stale or the route bearing disappears, so stale VMC and layline values are cleared instead of being left at their last value.
