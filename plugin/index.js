@@ -1,7 +1,7 @@
 'use strict'
 
 const { PolarTable } = require('./PolarTable')
-const { LaylineCalculator } = require('./LaylineCalculator')
+const { LaylineCalculator, projectWaypoint } = require('./LaylineCalculator')
 const PolarFileStore = require('./PolarFileStore')
 const { ImportService, ImportError, createTimestampedId } = require('./import/ImportService')
 const canonical = require('./import/canonical')
@@ -20,6 +20,7 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 const DEFAULT_VMC_STEP_RAD = Math.PI / 90
+const LAYLINE_CROSSING_TOLERANCE_METERS = 10
 const META_SPEED_DISPLAY = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
 const META_ANGLE_DISPLAY = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
 const META_RATIO_DISPLAY = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
@@ -72,6 +73,7 @@ module.exports = (app) => {
   let hdgSmoother = null
   let groundSmoother = null
   let twdSmoother = null
+  let waterSpeedSmoother = null
   let bearingHandler = null
   let currentSmoother = null
   let positionHandler = null
@@ -323,6 +325,83 @@ module.exports = (app) => {
     paths.forEach(path => { lastOutputs[path] = null })
   }
 
+  function _trackFromVector(vector) {
+    if (!Number.isFinite(vector?.x) || !Number.isFinite(vector?.y)) return null
+    const magnitude = Math.hypot(vector.x, vector.y)
+    if (!Number.isFinite(magnitude) || magnitude <= 0) return null
+    return (Math.atan2(vector.y, vector.x) + 2 * Math.PI) % (2 * Math.PI)
+  }
+
+  function _laylineGraphState({ targets, ground, current, currentAvailable, currentTack, bearing, waterSpeed, heading, position, waypoint }) {
+    const unavailable = { available: false }
+    if (!settings.vmcNavigation || !targets || !currentTack || !Number.isFinite(bearing) || !Number.isFinite(heading)) return unavailable
+
+    const portWaterTrack = targets.port?.headingTrue
+    const starboardWaterTrack = targets.starboard?.headingTrue
+    if (!Number.isFinite(portWaterTrack) || !Number.isFinite(starboardWaterTrack)) return unavailable
+
+    const useGroundFrame = !settings.ignoreCurrent
+    if (useGroundFrame) {
+      const currentVector = currentAvailable ? currentSmoother?.vectorValue : null
+      const portGround = currentVector && targets.port?.vector
+        ? { x: targets.port.vector.x + currentVector.x, y: targets.port.vector.y + currentVector.y }
+        : null
+      const starboardGround = currentVector && targets.starboard?.vector
+        ? { x: targets.starboard.vector.x + currentVector.x, y: targets.starboard.vector.y + currentVector.y }
+        : null
+      const portTrack = _trackFromVector(portGround)
+      const starboardTrack = _trackFromVector(starboardGround)
+      if (!Number.isFinite(ground?.magnitude) || ground.magnitude <= 0 || !Number.isFinite(ground?.angle) ||
+          !Number.isFinite(current?.magnitude) || !Number.isFinite(current?.angle) ||
+          !Number.isFinite(portTrack) || !Number.isFinite(starboardTrack)) return unavailable
+      return {
+        available: true,
+        frame: 'ground',
+        waypointBearing: bearing,
+        selectedTack: currentTack,
+        heading,
+        portTrack,
+        starboardTrack,
+        actual: { speed: ground.magnitude, track: ground.angle },
+        current: { speed: current.magnitude, track: current.angle },
+        crossing: _graphCrossingState(position, waypoint, groundSmoother?.vectorValue, portGround, starboardGround, currentTack)
+      }
+    }
+
+    // TODO: offer optional leeway correction when a reliable leeway input is available.
+    if (!Number.isFinite(waterSpeed) || waterSpeed <= 0 || !Number.isFinite(heading)) return unavailable
+    return {
+      available: true,
+      frame: 'water',
+      waypointBearing: bearing,
+      selectedTack: currentTack,
+      heading,
+      portTrack: portWaterTrack,
+      starboardTrack: starboardWaterTrack,
+      actual: { speed: waterSpeed, track: heading },
+      current: null,
+      crossing: _graphCrossingState(
+        position,
+        waypoint,
+        { x: waterSpeed * Math.cos(heading), y: waterSpeed * Math.sin(heading) },
+        targets.port.vector,
+        targets.starboard.vector,
+        currentTack
+      )
+    }
+  }
+
+  function _graphCrossingState(position, waypoint, actualVector, portLayline, starboardLayline, selectedTack) {
+    if (!_isPosition(position) || !_isPosition(waypoint) || !actualVector || !portLayline || !starboardLayline) return null
+    const selectedLayline = selectedTack === 'port' ? portLayline : selectedTack === 'starboard' ? starboardLayline : null
+    if (!selectedLayline) return null
+    // The rim waypoint is visual only. This projection supplies the physical
+    // distance for the actual-motion crossing against the reciprocal layline.
+    const result = laylineCalculator.solveLeg(projectWaypoint(position, waypoint), actualVector, selectedLayline)
+    if (result.status !== 'valid' || result.distance <= LAYLINE_CROSSING_TOLERANCE_METERS || result.time <= 0) return null
+    return { distance: result.distance, time: result.time }
+  }
+
   function _navigationStructuralState(targets) {
     const missing = []
     const stale = []
@@ -492,6 +571,7 @@ module.exports = (app) => {
       const SmootherClass = getSmootherClass(settings.navigationSmootherType)
       if (navigationWindSmoother) { navigationWindSmoother.setSmootherClass(SmootherClass); navigationWindSmoother.setSmootherOptions(options) }
       if (twdSmoother) { twdSmoother.setSmootherClass(SmootherClass); twdSmoother.setSmootherOptions(options) }
+      if (waterSpeedSmoother) { waterSpeedSmoother.setSmootherClass(SmootherClass); waterSpeedSmoother.setSmootherOptions(options) }
     }
 
     // Speed source change — re-point the BSP handler with an explicit unsubscribe/subscribe cycle.
@@ -504,8 +584,8 @@ module.exports = (app) => {
     }
 
     // Performance target headings require true heading to resolve TWD from signed TWA.
-    if (keys.includes('performanceOutputs')) {
-      if (isOutputEnabled('targetHeadings') && !hdgSmoother) {
+    if (keys.includes('performanceOutputs') || keys.includes('vmcNavigation')) {
+      if ((isOutputEnabled('targetHeadings') || settings.vmcNavigation) && !hdgSmoother) {
         const headingWatchdog = _wireHandlerWatchdog({
           id: 'hdg.smoothed',
           getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
@@ -522,7 +602,7 @@ module.exports = (app) => {
             computeAndSend()
           }
         })
-      } else if (!isOutputEnabled('targetHeadings') && hdgSmoother) {
+      } else if (!isOutputEnabled('targetHeadings') && !settings.vmcNavigation && hdgSmoother) {
         hdgSmoother.terminate()
         hdgSmoother = null
       }
@@ -567,6 +647,18 @@ module.exports = (app) => {
         }
         if (!navigationWindSmoother) {
           createNavigationWindSmoother()
+        }
+        if (!waterSpeedSmoother) {
+          waterSpeedSmoother = createSmoothedHandler({
+            id: 'waterSpeed',
+            path: 'navigation.speedThroughWater',
+            subscribe: true,
+            app,
+            pluginId: plugin.id,
+            SmootherClass: getSmootherClass(settings.navigationSmootherType),
+            smootherOptions: getNavigationSmootherOptions(settings),
+            onDelta: computeAndSend
+          })
         }
         if (!twdSmoother) {
           const twdWatchdog = _wireHandlerWatchdog({
@@ -624,6 +716,7 @@ module.exports = (app) => {
       } else {
         if (groundSmoother) { groundSmoother.terminate(); groundSmoother = null }
         detachNavigationWindSmoother()
+        if (waterSpeedSmoother) { waterSpeedSmoother.terminate(); waterSpeedSmoother = null }
         if (twdSmoother) { twdSmoother.terminate(); twdSmoother = null }
         if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
         if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
@@ -1738,6 +1831,7 @@ module.exports = (app) => {
         const TWAsigned = wind ? wind.angle     : null
         const BSP       = bspSmoother ? bspSmoother.value : null
         const HDG       = hdgSmoother ? hdgSmoother.value  : null
+          const waterSpeed = waterSpeedSmoother?.value ?? waterSpeedSmoother?.handler?.value ?? (!settings.useSOG ? BSP : null)
         const ground = groundSmoother?.polarValue
         const SOG       = ground ? ground.magnitude : null
         const COG       = ground ? ground.angle : null
@@ -1746,6 +1840,23 @@ module.exports = (app) => {
         const current = currentSmoother?.polarValue
         const CURRENT_DRIFT = current ? current.magnitude : null
         const CURRENT_SET = current ? current.angle : null
+        const targets = polarTable?.getTargetSailingVectors({
+          tws: navigationWind?.magnitude,
+          twd: TWD,
+          currentTwaSigned: navigationWind?.angle
+        })
+        const laylineGraph = _laylineGraphState({
+          targets,
+          ground,
+          current,
+          currentAvailable: currentSmoother?.ready && Number.isFinite(CURRENT_DRIFT) && Number.isFinite(CURRENT_SET),
+          currentTack: _resolveNavigationTack(navigationWind?.angle),
+          bearing: BEARING,
+          waterSpeed,
+          heading: HDG,
+          position,
+          waypoint
+        })
 
         const bspPath = settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'
 
@@ -1786,7 +1897,7 @@ module.exports = (app) => {
               tws: si(TWS),
               twa: si(TWAsigned),
               bsp: si(BSP),
-              ...(isOutputEnabled('targetHeadings') && HDG != null ? { hdg: si(HDG) } : {}),
+              ...((isOutputEnabled('targetHeadings') || settings.vmcNavigation) && HDG != null ? { hdg: si(HDG) } : {}),
               ...(settings.vmcNavigation ? {
                 sog: si(SOG),
                 cog: si(COG),
@@ -1810,7 +1921,7 @@ module.exports = (app) => {
               tws: 'environment.wind.speedTrue',
               twa: 'environment.wind.angleTrueWater',
               bsp: bspPath,
-              ...(isOutputEnabled('targetHeadings') ? { hdg: 'navigation.headingTrue' } : {}),
+              ...(isOutputEnabled('targetHeadings') || settings.vmcNavigation ? { hdg: 'navigation.headingTrue' } : {}),
               ...(settings.vmcNavigation ? {
                 sog: 'navigation.speedOverGround',
                 cog: 'navigation.courseOverGroundTrue',
@@ -1827,7 +1938,8 @@ module.exports = (app) => {
           polarState,
           lifecycleWarnings,
           vmcRouteSuppressed,
-          navigationState
+          navigationState,
+          laylineGraph
         })
       })
 
@@ -2068,7 +2180,7 @@ module.exports = (app) => {
       })
 
       // Heading remains responsive; it only resolves target headings from performance wind.
-      if (isOutputEnabled('targetHeadings')) {
+      if (isOutputEnabled('targetHeadings') || settings.vmcNavigation) {
         const headingWatchdog = _wireHandlerWatchdog({
           id: 'hdg.smoothed',
           getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
@@ -2119,6 +2231,17 @@ module.exports = (app) => {
 
         createNavigationWindSmoother()
 
+        waterSpeedSmoother = createSmoothedHandler({
+          id: 'waterSpeed',
+          path: 'navigation.speedThroughWater',
+          subscribe: true,
+          app,
+          pluginId: plugin.id,
+          SmootherClass: getSmootherClass(settings.navigationSmootherType),
+          smootherOptions: navigationSmootherOptions,
+          onDelta: computeAndSend
+        })
+
         const twdWatchdog = _wireHandlerWatchdog({
           id: 'twd.smoothed',
           getPath: () => twdSmoother?.handler?.path ?? 'environment.wind.directionTrue',
@@ -2166,6 +2289,8 @@ module.exports = (app) => {
       }
 
       isRunning = true
+      app.debug('[%s] layline distance metadata: %o', plugin.id, app.getSelfPath?.('navigation.racing.layline.distance')?.meta)
+      app.debug('[%s] speed over ground metadata: %o', plugin.id, app.getSelfPath?.('navigation.speedOverGround')?.meta)
       app.debug('Plugin started')
     },
 
@@ -2179,6 +2304,7 @@ module.exports = (app) => {
       if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }
       if (groundSmoother)  { groundSmoother.terminate();  groundSmoother = null  }
       if (twdSmoother)  { twdSmoother.terminate();  twdSmoother = null  }
+      if (waterSpeedSmoother) { waterSpeedSmoother.terminate(); waterSpeedSmoother = null }
       if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
       if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
       if (positionHandler) { positionHandler.terminate(); positionHandler = null }

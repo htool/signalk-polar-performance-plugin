@@ -362,8 +362,7 @@ let curves         = {}
 let libraryVersion = ''
 let liveTws        = null
 let liveCurve      = null
-let liveVmcCurve   = null
-let liveVmcCurveKey = ''
+let laylineGraph   = null
 const STEP = (2 * Math.PI / 180).toFixed(6)
 
 let activePage = 'overview'
@@ -491,57 +490,6 @@ async function refreshLibrary() {
   if (polar) polar.setLibraryData(twsList, curves, liveCurve)
 }
 
-async function refreshVmcCurve() {
-  const activeId = settings?.activePolar
-  const navigation = statusData?.inputs?.navigation
-  const responsive = statusData?.inputs?.smoothed
-  if (!activeId || !settings?.vmcNavigation || !navigation || !responsive) {
-    liveVmcCurve = null
-    liveVmcCurveKey = ''
-    return
-  }
-
-  const tws = navigation.tws
-  const twd = navigation.twd
-  const course = responsive.bearingTrue
-  if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(course)) {
-    liveVmcCurve = null
-    liveVmcCurveKey = ''
-    return
-  }
-
-  const includeCurrent = !settings?.ignoreCurrent
-  const currentDrift = responsive.currentDrift
-  const currentSetTrue = responsive.currentSetTrue
-
-  const key = [
-    activeId,
-    tws.toFixed(4),
-    twd.toFixed(4),
-    course.toFixed(4),
-    includeCurrent ? (Number.isFinite(currentDrift) ? currentDrift.toFixed(4) : 'nc') : 'ignore',
-    includeCurrent ? (Number.isFinite(currentSetTrue) ? currentSetTrue.toFixed(4) : 'nc') : 'ignore'
-  ].join('|')
-
-  if (key === liveVmcCurveKey) return
-
-  let query = `/polars/${encodeURIComponent(activeId)}/queries/vmc-curve?tws=${tws.toFixed(5)}&twd=${twd.toFixed(5)}&course=${course.toFixed(5)}&step=${STEP}`
-  if (includeCurrent && Number.isFinite(currentDrift) && Number.isFinite(currentSetTrue)) {
-    query += `&currentDrift=${currentDrift.toFixed(5)}&currentSetTrue=${currentSetTrue.toFixed(5)}`
-  }
-
-  try {
-    const curve = await apiGet(query, { silent503: true })
-    if (curve) {
-      liveVmcCurve = curve
-      liveVmcCurveKey = key
-    }
-  } catch (_) {
-    liveVmcCurve = null
-    liveVmcCurveKey = ''
-  }
-}
-
 function getNavigationTargetHeadings(outputs = outputValues, twaSigned = (liveData?.twa ?? smoothedValues?.twa ?? rawValues?.twa)) {
   if (twaSigned == null || !Number.isFinite(+twaSigned)) {
     return { targetHeading: null, oppositeHeading: null }
@@ -562,23 +510,7 @@ function getNavigationTargetHeadings(outputs = outputValues, twaSigned = (liveDa
 
 function updateOverviewNavigationCanvas() {
   if (!navPolar) return
-  const { targetHeading, oppositeHeading } = getNavigationTargetHeadings()
-  const navLive = {
-    actualAngle: smoothedValues?.cog,
-    actualValue: outputValues['performance/velocityMadeGoodOnCourse'],
-    targetAngle: targetHeading,
-    targetValue: outputValues['performance/targetVelocityMadeGoodOnCourse'],
-    oppositeAngle: oppositeHeading,
-    oppositeValue: outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'],
-    course: smoothedValues?.bearingTrue,
-    twd: smoothedValues?.twd,
-    routeSuppressed: !!statusData?.vmcRouteSuppressed,
-    statusMessage: !settings?.vmcNavigation
-      ? 'VMC navigation outputs are disabled'
-      : ''
-  }
-  navPolar.setMode('navigation')
-  navPolar.setNavigationData(liveVmcCurve, navLive)
+  navPolar.setData(laylineGraph)
 }
 
 // Main 1-second refresh: all data from plugin endpoints only
@@ -591,6 +523,7 @@ async function refreshLive() {
   const st = await apiGet('/status')
   if (st) {
     statusData = st
+    laylineGraph = st.laylineGraph || null
     lifecycleWarnings = Array.isArray(st.lifecycleWarnings) ? st.lifecycleWarnings : []
     // Populate rawValues and outputValues from /status for the Inputs/Outputs pages
     if (st.inputs) {
@@ -663,10 +596,7 @@ async function refreshLive() {
     polar.setLiveData(liveData, liveCurve)
   }
 
-  if (statusData && navPolar) {
-    await refreshVmcCurve()
-    updateOverviewNavigationCanvas()
-  }
+  if (statusData && navPolar) updateOverviewNavigationCanvas()
 
   // 4. Tick active page
   _tickActivePage()
@@ -749,12 +679,12 @@ function _buildOverviewPage() {
   navRight.className = 'col-md-6'
   navRight.appendChild(sectionHeading('Live Navigation'))
   navRight.appendChild(buildTable([
-    { label: 'Actual VMC',             id: 'ov-nav-actual' },
-    { label: 'Target VMC',             id: 'ov-nav-target' },
-    { label: 'Opposite tack VMC',      id: 'ov-nav-opp'    },
-    { label: 'VMC ratio',              id: 'ov-nav-ratio'  },
-    { label: 'Port heading (true)',    id: 'ov-nav-hdg'    },
-    { label: 'Starboard heading (true)', id: 'ov-nav-opp-hdg' },
+    { label: 'Speed',             id: 'ov-nav-actual-speed' },
+    { label: 'Port layline',      id: 'ov-nav-port-track' },
+    { label: 'Starboard layline', id: 'ov-nav-starboard-track' },
+    { label: 'Time to layline',   id: 'ov-nav-crossing-time' },
+    { label: 'Distance to layline', id: 'ov-nav-crossing-distance' },
+    { label: 'Current',           id: 'ov-nav-current' },
   ]))
   const navWarningsDiv = document.createElement('div'); navWarningsDiv.id = 'ov-nav-warnings'
   navRight.appendChild(navWarningsDiv)
@@ -768,7 +698,9 @@ function _buildOverviewPage() {
 
   if (window.PolarCanvas) {
     polar = new window.PolarCanvas(perfCanvas, { showLibrary: false, mode: 'performance' })
-    navPolar = new window.PolarCanvas(navCanvas, { showLibrary: false, showLiveCurve: false, mode: 'navigation' })
+  }
+  if (window.LaylineCanvas) {
+    navPolar = new window.LaylineCanvas(navCanvas)
   }
 
   function _applyPolarData() {
@@ -864,27 +796,27 @@ function _tickOverview() {
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
 
-  const portHeading = outputValues['performance/targetHeadingTrue/port'] ?? outputValues['performance.targetHeadingTrue.port']
-  const starboardHeading = outputValues['performance/targetHeadingTrue/starboard'] ?? outputValues['performance.targetHeadingTrue.starboard']
-
-  setVal('ov-nav-actual',  fmtVal(outputValues['performance/velocityMadeGoodOnCourse'], 'performance.velocityMadeGoodOnCourse', SPEED_DEFAULT))
-  setVal('ov-nav-target',  fmtVal(outputValues['performance/targetVelocityMadeGoodOnCourse'], 'performance.targetVelocityMadeGoodOnCourse', SPEED_DEFAULT))
-  setVal('ov-nav-opp',     fmtVal(outputValues['performance/oppositeTackVelocityMadeGoodOnCourse'], 'performance.oppositeTackVelocityMadeGoodOnCourse', SPEED_DEFAULT))
-  setVal('ov-nav-ratio',   fmtVal(outputValues['performance/velocityMadeGoodOnCourseRatio'], 'performance.velocityMadeGoodOnCourseRatio', RATIO_DEFAULT))
-  setVal('ov-nav-hdg',     fmtVal(portHeading, 'performance.targetHeadingTrue.port', ANGLE_DEFAULT))
-  setVal('ov-nav-opp-hdg', fmtVal(starboardHeading, 'performance.targetHeadingTrue.starboard', ANGLE_DEFAULT))
+  const graph = laylineGraph
+  const graphAvailable = graph?.available === true
+  setVal('ov-nav-port-track', fmtVal(graph?.portTrack, 'bearingTrue', ANGLE_DEFAULT))
+  setVal('ov-nav-starboard-track', fmtVal(graph?.starboardTrack, 'bearingTrue', ANGLE_DEFAULT))
+  setVal('ov-nav-actual-speed', fmtVal(graph?.actual?.speed, graph?.frame === 'ground' ? 'sog' : 'bsp', SPEED_DEFAULT))
+  setVal('ov-nav-crossing-time', fmtVal(graph?.crossing?.time, 'navigation.racing.layline.time', TIME_DEFAULT))
+  setVal('ov-nav-crossing-distance', fmtVal(graph?.crossing?.distance, 'navigation.racing.layline.distance', DISTANCE_DEFAULT))
+  setVal('ov-nav-current', graph?.frame === 'ground'
+    ? fmtVectorPolar(graph.current?.speed, graph.current?.track, 'currentDrift', 'currentSetTrue', SPEED_DEFAULT, ANGLE_DEFAULT)
+    : '—')
 
   const navWarns = []
-  if (!settings?.vmcNavigation) {
-    navWarns.push('VMC navigation outputs are disabled')
-  } else {
-    if (statusData?.vmcRouteSuppressed) {
-      navWarns.push('No active route — VMC markers are suppressed until course bearing is available')
-    }
+  if (!graphAvailable) {
+    if (!settings?.vmcNavigation) navWarns.push('Layline navigation is disabled')
+    else {
+      if (statusData?.vmcRouteSuppressed) navWarns.push('No active route — course bearing is unavailable')
     if (d?.tws == null) navWarns.push('True wind speed — no data (environment.wind.speedTrue)')
     if (d?.twa == null) navWarns.push('True wind angle — no data (environment.wind.angleTrueWater)')
-    if (d?.bsp == null) navWarns.push('Boat speed — no data')
-    if (smoothedValues?.sog == null || smoothedValues?.cog == null) navWarns.push('Ground vector — no data')
+      if (graph?.frame === 'ground' || !settings?.ignoreCurrent) {
+        if (smoothedValues?.sog == null || smoothedValues?.cog == null) navWarns.push('Ground vector — no data')
+      } else if (smoothedValues?.hdg == null) navWarns.push('Water track — no true heading data')
     if (smoothedValues?.twd == null) navWarns.push('True wind direction — no data')
     if (smoothedValues?.bearingTrue == null) navWarns.push('Course bearing true — no data')
     if (!settings?.ignoreCurrent && (smoothedValues?.currentDrift == null || smoothedValues?.currentSetTrue == null)) {
@@ -892,6 +824,7 @@ function _tickOverview() {
     }
     if (d?.tws != null && d?.polarState == null) navWarns.push('No polar loaded — configure in Polars')
     navWarns.push(...navigationPolarStateWarnings(d))
+    }
   }
   updateWarnings(document.getElementById('ov-nav-warnings'), navWarns)
   updateOverviewNavigationCanvas()

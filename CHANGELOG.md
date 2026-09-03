@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- Added a true-heading-relative layline graph to the standard and plotter webapps, with port/starboard laylines, waypoint and crossing markers, current and boat-speed vectors, and compass labels.
 - Added VMC navigation support with a dedicated Navigation page in the webapp, new navigation-oriented outputs for actual/target/opposite-tack VMC and headings, and a plotter Graph mode toggle for switching between Performance and Navigation overlays driven by live/status VMC data.
 - Added live curve endpoints for external widgets: `/live/curve` returns the current polar curve with beat/run optima, and `/live/vmc-curve` returns the current VMC curve with port/starboard optima, both derived from the plugin's current Signal K state.
 - Added layline navigation outputs `navigation.racing.layline.distance`/`.time` and `navigation.racing.oppositeLayline.distance`/`.time`, published with the navigation output group. Values are signed: positive means the crossing is ahead, zero means tack or gybe now, negative means the layline has been overstood. Geometry uses a local north/east tangent plane between `navigation.position` and `navigation.courseGreatCircle.nextPoint.position`, with target tack/gybe vectors taken from the polar beat/run targets.

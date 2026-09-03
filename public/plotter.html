@@ -109,10 +109,17 @@
     .polar-item:active { background: #2e3f55; }
     .polar-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .polar-item-check { color: #facc15; font-size: 22px; width: 32px; text-align: right; flex-shrink: 0; }
+
+    #layline-summary {
+      display: none; position: fixed; top: 12px; left: 12px; right: 12px;
+      color: #e0e0e0; background: rgba(13,17,23,0.82); border: 1px solid #2e3f55;
+      padding: 8px 12px; font-size: 16px; z-index: 5;
+    }
   </style>
 </head>
 <body>
   <canvas id="polar"></canvas>
+  <div id="layline-summary" aria-live="polite"></div>
 
   <!-- Settings trigger -->
   <button id="btn-settings" aria-label="Settings">⚙</button>
@@ -161,6 +168,8 @@
     <div id="polar-list-items"></div>
   </div>
 
+  <script src="layline-geometry.js"></script>
+  <script src="layline-canvas.js"></script>
   <script src="polar-canvas.js"></script>
   <script>
     (function () {
@@ -171,6 +180,8 @@
 
       const canvas = document.getElementById('polar')
       const polar  = new PolarCanvas(canvas)
+      const layline = new LaylineCanvas(canvas)
+      const laylineSummary = document.getElementById('layline-summary')
 
       // -----------------------------------------------------------------------
       // Resize
@@ -180,6 +191,7 @@
         canvas.width  = canvas.offsetWidth
         canvas.height = canvas.offsetHeight
         polar.resize()
+        layline.resize()
       }
 
       window.addEventListener('resize', resize)
@@ -196,8 +208,6 @@
       let liveCurve      = null   // interpolated curve for liveTws
       let activePolarId  = null   // current active polar id
       let graphMode      = 'performance'
-      let navCurve       = null
-      let navCurveKey    = ''
       let lastLive       = null
       let lastStatus     = null
       let settingsState  = {}
@@ -311,88 +321,21 @@
         }
       }
 
-      async function fetchNavigationCurve(status) {
-        if (!activePolarId || !status || !status.inputs || !status.inputs.smoothed) {
-          navCurve = null
-          navCurveKey = ''
-          return
-        }
-
-        var smoothed = status.inputs.smoothed
-        var tws = smoothed.tws
-        var twd = smoothed.twd
-        var course = smoothed.bearingTrue
-
-        if (!isFiniteNumber(tws) || !isFiniteNumber(twd) || !isFiniteNumber(course)) {
-          navCurve = null
-          navCurveKey = ''
-          return
-        }
-
-        var includeCurrent = !settingsState.ignoreCurrent
-        var currentDrift = smoothed.currentDrift
-        var currentSetTrue = smoothed.currentSetTrue
-
-        var key = [
-          activePolarId,
-          tws.toFixed(4),
-          twd.toFixed(4),
-          course.toFixed(4),
-          includeCurrent ? (isFiniteNumber(currentDrift) ? currentDrift.toFixed(4) : 'nc') : 'ignore',
-          includeCurrent ? (isFiniteNumber(currentSetTrue) ? currentSetTrue.toFixed(4) : 'nc') : 'ignore'
-        ].join('|')
-
-        if (key === navCurveKey) return
-
-        var query = '?tws=' + tws.toFixed(5) + '&twd=' + twd.toFixed(5) + '&course=' + course.toFixed(5) + '&step=' + STEP
-        if (includeCurrent && isFiniteNumber(currentDrift) && isFiniteNumber(currentSetTrue)) {
-          query += '&currentDrift=' + currentDrift.toFixed(5) + '&currentSetTrue=' + currentSetTrue.toFixed(5)
-        }
-
-        try {
-          navCurve = await fetchJSON(BASE + '/polars/' + activePolarId + '/queries/vmc-curve' + query)
-          navCurveKey = key
-        } catch (_) {
-          navCurve = null
-          navCurveKey = ''
-        }
-      }
-
-      function buildNavigationLive(status) {
-        var out = status && status.outputs ? status.outputs : {}
-        var smoothed = status && status.inputs && status.inputs.smoothed ? status.inputs.smoothed : {}
-        var currentTack = isFiniteNumber(smoothed.twa) ? (smoothed.twa >= 0 ? 'port' : 'starboard') : null
-        var oppositeTack = currentTack === 'port' ? 'starboard' : (currentTack === 'starboard' ? 'port' : null)
-        var currentBest = navCurve && currentTack ? navCurve[currentTack + 'Best'] : null
-        var oppositeBest = navCurve && oppositeTack ? navCurve[oppositeTack + 'Best'] : null
-        var routeSuppressed = !!(status && status.vmcRouteSuppressed)
-        var message = ''
-
-        if (!settingsState.vmcNavigation) {
-          message = 'VMC navigation outputs are disabled'
-        } else if (routeSuppressed) {
-          message = 'No active route - VMC markers suppressed'
-        }
-
-        return {
-          actualAngle: smoothed.cog,
-          actualValue: out['performance.velocityMadeGoodOnCourse'],
-          targetAngle: currentBest ? currentBest.headingTrue : null,
-          targetValue: out['performance.targetVelocityMadeGoodOnCourse'],
-          oppositeAngle: oppositeBest ? oppositeBest.headingTrue : null,
-          oppositeValue: out['performance.oppositeTackVelocityMadeGoodOnCourse'],
-          course: smoothed.bearingTrue,
-          twd: smoothed.twd,
-          routeSuppressed: routeSuppressed,
-          statusMessage: message
-        }
-      }
-
       function renderGraph() {
-        polar.setMode(graphMode)
         if (graphMode === 'navigation') {
-          polar.setNavigationData(navCurve, buildNavigationLive(lastStatus || {}))
+          var graph = lastStatus && lastStatus.laylineGraph ? lastStatus.laylineGraph : null
+          layline.setData(graph)
+          laylineSummary.style.display = 'block'
+          if (!graph || !graph.available) {
+            laylineSummary.textContent = 'Layline graph unavailable'
+          } else {
+            var frame = graph.frame === 'ground' ? 'Ground-relative' : 'Water-relative'
+            var tack = graph.selectedTack === 'port' ? 'Port' : 'Starboard'
+            laylineSummary.textContent = frame + ' | ' + tack + ' layline selected' + (graph.crossing ? ' | To layline available' : ' | No forward layline crossing')
+          }
         } else {
+          laylineSummary.style.display = 'none'
+          polar.setMode(graphMode)
           polar.setLibraryData(twsList, curves, liveCurve)
           if (lastLive) polar.setLiveData(lastLive, liveCurve)
         }
@@ -424,9 +367,6 @@
           liveCurve = await fetchCurveForTws(newTws)
         }
 
-        if (graphMode === 'navigation') {
-          await fetchNavigationCurve(lastStatus || {})
-        }
         renderGraph()
       }
 
@@ -557,7 +497,6 @@
                   polarListPanel.classList.remove('open')
                   // Force library refresh on next cycle
                   libraryVersion = ''
-                  navCurveKey = ''
                 })
                 .catch(function () {})
             })
