@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+- After wind (or other live inputs) have been received and then go silent, the plugin now resubscribes 60 seconds after becoming stale. Previously `onIdle` recovery only ran when a subscription had never received a delta, so an upstream outage after a healthy start could leave performance outputs dead until the plugin was restarted (#32).
+
 ## [1.4.0] - 2026-09-01
 
 ### Changed
