@@ -136,6 +136,7 @@ describe('navigation layline publication', () => {
       send(app, 'environment.wind.directionTrue', 0)
       send(app, 'navigation.speedOverGround', 3)
       send(app, 'navigation.courseOverGroundTrue', -0.2)
+      send(app, 'navigation.speedThroughWater', 3)
       send(app, 'navigation.headingTrue', -0.1)
       send(app, 'navigation.course.calcValues.bearingTrue', 0)
       send(app, 'navigation.position', { latitude: 0, longitude: 0 })
@@ -202,6 +203,60 @@ describe('navigation layline publication', () => {
       plugin.stop()
       const stopValues = publishedValues(app.messages.slice(beforeStop))
       assert.equal(stopValues.some(entry => LAYLINE_PATHS.includes(entry.path)), false)
+    } finally {
+      plugin.stop()
+      fs.rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('requires fresh post-manoeuvre leeway when correction is enabled', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'polar-leeway-'))
+    fs.writeFileSync(path.join(dataDir, 'test.json'), JSON.stringify(TEST_POLAR))
+    const app = makeApp(dataDir)
+    const router = makeRouter()
+    const plugin = require('../plugin/index.js')(app)
+    plugin.registerWithRouter(router)
+
+    try {
+      plugin.start({ activePolar: 'test', vmcNavigation: true, correctForLeeway: true, smootherType: 'None', ignoreCurrent: true })
+      assert.equal(app.subscriptions.get('navigation.leewayAngle').size, 1)
+      assert.equal(app.subscriptions.get('environment.wind.angleApparent').size, 1)
+
+      send(app, 'environment.wind.speedTrue', 5)
+      send(app, 'environment.wind.angleTrueWater', Math.PI / 4)
+      send(app, 'environment.wind.directionTrue', 0)
+      send(app, 'navigation.speedOverGround', 3)
+      send(app, 'navigation.courseOverGroundTrue', -0.2)
+      send(app, 'navigation.speedThroughWater', 3)
+      send(app, 'navigation.headingTrue', -0.1)
+      send(app, 'navigation.course.calcValues.bearingTrue', 0)
+      send(app, 'navigation.position', { latitude: 0, longitude: 0 })
+      send(app, 'navigation.courseGreatCircle.nextPoint.position', { latitude: 0.01, longitude: 0 })
+      send(app, 'environment.wind.angleApparent', -0.7)
+      send(app, 'navigation.leewayAngle', 0.08)
+
+      const beforeTack = makeResponse()
+      router.routes.get['/status']({}, beforeTack)
+      assert.equal(beforeTack.body.navigationState.status, 'valid')
+      assert.deepEqual(beforeTack.body.navigationState.leeway, { mode: 'used', warning: false })
+      assert.equal(beforeTack.body.laylineGraph.leewayAngle, 0.08)
+
+      send(app, 'environment.wind.angleApparent', 0)
+      const duringTack = makeResponse()
+      router.routes.get['/status']({}, duringTack)
+      assert.equal(duringTack.body.navigationState.status, 'unavailable')
+      assert.ok(duringTack.body.navigationState.structural.missing.includes('leeway'))
+      assert.deepEqual(duringTack.body.navigationState.leeway, { mode: 'unavailable', warning: true })
+      for (const outputPath of LAYLINE_PATHS) {
+        assert.equal(duringTack.body.outputs[outputPath], null)
+      }
+
+      send(app, 'environment.wind.angleApparent', 0.7)
+      send(app, 'navigation.leewayAngle', -0.08)
+      const afterTack = makeResponse()
+      router.routes.get['/status']({}, afterTack)
+      assert.equal(afterTack.body.navigationState.status, 'valid')
+      assert.equal(afterTack.body.laylineGraph.leewayAngle, -0.08)
     } finally {
       plugin.stop()
       fs.rmSync(dataDir, { recursive: true, force: true })

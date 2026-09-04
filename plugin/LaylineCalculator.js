@@ -97,7 +97,9 @@ class LaylineCalculator {
     currentTack,
     targets,
     currentVector,
-    ignoreCurrent = false
+    ignoreCurrent = false,
+    correctForLeeway = false,
+    leewayAngle
   }) {
     if (!enabled) {
       return this._state('disabled', structural, sailingMode, currentTack, 'ignored')
@@ -112,13 +114,15 @@ class LaylineCalculator {
 
     const currentAvailable = isFiniteVector(currentVector)
     const currentMode = ignoreCurrent ? 'ignored' : (currentAvailable ? 'used' : 'fallbackZero')
+    const leewayAvailable = Number.isFinite(leewayAngle)
+    const leewayMode = correctForLeeway ? (leewayAvailable ? 'used' : 'unavailable') : 'ignored'
     const normalizedStructural = { ready: missing.length === 0 && stale.length === 0, missing, stale }
     if (!normalizedStructural.ready) {
-      return this._state('unavailable', normalizedStructural, sailingMode, currentTack, currentMode)
+      return this._state('unavailable', normalizedStructural, sailingMode, currentTack, currentMode, leewayMode)
     }
 
     if (sailingMode === 'reaching') {
-      return this._state('unavailable', normalizedStructural, sailingMode, currentTack, currentMode, 'reaching')
+      return this._state('unavailable', normalizedStructural, sailingMode, currentTack, currentMode, leewayMode, 'reaching')
     }
 
     const current = currentMode === 'used' ? currentVector : { x: 0, y: 0 }
@@ -127,7 +131,7 @@ class LaylineCalculator {
     if (!isFiniteVector(port) || !isFiniteVector(starboard)) {
       normalizedStructural.ready = false
       normalizedStructural.missing.push('targetVectors')
-      return this._state('unavailable', normalizedStructural, sailingMode, currentTack, currentMode)
+      return this._state('unavailable', normalizedStructural, sailingMode, currentTack, currentMode, leewayMode)
     }
 
     const ground = {
@@ -149,10 +153,10 @@ class LaylineCalculator {
 
     const validCount = [layline, oppositeLayline].filter(result => result.status === 'valid').length
     const status = validCount === 2 ? 'valid' : (validCount === 1 ? 'partial' : 'unavailable')
-    return this._state(status, normalizedStructural, sailingMode, currentTack, currentMode, null, layline, oppositeLayline)
+    return this._state(status, normalizedStructural, sailingMode, currentTack, currentMode, leewayMode, null, layline, oppositeLayline)
   }
 
-  _state(status, structural, sailingMode, currentTack, currentMode, reason = null, layline, oppositeLayline) {
+  _state(status, structural, sailingMode, currentTack, currentMode, leewayMode = 'ignored', reason = null, layline, oppositeLayline) {
     const result = reason ? unavailable(reason) : unavailable(null)
     return {
       status,
@@ -170,6 +174,10 @@ class LaylineCalculator {
       current: {
         mode: currentMode,
         warning: currentMode === 'fallbackZero'
+      },
+      leeway: {
+        mode: leewayMode,
+        warning: leewayMode === 'unavailable'
       }
     }
   }

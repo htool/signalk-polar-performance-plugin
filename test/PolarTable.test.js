@@ -248,6 +248,25 @@ describe('PolarTable — navigation target vectors', () => {
 
     assert.deepEqual(withNavigationData, windOnly)
   })
+
+  it('keeps steering headings while rotating water tracks by leeway', () => {
+    const uncorrected = polar.getTargetSailingVectors({
+      tws,
+      twd: 0,
+      currentTwaSigned: SI.fromDegrees(45)
+    })
+    const corrected = polar.getTargetSailingVectors({
+      tws,
+      twd: 0,
+      currentTwaSigned: SI.fromDegrees(45),
+      leewayAngle: SI.fromDegrees(4)
+    })
+
+    assert.equal(corrected.port.headingTrue, uncorrected.port.headingTrue)
+    assert.equal(corrected.starboard.headingTrue, uncorrected.starboard.headingTrue)
+    assert.ok(approxEqual(corrected.port.waterTrackTrue - uncorrected.port.waterTrackTrue, SI.fromDegrees(4), 1e-8))
+    assert.ok(approxEqual(corrected.starboard.waterTrackTrue - uncorrected.starboard.waterTrackTrue, SI.fromDegrees(4), 1e-8))
+  })
 })
 
 describe('PolarTable — interpolation', () => {

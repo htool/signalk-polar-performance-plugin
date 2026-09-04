@@ -114,6 +114,15 @@
 
     drawLayline(graph.portTrack, 'port')
     drawLayline(graph.starboardTrack, 'starboard')
+    if (Number.isFinite(graph.leewayAngle) && Number.isFinite(graph.heading)) {
+      const start = -Math.PI / 2
+      const end = start + graph.leewayAngle
+      ctx.beginPath()
+      ctx.arc(cx, cy, 22, start, end, graph.leewayAngle < 0)
+      ctx.strokeStyle = '#0f766e'
+      ctx.lineWidth = 3
+      ctx.stroke()
+    }
     if (graph.frame === 'ground') {
       const scale = radius * 0.72 / Math.max(graph.actual.speed, graph.current.speed, 0.1)
       drawArrow(graph.current.track, graph.current.speed * scale, '#64748b', 2)

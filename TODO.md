@@ -130,7 +130,8 @@
 
 ## Nice to have
 
-- [ ] **Layline graph leeway option** — water-relative layline display currently uses true heading as water track. When a reliable leeway input is available, add an optional correction comparable to the current-inclusion choice.
+- [x] **Layline graph leeway option** — water-relative layline display currently uses true heading as water track. When a reliable leeway input is available, add an optional correction comparable to the current-inclusion choice.
+- [ ] **Leeway-aware VMC optimization** — separately optimize VMC using leeway-adjusted through-water vectors. Keep this independent of the layline geometry correction.
 - [ ] **Rich polar (ORC Speed Guide import)** — ORC Speed Guide HTML files contain a full per-(TWS,TWA) table with heel angle, reef factor, and flatten factor in addition to BSP/VMG. A `RichPolarTable` class could load this data (parsed once from the boat's `speed guide.html`) and interpolate target values at the live (TWS, TWA). New SK paths: `performance/targetHeel` (°), `performance/sailTrim/reef` (0–1), `performance/sailTrim/flat` (0–1). Design: separate optional file alongside the BSP polar (Option A — keep `PolarTable` unchanged); new `activeRichPolar` setting (empty = disabled). Import tool needed to convert the HTML to a JSON grid.
 - [ ] **Polar creation based on observations**
 Create your own polar based on real world observations. 

@@ -579,7 +579,9 @@ async function refreshLive() {
         twd: raw.twd ?? null,
         bearingTrue: raw.bearingTrue ?? null,
         currentDrift: raw.currentDrift ?? null,
-        currentSetTrue: raw.currentSetTrue ?? null
+        currentSetTrue: raw.currentSetTrue ?? null,
+        leewayAngle: raw.leewayAngle ?? null,
+        apparentWindAngle: raw.apparentWindAngle ?? null
       }
       smoothedValues = {
         tws: smoothed.tws ?? null,
@@ -591,7 +593,8 @@ async function refreshLive() {
         twd: smoothed.twd ?? null,
         bearingTrue: smoothed.bearingTrue ?? null,
         currentDrift: smoothed.currentDrift ?? null,
-        currentSetTrue: smoothed.currentSetTrue ?? null
+        currentSetTrue: smoothed.currentSetTrue ?? null,
+        leewayAngle: smoothed.leewayAngle ?? null
       }
       performanceValues = {
         tws: performance.tws ?? null,
@@ -723,6 +726,7 @@ function _buildOverviewPage() {
     { label: 'Time to layline',   id: 'ov-nav-crossing-time' },
     { label: 'Distance to layline', id: 'ov-nav-crossing-distance' },
     { label: 'Current',           id: 'ov-nav-current' },
+    { label: 'Leeway',            id: 'ov-nav-leeway' },
   ]))
   const navWarningsDiv = document.createElement('div'); navWarningsDiv.id = 'ov-nav-warnings'
   navRight.appendChild(navWarningsDiv)
@@ -844,6 +848,9 @@ function _tickOverview() {
   setVal('ov-nav-current', graph?.frame === 'ground'
     ? fmtVectorPolar(graph.current?.speed, graph.current?.track, 'currentDrift', 'currentSetTrue', SPEED_DEFAULT, ANGLE_DEFAULT)
     : '—')
+  setVal('ov-nav-leeway', settings?.correctForLeeway
+    ? fmtVal(graph?.leewayAngle, 'leewayAngle', ANGLE_DEFAULT)
+    : '—')
 
   const navWarns = []
   if (!graphAvailable) {
@@ -859,6 +866,9 @@ function _tickOverview() {
     if (smoothedValues?.bearingTrue == null) navWarns.push('Course bearing true — no data')
     if (!settings?.ignoreCurrent && (smoothedValues?.currentDrift == null || smoothedValues?.currentSetTrue == null)) {
       navWarns.push('Current vector — no data')
+    }
+    if (settings?.correctForLeeway && smoothedValues?.leewayAngle == null) {
+      navWarns.push('Leeway — no post-manoeuvre data')
     }
     if (d?.tws != null && d?.polarState == null) navWarns.push('No polar loaded — configure in Polars')
     navWarns.push(...navigationPolarStateWarnings(d))
@@ -1425,6 +1435,18 @@ function _buildNavigationPage() {
       desc: 'When enabled, VMC uses zero-current assumptions.',
       control: createToggle(!!settings?.ignoreCurrent, checked => {
         apiPut('/settings', { ignoreCurrent: checked }).then(s => {
+          if (s) {
+            settings = s
+            _tickNavigation()
+          }
+        })
+      })
+    },
+    {
+      label: 'Correct laylines for leeway',
+      desc: 'Uses navigation.leewayAngle and resets its filter on an apparent-wind tack or gybe transition.',
+      control: createToggle(!!settings?.correctForLeeway, checked => {
+        apiPut('/settings', { correctForLeeway: checked }).then(s => {
           if (s) {
             settings = s
             _tickNavigation()

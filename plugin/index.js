@@ -23,6 +23,7 @@ const DEFAULT_VMC_STEP_RAD = Math.PI / 90
 const LAYLINE_ANGLE_ALLOWANCE_MIN_RAD = -5 * Math.PI / 180
 const LAYLINE_ANGLE_ALLOWANCE_MAX_RAD = 10 * Math.PI / 180
 const LAYLINE_CROSSING_TOLERANCE_METERS = 10
+const AWA_TACK_TRANSITION_DEADBAND_RAD = 10 * Math.PI / 180
 const META_SPEED_DISPLAY = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
 const META_ANGLE_DISPLAY = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
 const META_RATIO_DISPLAY = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
@@ -55,6 +56,7 @@ const DEFAULT_SETTINGS = {
   polarSpeed: false,
   useSOG: false,
   ignoreCurrent: false,
+  correctForLeeway: false,
   smoothedInputs: false,
   vmcNavigation: false,
   laylineAngleAllowance: 0
@@ -79,6 +81,8 @@ module.exports = (app) => {
   let waterSpeedSmoother = null
   let bearingHandler = null
   let currentSmoother = null
+  let leewaySmoother = null
+  let apparentWindAngleHandler = null
   let positionHandler = null
   let waypointHandler = null
   let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
@@ -86,6 +90,7 @@ module.exports = (app) => {
   let lifecycleWarnings = []
   let vmcRouteSuppressed = false
   let lastNavigationTack = null
+  let apparentWindSide = null
   const laylineCalculator = new LaylineCalculator()
   let navigationState = laylineCalculator.calculate({ enabled: false })
 
@@ -322,6 +327,20 @@ module.exports = (app) => {
     return lastNavigationTack
   }
 
+  function _classifyApparentWindSide(angle) {
+    if (!Number.isFinite(angle) || Math.abs(angle) < AWA_TACK_TRANSITION_DEADBAND_RAD) return null
+    return angle < 0 ? 'port' : 'starboard'
+  }
+
+  function _handleApparentWindAngle() {
+    const nextSide = _classifyApparentWindSide(apparentWindAngleHandler?.value)
+    if (apparentWindSide !== null && nextSide !== apparentWindSide && leewaySmoother?.ready) {
+      leewaySmoother.invalidate()
+    }
+    apparentWindSide = nextSide
+    computeAndSend()
+  }
+
   function _clearNavigationOutputs() {
     const paths = OUTPUT_PATHS.vmcNavigation
     MessageHandler.clear(app, plugin.id, paths.map(path => ({ path })))
@@ -335,12 +354,12 @@ module.exports = (app) => {
     return (Math.atan2(vector.y, vector.x) + 2 * Math.PI) % (2 * Math.PI)
   }
 
-  function _laylineGraphState({ targets, ground, current, currentAvailable, currentTack, bearing, waterSpeed, heading, position, waypoint }) {
+  function _laylineGraphState({ targets, ground, current, currentAvailable, currentTack, bearing, waterSpeed, heading, leewayAngle, position, waypoint }) {
     const unavailable = { available: false }
     if (!settings.vmcNavigation || !targets || !currentTack || !Number.isFinite(bearing) || !Number.isFinite(heading)) return unavailable
 
-    const portWaterTrack = targets.port?.headingTrue
-    const starboardWaterTrack = targets.starboard?.headingTrue
+    const portWaterTrack = targets.port?.waterTrackTrue
+    const starboardWaterTrack = targets.starboard?.waterTrackTrue
     if (!Number.isFinite(portWaterTrack) || !Number.isFinite(starboardWaterTrack)) return unavailable
 
     const useGroundFrame = !settings.ignoreCurrent
@@ -363,6 +382,7 @@ module.exports = (app) => {
         waypointBearing: bearing,
         selectedTack: currentTack,
         heading,
+        leewayAngle: Number.isFinite(leewayAngle) ? leewayAngle : null,
         portTrack,
         starboardTrack,
         actual: { speed: ground.magnitude, track: ground.angle },
@@ -371,22 +391,23 @@ module.exports = (app) => {
       }
     }
 
-    // TODO: offer optional leeway correction when a reliable leeway input is available.
     if (!Number.isFinite(waterSpeed) || waterSpeed <= 0 || !Number.isFinite(heading)) return unavailable
+    const waterTrack = (heading + (Number.isFinite(leewayAngle) ? leewayAngle : 0) + 2 * Math.PI) % (2 * Math.PI)
     return {
       available: true,
       frame: 'water',
       waypointBearing: bearing,
       selectedTack: currentTack,
       heading,
+      leewayAngle: Number.isFinite(leewayAngle) ? leewayAngle : null,
       portTrack: portWaterTrack,
       starboardTrack: starboardWaterTrack,
-      actual: { speed: waterSpeed, track: heading },
+      actual: { speed: waterSpeed, track: waterTrack },
       current: null,
       crossing: _graphCrossingState(
         position,
         waypoint,
-        { x: waterSpeed * Math.cos(heading), y: waterSpeed * Math.sin(heading) },
+        { x: waterSpeed * Math.cos(waterTrack), y: waterSpeed * Math.sin(waterTrack) },
         targets.port.vector,
         targets.starboard.vector,
         currentTack
@@ -419,6 +440,10 @@ module.exports = (app) => {
     classify(waypointHandler, 'waypoint', _isPosition(waypointHandler?.value))
     if (!polarTable) missing.push('polar')
     if (!targets) missing.push('targetVectors')
+    if (settings.correctForLeeway) {
+      classify(apparentWindAngleHandler, 'apparentWindAngle', Number.isFinite(apparentWindAngleHandler?.value))
+      classify(leewaySmoother, 'leeway', Number.isFinite(leewaySmoother?.value))
+    }
 
     return { ready: missing.length === 0 && stale.length === 0, missing, stale }
   }
@@ -581,6 +606,7 @@ module.exports = (app) => {
       if (navigationWindSmoother) { navigationWindSmoother.setSmootherClass(SmootherClass); navigationWindSmoother.setSmootherOptions(options) }
       if (twdSmoother) { twdSmoother.setSmootherClass(SmootherClass); twdSmoother.setSmootherOptions(options) }
       if (waterSpeedSmoother) { waterSpeedSmoother.setSmootherClass(SmootherClass); waterSpeedSmoother.setSmootherOptions(options) }
+      if (leewaySmoother) { leewaySmoother.setSmootherClass(SmootherClass); leewaySmoother.setSmootherOptions(options) }
     }
 
     // Speed source change — re-point the BSP handler with an explicit unsubscribe/subscribe cycle.
@@ -617,7 +643,7 @@ module.exports = (app) => {
       }
     }
 
-    if (keys.includes('vmcNavigation') || keys.includes('ignoreCurrent')) {
+    if (keys.includes('vmcNavigation') || keys.includes('ignoreCurrent') || keys.includes('correctForLeeway')) {
       if (settings.vmcNavigation) {
         _publishOutputMetadata([...VMC_OUTPUT_META, ...LAYLINE_OUTPUT_META])
         if (!groundSmoother) {
@@ -722,6 +748,44 @@ module.exports = (app) => {
           }
           _clearLifecycleWarning('current.smoothed')
         }
+        if (settings.correctForLeeway) {
+          if (!leewaySmoother) {
+            const leewayWatchdog = _wireHandlerWatchdog({
+              id: 'leeway.smoothed',
+              getPath: () => leewaySmoother?.handler?.path ?? 'navigation.leewayAngle',
+              unsubscribe: () => leewaySmoother?.unsubscribe(),
+              subscribe: () => leewaySmoother?.subscribe(),
+              onUnavailable: computeAndSend
+            })
+            leewaySmoother = createSmoothedHandler({
+              id: 'leeway', path: 'navigation.leewayAngle', subscribe: true, app, pluginId: plugin.id,
+              SmootherClass: getSmootherClass(settings.navigationSmootherType), smootherOptions: getNavigationSmootherOptions(settings),
+              ...leewayWatchdog,
+              onDelta: () => { leewayWatchdog.onDelta(); computeAndSend() }
+            })
+          }
+          if (!apparentWindAngleHandler) {
+            apparentWindAngleHandler = new MessageHandler(app, plugin.id, 'apparentWindAngle')
+            apparentWindAngleHandler.configure('environment.wind.angleApparent')
+            const apparentWindWatchdog = _wireHandlerWatchdog({
+              id: 'apparentWindAngle',
+              getPath: () => apparentWindAngleHandler?.path ?? 'environment.wind.angleApparent',
+              unsubscribe: () => apparentWindAngleHandler?.unsubscribe(),
+              subscribe: () => apparentWindAngleHandler?.subscribe(),
+              onUnavailable: computeAndSend
+            })
+            apparentWindAngleHandler.onDelta = () => { apparentWindWatchdog.onDelta(); _handleApparentWindAngle() }
+            apparentWindAngleHandler.onStale = apparentWindWatchdog.onStale
+            apparentWindAngleHandler.onIdle = apparentWindWatchdog.onIdle
+            apparentWindAngleHandler.subscribe()
+          }
+        } else {
+          if (leewaySmoother) { leewaySmoother.terminate(); leewaySmoother = null }
+          if (apparentWindAngleHandler) { apparentWindAngleHandler.terminate(); apparentWindAngleHandler = null }
+          apparentWindSide = null
+          _clearLifecycleWarning('leeway.smoothed')
+          _clearLifecycleWarning('apparentWindAngle')
+        }
       } else {
         if (groundSmoother) { groundSmoother.terminate(); groundSmoother = null }
         detachNavigationWindSmoother()
@@ -729,13 +793,18 @@ module.exports = (app) => {
         if (twdSmoother) { twdSmoother.terminate(); twdSmoother = null }
         if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
         if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
+        if (leewaySmoother) { leewaySmoother.terminate(); leewaySmoother = null }
+        if (apparentWindAngleHandler) { apparentWindAngleHandler.terminate(); apparentWindAngleHandler = null }
         if (positionHandler) { positionHandler.terminate(); positionHandler = null }
         if (waypointHandler) { waypointHandler.terminate(); waypointHandler = null }
         _clearLifecycleWarning('current.smoothed')
         _clearLifecycleWarning('position')
         _clearLifecycleWarning('waypoint')
+        _clearLifecycleWarning('leeway.smoothed')
+        _clearLifecycleWarning('apparentWindAngle')
         navigationState = laylineCalculator.calculate({ enabled: false })
         lastNavigationTack = null
+        apparentWindSide = null
         if (vmcRouteSuppressed) {
           vmcRouteSuppressed = false
           _restoreBasePluginStatus()
@@ -994,7 +1063,8 @@ module.exports = (app) => {
         tws: navigationTWS,
         twd: twdSmoother?.value,
         currentTwaSigned: navigationTWAsigned,
-        laylineAngleAllowance: settings.laylineAngleAllowance
+        laylineAngleAllowance: settings.laylineAngleAllowance,
+        leewayAngle: settings.correctForLeeway ? leewaySmoother?.value : 0
       })
       const structural = _navigationStructuralState(targets)
       const currentTack = _resolveNavigationTack(navigationTWAsigned)
@@ -1027,7 +1097,9 @@ module.exports = (app) => {
         currentTack,
         targets,
         currentVector: currentAvailable ? currentSmoother.vectorValue : null,
-        ignoreCurrent: !!settings.ignoreCurrent
+        ignoreCurrent: !!settings.ignoreCurrent,
+        correctForLeeway: !!settings.correctForLeeway,
+        leewayAngle: leewaySmoother?.value
       })
 
       const layline = navigationState.temporal.layline
@@ -1832,6 +1904,8 @@ module.exports = (app) => {
         const rawBearing = si(bearingHandler?.value ?? null)
         const rawCurrentDrift = si(currentSmoother?.polar?.magnitudeHandler?.value ?? null)
         const rawCurrentSet = si(currentSmoother?.polar?.angleHandler?.value ?? null)
+          const rawLeeway = si(leewaySmoother?.handler?.value ?? null)
+          const rawApparentWindAngle = si(apparentWindAngleHandler?.value ?? null)
         const position = _isPosition(positionHandler?.value) ? positionHandler.value : null
         const waypoint = _isPosition(waypointHandler?.value) ? waypointHandler.value : null
 
@@ -1850,11 +1924,13 @@ module.exports = (app) => {
         const current = currentSmoother?.polarValue
         const CURRENT_DRIFT = current ? current.magnitude : null
         const CURRENT_SET = current ? current.angle : null
+          const LEEWAY = leewaySmoother?.value
         const targets = polarTable?.getTargetSailingVectors({
           tws: navigationWind?.magnitude,
           twd: TWD,
           currentTwaSigned: navigationWind?.angle,
-          laylineAngleAllowance: settings.laylineAngleAllowance
+          laylineAngleAllowance: settings.laylineAngleAllowance,
+          leewayAngle: settings.correctForLeeway ? LEEWAY : 0
         })
         const laylineGraph = _laylineGraphState({
           targets,
@@ -1865,6 +1941,7 @@ module.exports = (app) => {
           bearing: BEARING,
           waterSpeed,
           heading: HDG,
+                    leewayAngle: settings.correctForLeeway ? LEEWAY : null,
           position,
           waypoint
         })
@@ -1900,6 +1977,8 @@ module.exports = (app) => {
                 bearingTrue: rawBearing,
                 currentDrift: rawCurrentDrift,
                 currentSetTrue: rawCurrentSet,
+                leewayAngle: rawLeeway,
+                apparentWindAngle: rawApparentWindAngle,
                 position,
                 waypoint
               } : {})
@@ -1915,7 +1994,8 @@ module.exports = (app) => {
                 twd: si(TWD),
                 bearingTrue: si(BEARING),
                 currentDrift: si(CURRENT_DRIFT),
-                currentSetTrue: si(CURRENT_SET)
+                currentSetTrue: si(CURRENT_SET),
+                leewayAngle: si(LEEWAY)
               } : {})
             },
             performance: {
@@ -1940,6 +2020,8 @@ module.exports = (app) => {
                 bearingTrue: 'navigation.course.calcValues.bearingTrue',
                 currentDrift: 'environment.current.drift',
                 currentSetTrue: 'environment.current.setTrue',
+                                leewayAngle: 'navigation.leewayAngle',
+                                apparentWindAngle: 'environment.wind.angleApparent',
                 position: 'navigation.position',
                 waypoint: 'navigation.courseGreatCircle.nextPoint.position'
               } : {})
@@ -2303,6 +2385,34 @@ module.exports = (app) => {
             }
           })
         }
+        if (settings.correctForLeeway) {
+          const leewayWatchdog = _wireHandlerWatchdog({
+            id: 'leeway.smoothed',
+            getPath: () => leewaySmoother?.handler?.path ?? 'navigation.leewayAngle',
+            unsubscribe: () => leewaySmoother?.unsubscribe(),
+            subscribe: () => leewaySmoother?.subscribe(),
+            onUnavailable: computeAndSend
+          })
+          leewaySmoother = createSmoothedHandler({
+            id: 'leeway', path: 'navigation.leewayAngle', subscribe: true, app, pluginId: plugin.id,
+            SmootherClass: getSmootherClass(settings.navigationSmootherType), smootherOptions: navigationSmootherOptions,
+            ...leewayWatchdog,
+            onDelta: () => { leewayWatchdog.onDelta(); computeAndSend() }
+          })
+          apparentWindAngleHandler = new MessageHandler(app, plugin.id, 'apparentWindAngle')
+          apparentWindAngleHandler.configure('environment.wind.angleApparent')
+          const apparentWindWatchdog = _wireHandlerWatchdog({
+            id: 'apparentWindAngle',
+            getPath: () => apparentWindAngleHandler?.path ?? 'environment.wind.angleApparent',
+            unsubscribe: () => apparentWindAngleHandler?.unsubscribe(),
+            subscribe: () => apparentWindAngleHandler?.subscribe(),
+            onUnavailable: computeAndSend
+          })
+          apparentWindAngleHandler.onDelta = () => { apparentWindWatchdog.onDelta(); _handleApparentWindAngle() }
+          apparentWindAngleHandler.onStale = apparentWindWatchdog.onStale
+          apparentWindAngleHandler.onIdle = apparentWindWatchdog.onIdle
+          apparentWindAngleHandler.subscribe()
+        }
       }
 
       isRunning = true
@@ -2322,11 +2432,14 @@ module.exports = (app) => {
       if (waterSpeedSmoother) { waterSpeedSmoother.terminate(); waterSpeedSmoother = null }
       if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
       if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
+      if (leewaySmoother) { leewaySmoother.terminate(); leewaySmoother = null }
+      if (apparentWindAngleHandler) { apparentWindAngleHandler.terminate(); apparentWindAngleHandler = null }
       if (positionHandler) { positionHandler.terminate(); positionHandler = null }
       if (waypointHandler) { waypointHandler.terminate(); waypointHandler = null }
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
       vmcRouteSuppressed = false
+      apparentWindSide = null
       navigationState = laylineCalculator.calculate({ enabled: false })
       app.debug('Plugin stopped')
     }

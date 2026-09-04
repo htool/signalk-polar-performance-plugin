@@ -70,11 +70,11 @@ class PolarTable {
     }
   }
 
-  getTargetSailingVectors({ tws, twd, currentTwaSigned, laylineAngleAllowance = 0 }) {
+  getTargetSailingVectors({ tws, twd, currentTwaSigned, laylineAngleAllowance = 0, leewayAngle = 0 }) {
     if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(currentTwaSigned)) {
       return null
     }
-    if (!Number.isFinite(laylineAngleAllowance)) return null
+    if (!Number.isFinite(laylineAngleAllowance) || !Number.isFinite(leewayAngle)) return null
 
     const twa = Math.abs(currentTwaSigned)
     const sailingMode = twa < Math.PI / 3
@@ -97,17 +97,21 @@ class PolarTable {
 
     const portHeading = this._wrap2Pi(twd + targetAngle)
     const starboardHeading = this._wrap2Pi(twd - targetAngle)
+    const portWaterTrack = this._wrap2Pi(portHeading + leewayAngle)
+    const starboardWaterTrack = this._wrap2Pi(starboardHeading + leewayAngle)
     return {
       sailingMode,
       port: {
         headingTrue: portHeading,
+        waterTrackTrue: portWaterTrack,
         speedThroughWater,
-        vector: this._vectorFromPolar(speedThroughWater, portHeading)
+        vector: this._vectorFromPolar(speedThroughWater, portWaterTrack)
       },
       starboard: {
         headingTrue: starboardHeading,
+        waterTrackTrue: starboardWaterTrack,
         speedThroughWater,
-        vector: this._vectorFromPolar(speedThroughWater, starboardHeading)
+        vector: this._vectorFromPolar(speedThroughWater, starboardWaterTrack)
       }
     }
   }

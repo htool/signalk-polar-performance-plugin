@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- Added optional leeway-corrected laylines using `navigation.leewayAngle`. Laylines wait for a fresh leeway sample after an apparent-wind tack or gybe transition, and the Overview navigation graph shows the applied leeway.
 - Added a Navigation setting to widen or narrow laylines from the polar optimum, helping tailor target angles to real sailing conditions.
 - Added a true-heading-relative layline graph to the standard and plotter webapps, with port/starboard laylines, waypoint and crossing markers, current and boat-speed vectors, and compass labels.
 - Added VMC navigation support with a dedicated Navigation page in the webapp, new navigation-oriented outputs for actual/target/opposite-tack VMC and headings, and a plotter Graph mode toggle for switching between Performance and Navigation overlays driven by live/status VMC data.
