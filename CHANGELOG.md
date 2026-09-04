@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+- After wind (or other live inputs) have been received and then go silent, the plugin resubscribes 60 seconds after becoming stale. `signalkutilities` 3.1.1 re-arms MessageHandler idle timers, but PolarSmoother (wind) still only fires `onIdle` while `ABSENT`, which is the #32 outage path.
+- Runtime enable of opposite-tack heading now passes `id: 'hdg.smoothed'` and `getPath` to the watchdog, matching `start()`. The previous `get path()` getter left `getPath` undefined, so `onStale` threw inside the library timer.
+
 ## [1.4.0] - 2026-09-01
 
 ### Changed
