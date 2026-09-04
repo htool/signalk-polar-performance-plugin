@@ -103,4 +103,16 @@ describe('Stale input resubscribe watchdog', () => {
     mock.timers.tick(STALE_RESUBSCRIBE_PERIOD)
     assert.equal(windSubscribeCount(app), afterStart)
   })
+
+  it('retries resubscribe if the input stays dead after the first recover', () => {
+    plugin.start({})
+    const afterStart = windSubscribeCount(app)
+    app.deliver(WIND_SPEED, 5)
+    app.deliver(WIND_ANGLE, 0.8)
+    mock.timers.tick(STALE_PERIOD)
+    mock.timers.tick(STALE_RESUBSCRIBE_PERIOD)
+    assert.equal(windSubscribeCount(app), afterStart + 2)
+    mock.timers.tick(STALE_RESUBSCRIBE_PERIOD)
+    assert.equal(windSubscribeCount(app), afterStart + 4)
+  })
 })

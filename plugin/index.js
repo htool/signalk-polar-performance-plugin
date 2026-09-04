@@ -137,9 +137,9 @@ module.exports = (app) => {
         const path = getPath()
         app.debug(`[${plugin.id}] stale input ${id} on ${path}`)
         _setLifecycleWarning(id, 'stale', path)
-        // signalkutilities only fires onIdle while ABSENT (never received a
-        // delta). After data has flowed, silence becomes STALE and the idle
-        // timer is never re-armed — so recover from here, once, after 60s.
+        // PolarSmoother (wind) in signalkutilities 3.1.1 still only fires
+        // onIdle while ABSENT. After data has flowed, silence becomes STALE
+        // and the idle callback is skipped — recover from here, once, after 60s.
         if (recoverTimers.has(id)) return
         recoverTimers.set(id, setTimeout(() => {
           recoverTimers.delete(id)
