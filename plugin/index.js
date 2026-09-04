@@ -20,6 +20,8 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 const DEFAULT_VMC_STEP_RAD = Math.PI / 90
+const LAYLINE_ANGLE_ALLOWANCE_MIN_RAD = -5 * Math.PI / 180
+const LAYLINE_ANGLE_ALLOWANCE_MAX_RAD = 10 * Math.PI / 180
 const LAYLINE_CROSSING_TOLERANCE_METERS = 10
 const META_SPEED_DISPLAY = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
 const META_ANGLE_DISPLAY = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
@@ -54,7 +56,8 @@ const DEFAULT_SETTINGS = {
   useSOG: false,
   ignoreCurrent: false,
   smoothedInputs: false,
-  vmcNavigation: false
+  vmcNavigation: false,
+  laylineAngleAllowance: 0
 }
 
 module.exports = (app) => {
@@ -507,6 +510,12 @@ module.exports = (app) => {
 
       s.settingsVersion = 1
       app.debug('Settings migrated from v0 to v1')
+    }
+
+    if (!Number.isFinite(s.laylineAngleAllowance) ||
+        s.laylineAngleAllowance < LAYLINE_ANGLE_ALLOWANCE_MIN_RAD ||
+        s.laylineAngleAllowance > LAYLINE_ANGLE_ALLOWANCE_MAX_RAD) {
+      s.laylineAngleAllowance = DEFAULT_SETTINGS.laylineAngleAllowance
     }
 
     // Persist if any migration ran, so migrations don't repeat on next start.
@@ -984,7 +993,8 @@ module.exports = (app) => {
       const targets = polarTable.getTargetSailingVectors({
         tws: navigationTWS,
         twd: twdSmoother?.value,
-        currentTwaSigned: navigationTWAsigned
+        currentTwaSigned: navigationTWAsigned,
+        laylineAngleAllowance: settings.laylineAngleAllowance
       })
       const structural = _navigationStructuralState(targets)
       const currentTack = _resolveNavigationTack(navigationTWAsigned)
@@ -1843,7 +1853,8 @@ module.exports = (app) => {
         const targets = polarTable?.getTargetSailingVectors({
           tws: navigationWind?.magnitude,
           twd: TWD,
-          currentTwaSigned: navigationWind?.angle
+          currentTwaSigned: navigationWind?.angle,
+          laylineAngleAllowance: settings.laylineAngleAllowance
         })
         const laylineGraph = _laylineGraphState({
           targets,
@@ -2000,6 +2011,12 @@ module.exports = (app) => {
       router.put('/settings', (req, res) => {
         if (!req.body || typeof req.body !== 'object') {
           return res.status(400).json({ error: 'Expected a JSON object' })
+        }
+        if ('laylineAngleAllowance' in req.body &&
+            (!Number.isFinite(req.body.laylineAngleAllowance) ||
+              req.body.laylineAngleAllowance < LAYLINE_ANGLE_ALLOWANCE_MIN_RAD ||
+              req.body.laylineAngleAllowance > LAYLINE_ANGLE_ALLOWANCE_MAX_RAD)) {
+          return res.status(400).json({ error: 'laylineAngleAllowance must be between -5 and 10 degrees in radians' })
         }
         // Stage changes; they are applied in applyOptionChanges() on the next
         // wind update (or immediately below if the plugin is already running).

@@ -214,6 +214,27 @@ describe('PolarTable — navigation target vectors', () => {
     assert.ok(approxEqual(targets.port.speedThroughWater, polar.getBoatSpeed(tws, polar.getRunAngle(tws)), 1e-9))
   })
 
+  it('widens beat and run laylines by the configured radians allowance', () => {
+    const allowance = SI.fromDegrees(5)
+    const upwind = polar.getTargetSailingVectors({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(45),
+      laylineAngleAllowance: allowance
+    })
+    const downwind = polar.getTargetSailingVectors({
+      tws,
+      twd,
+      currentTwaSigned: SI.fromDegrees(135),
+      laylineAngleAllowance: allowance
+    })
+
+    assert.ok(approxEqual(upwind.port.headingTrue, twd + polar.getBeatAngle(tws) + allowance, 1e-9))
+    assert.ok(approxEqual(upwind.port.speedThroughWater, polar.getBoatSpeed(tws, polar.getBeatAngle(tws) + allowance), 1e-9))
+    assert.ok(approxEqual(downwind.port.headingTrue, twd + polar.getRunAngle(tws) - allowance, 1e-9))
+    assert.ok(approxEqual(downwind.port.speedThroughWater, polar.getBoatSpeed(tws, polar.getRunAngle(tws) - allowance), 1e-9))
+  })
+
   it('does not include current or waypoint data in target vectors', () => {
     const windOnly = polar.getTargetSailingVectors({ tws, twd, currentTwaSigned: SI.fromDegrees(45) })
     const withNavigationData = polar.getTargetSailingVectors({

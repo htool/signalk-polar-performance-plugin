@@ -116,6 +116,18 @@ describe('navigation layline publication', () => {
         smootherType: 'None',
         ignoreCurrent: false
       })
+      const settingsResponse = makeResponse()
+      router.routes.get['/settings']({}, settingsResponse)
+      assert.equal(settingsResponse.body.laylineAngleAllowance, 0)
+
+      const invalidAllowanceResponse = makeResponse()
+      router.routes.put['/settings']({ body: { laylineAngleAllowance: 11 * Math.PI / 180 } }, invalidAllowanceResponse)
+      assert.match(invalidAllowanceResponse.body.error, /between -5 and 10 degrees/)
+
+      const validAllowanceResponse = makeResponse()
+      router.routes.put['/settings']({ body: { laylineAngleAllowance: 5 * Math.PI / 180 } }, validAllowanceResponse)
+      assert.equal(validAllowanceResponse.body.laylineAngleAllowance, 5 * Math.PI / 180)
+
       assert.equal(app.subscriptions.get('environment.wind.speedTrue').size, 1)
       assert.equal(app.subscriptions.get('environment.wind.angleTrueWater').size, 1)
 

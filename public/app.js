@@ -292,6 +292,44 @@ function createNumberInput(key, value, opts, showRevert, onSaved) {
   return wrap
 }
 
+function createAngleInput(key, value, opts, onSaved) {
+  const displayUnits = meta['performance.targetHeadingTrue.port']?.displayUnits ?? ANGLE_DEFAULT
+  const converter = getConverter(displayUnits)
+  const zero = converter?.fn(0) ?? 0
+  const scale = converter ? converter.fn(1) - zero : 1
+  const toDisplay = radians => Number.isFinite(radians) && Number.isFinite(scale) && scale !== 0
+    ? (converter ? converter.fn(radians) : radians)
+    : opts.default
+  const toRadians = displayed => converter ? (displayed - zero) / scale : displayed
+
+  const wrap = document.createElement('span')
+  const input = document.createElement('input')
+  input.type = 'number'
+  input.className = 'form-control form-control-sm d-inline-block'
+  input.style.width = '90px'
+  input.value = toDisplay(Number.isFinite(value) ? value : opts.default)
+  input.min = toDisplay(opts.min)
+  input.max = toDisplay(opts.max)
+  input.step = Math.abs(toDisplay(opts.step) - zero)
+  input.addEventListener('change', () => {
+    const radians = toRadians(Number(input.value))
+    if (!Number.isFinite(radians) || radians < opts.min || radians > opts.max) return
+    apiPut('/settings', { [key]: radians }).then(s => {
+      if (s) {
+        settings = s
+        input.value = toDisplay(s[key])
+        if (typeof onSaved === 'function') onSaved(s)
+      }
+    })
+  })
+  const suffix = document.createElement('span')
+  suffix.className = 'ms-1 small text-muted'
+  suffix.textContent = converter?.symbol ?? ''
+  wrap.appendChild(input)
+  wrap.appendChild(suffix)
+  return wrap
+}
+
 function createPercentInput(key, value, opts, onSaved) {
   const wrap = document.createElement('span')
   const inp = document.createElement('input')
@@ -1393,6 +1431,16 @@ function _buildNavigationPage() {
           }
         })
       })
+    },
+    {
+      label: 'Layline angle allowance',
+      desc: 'Widen or narrow both laylines from the polar optimum.',
+      control: createAngleInput('laylineAngleAllowance', settings?.laylineAngleAllowance, {
+        min: -5 * Math.PI / 180,
+        max: 10 * Math.PI / 180,
+        step: Math.PI / 180,
+        default: 0
+      }, () => _tickNavigation())
     }
   ]))
 

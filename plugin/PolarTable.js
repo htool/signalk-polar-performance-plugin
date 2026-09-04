@@ -70,10 +70,11 @@ class PolarTable {
     }
   }
 
-  getTargetSailingVectors({ tws, twd, currentTwaSigned }) {
+  getTargetSailingVectors({ tws, twd, currentTwaSigned, laylineAngleAllowance = 0 }) {
     if (!Number.isFinite(tws) || !Number.isFinite(twd) || !Number.isFinite(currentTwaSigned)) {
       return null
     }
+    if (!Number.isFinite(laylineAngleAllowance)) return null
 
     const twa = Math.abs(currentTwaSigned)
     const sailingMode = twa < Math.PI / 3
@@ -83,9 +84,12 @@ class PolarTable {
       return { sailingMode, port: null, starboard: null }
     }
 
-    const targetAngle = sailingMode === 'upwind'
+    const optimumAngle = sailingMode === 'upwind'
       ? this.getBeatAngle(tws)
       : this.getRunAngle(tws)
+    const targetAngle = sailingMode === 'upwind'
+      ? optimumAngle + laylineAngleAllowance
+      : optimumAngle - laylineAngleAllowance
     if (!Number.isFinite(targetAngle)) return null
 
     const speedThroughWater = this.getBoatSpeed(tws, targetAngle)
