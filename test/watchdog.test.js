@@ -80,19 +80,19 @@ describe('Stale input resubscribe watchdog', () => {
     assert.equal(windSubscribeCount(app), afterStart)
   })
 
-  it('resubscribes 60s after becoming stale, not only when never-seen', () => {
+  it('resubscribes 60s after the last delta, not only when never-seen', () => {
     plugin.start({})
     const afterStart = windSubscribeCount(app)
     app.deliver(WIND_SPEED, 5)
     app.deliver(WIND_ANGLE, 0.8)
     mock.timers.tick(STALE_PERIOD)
-    mock.timers.tick(STALE_RESUBSCRIBE_PERIOD - 1)
-    assert.equal(windSubscribeCount(app), afterStart, 'must wait the full 60s after stale')
+    mock.timers.tick(STALE_RESUBSCRIBE_PERIOD - STALE_PERIOD - 1)
+    assert.equal(windSubscribeCount(app), afterStart, 'must wait the full 60s of silence')
     mock.timers.tick(1)
     assert.equal(windSubscribeCount(app), afterStart + 2)
   })
 
-  it('cancels a pending stale resubscribe when data returns', () => {
+  it('re-arms the recover timer when data returns', () => {
     plugin.start({})
     const afterStart = windSubscribeCount(app)
     app.deliver(WIND_SPEED, 5)
@@ -100,8 +100,8 @@ describe('Stale input resubscribe watchdog', () => {
     mock.timers.tick(STALE_PERIOD)
     app.deliver(WIND_SPEED, 5.2)
     app.deliver(WIND_ANGLE, 0.9)
-    mock.timers.tick(STALE_RESUBSCRIBE_PERIOD)
-    assert.equal(windSubscribeCount(app), afterStart)
+    mock.timers.tick(STALE_RESUBSCRIBE_PERIOD - 1)
+    assert.equal(windSubscribeCount(app), afterStart, 'the returning delta restarts the 60s window')
   })
 
   it('retries resubscribe if the input stays dead after the first recover', () => {
@@ -109,7 +109,6 @@ describe('Stale input resubscribe watchdog', () => {
     const afterStart = windSubscribeCount(app)
     app.deliver(WIND_SPEED, 5)
     app.deliver(WIND_ANGLE, 0.8)
-    mock.timers.tick(STALE_PERIOD)
     mock.timers.tick(STALE_RESUBSCRIBE_PERIOD)
     assert.equal(windSubscribeCount(app), afterStart + 2)
     mock.timers.tick(STALE_RESUBSCRIBE_PERIOD)

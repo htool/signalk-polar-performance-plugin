@@ -17,7 +17,7 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 1
 
-const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — resubscribe after silence (never-seen idle, or stale after data)
+const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — silence before live input subscriptions are re-established
 
 const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
@@ -56,7 +56,6 @@ module.exports = (app) => {
   let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
   let lifecycleWarningMap = new Map()
   let lifecycleWarnings = []
-  let recoverTimers = new Map()
 
   // Last-computed output values, updated by computeAndSend on every cycle.
   // Keys match the settings keys; values are SI numbers or null.
@@ -96,34 +95,11 @@ module.exports = (app) => {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  function _clearRecoverTimer(id) {
-    const timer = recoverTimers.get(id)
-    if (!timer) return
-    clearTimeout(timer)
-    recoverTimers.delete(id)
-  }
-
-  function _clearAllRecoverTimers() {
-    for (const timer of recoverTimers.values()) clearTimeout(timer)
-    recoverTimers = new Map()
-  }
-
   function _clearLifecycleWarning(id) {
-    _clearRecoverTimer(id)
     if (!lifecycleWarningMap.has(id)) return
     lifecycleWarningMap.delete(id)
     lifecycleWarnings = Array.from(lifecycleWarningMap.values())
       .sort((a, b) => b.updatedAt - a.updatedAt)
-  }
-
-  function _resubscribeInput(id, getPath, unsubscribe, subscribe, reason) {
-    if (!isRunning) return
-    _clearRecoverTimer(id)
-    const path = getPath()
-    app.debug(`[${plugin.id}] ${reason} input ${id} on ${path}; resubscribing`)
-    _setLifecycleWarning(id, 'idle', path)
-    unsubscribe()
-    subscribe()
   }
 
   function _wireHandlerWatchdog({ id, getPath, unsubscribe, subscribe }) {
@@ -137,17 +113,14 @@ module.exports = (app) => {
         const path = getPath()
         app.debug(`[${plugin.id}] stale input ${id} on ${path}`)
         _setLifecycleWarning(id, 'stale', path)
-        // PolarSmoother (wind) in signalkutilities 3.1.1 still only fires
-        // onIdle while ABSENT. After data has flowed, silence becomes STALE
-        // and the idle callback is skipped — recover from here, once, after 60s.
-        if (recoverTimers.has(id)) return
-        recoverTimers.set(id, setTimeout(() => {
-          recoverTimers.delete(id)
-          _resubscribeInput(id, getPath, unsubscribe, subscribe, 'stale')
-        }, STALE_RESUBSCRIBE_PERIOD))
       },
       onIdle: () => {
-        _resubscribeInput(id, getPath, unsubscribe, subscribe, 'idle')
+        if (!isRunning) return
+        const path = getPath()
+        app.debug(`[${plugin.id}] idle input ${id} on ${path}; resubscribing`)
+        _setLifecycleWarning(id, 'idle', path)
+        unsubscribe()
+        subscribe()
       }
     }
   }
@@ -1153,7 +1126,6 @@ module.exports = (app) => {
       metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
-      _clearAllRecoverTimers()
 
       store = new PolarFileStore(app.getDataDirPath())
       importService = new ImportService(store)
@@ -1247,7 +1219,6 @@ module.exports = (app) => {
 
     stop() {
       isRunning = false
-      _clearAllRecoverTimers()
       importService = null
       nullifyOutputs()
       if (windSmoother) { windSmoother.terminate(); windSmoother = null }
