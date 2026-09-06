@@ -117,11 +117,24 @@
     if (Number.isFinite(graph.leewayAngle) && Number.isFinite(graph.heading)) {
       const start = -Math.PI / 2
       const end = start + graph.leewayAngle
+      const leewayRadius = radius - 7
+      const direction = graph.leewayAngle < 0 ? -1 : 1
       ctx.beginPath()
-      ctx.arc(cx, cy, 22, start, end, graph.leewayAngle < 0)
+      ctx.arc(cx, cy, leewayRadius, start, end, graph.leewayAngle < 0)
       ctx.strokeStyle = '#0f766e'
-      ctx.lineWidth = 3
+      ctx.lineWidth = 4
       ctx.stroke()
+      const arrowAngle = end
+      const tangent = arrowAngle + direction * Math.PI / 2
+      const tipX = cx + Math.cos(arrowAngle) * leewayRadius
+      const tipY = cy + Math.sin(arrowAngle) * leewayRadius
+      ctx.beginPath()
+      ctx.moveTo(tipX, tipY)
+      ctx.lineTo(tipX - Math.cos(tangent - Math.PI / 6) * 10, tipY - Math.sin(tangent - Math.PI / 6) * 10)
+      ctx.lineTo(tipX - Math.cos(tangent + Math.PI / 6) * 10, tipY - Math.sin(tangent + Math.PI / 6) * 10)
+      ctx.closePath()
+      ctx.fillStyle = '#0f766e'
+      ctx.fill()
     }
     if (graph.frame === 'ground') {
       const scale = radius * 0.72 / Math.max(graph.actual.speed, graph.current.speed, 0.1)

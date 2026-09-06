@@ -51,6 +51,14 @@ function fmtVectorPolar(magnitude, angle, magnitudeMetaKey, angleMetaKey, magnit
   return `${mag} / ${ang}`
 }
 
+function isPosition(value) {
+  return Number.isFinite(value?.latitude) && Number.isFinite(value?.longitude)
+}
+
+function formatPosition(value) {
+  return isPosition(value) ? `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}` : '—'
+}
+
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 async function apiGet(path, opts = {}) {
   try {
@@ -581,7 +589,8 @@ async function refreshLive() {
         currentDrift: raw.currentDrift ?? null,
         currentSetTrue: raw.currentSetTrue ?? null,
         leewayAngle: raw.leewayAngle ?? null,
-        apparentWindAngle: raw.apparentWindAngle ?? null
+        position: raw.position ?? null,
+        waypoint: raw.waypoint ?? null
       }
       smoothedValues = {
         tws: smoothed.tws ?? null,
@@ -1036,7 +1045,9 @@ function _buildInputsPage() {
     { label: 'Ground vector', id: 'in-raw-ground' },
     { label: 'True wind direction', id: 'in-raw-twd' },
     { label: 'Course bearing true', id: 'in-raw-bearing' },
-    { label: 'Current vector', id: 'in-raw-current' }
+    { label: 'Current vector', id: 'in-raw-current' },
+    { label: 'Vessel position', id: 'in-raw-position' },
+    { label: 'Next waypoint position', id: 'in-raw-waypoint' }
   ]))
 
   const performanceCard = createPageCard('Performance Inputs')
@@ -1097,6 +1108,8 @@ function _tickInputs() {
   setRequiredValue('in-raw-twd', requiresVmc, fmtVal(rawValues.twd, 'twd', ANGLE_DEFAULT))
   setRequiredValue('in-raw-bearing', requiresVmc, fmtVal(rawValues.bearingTrue, 'bearingTrue', ANGLE_DEFAULT))
   setRequiredValue('in-raw-current', requiresCurrent, fmtVectorPolar(rawValues.currentDrift, rawValues.currentSetTrue, 'currentDrift', 'currentSetTrue', SPEED_DEFAULT, ANGLE_DEFAULT))
+  setRequiredValue('in-raw-position', requiresVmc, formatPosition(rawValues.position))
+  setRequiredValue('in-raw-waypoint', requiresVmc, formatPosition(rawValues.waypoint))
   setRequiredValue('in-performance-tw', true, fmtVectorPolar(performanceValues.tws, performanceValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
   setRequiredValue('in-performance-bsp', true, fmtVal(performanceValues.bsp, 'bsp', SPEED_DEFAULT))
   setRequiredValue('in-navigation-tw', requiresVmc, fmtVectorPolar(navigationValues.tws, navigationValues.twa, 'tws', 'twa', SPEED_DEFAULT, ANGLE_DEFAULT))
@@ -1130,6 +1143,8 @@ function _tickInputs() {
   setStale('in-raw-twd', !requiresVmc || rawValues.twd == null)
   setStale('in-raw-bearing', !requiresVmc || rawValues.bearingTrue == null)
   setStale('in-raw-current', !requiresCurrent || rawValues.currentDrift == null || rawValues.currentSetTrue == null)
+  setStale('in-raw-position', !requiresVmc || !isPosition(rawValues.position))
+  setStale('in-raw-waypoint', !requiresVmc || !isPosition(rawValues.waypoint))
   setStale('in-performance-tw', performanceValues.tws == null || performanceValues.twa == null)
   setStale('in-performance-bsp', performanceValues.bsp == null)
   setStale('in-navigation-tw', !requiresVmc || navigationValues.tws == null || navigationValues.twa == null)
@@ -1158,6 +1173,8 @@ function _tickInputs() {
     if (requiresCurrent) {
       addMissingWarning('Current vector', rawValues.currentDrift != null && rawValues.currentSetTrue != null, smoothedValues.currentDrift != null && smoothedValues.currentSetTrue != null)
     }
+    addMissingWarning('Vessel position', isPosition(rawValues.position), isPosition(rawValues.position))
+    addMissingWarning('Next waypoint position', isPosition(rawValues.waypoint), isPosition(rawValues.waypoint))
   }
 
   const relevantLifecycleIds = new Set(['wind.smoothed', 'bsp.smoothed'])
@@ -1431,10 +1448,10 @@ function _buildNavigationPage() {
       })
     },
     {
-      label: 'Ignore current in VMC calculations',
-      desc: 'When enabled, VMC uses zero-current assumptions.',
-      control: createToggle(!!settings?.ignoreCurrent, checked => {
-        apiPut('/settings', { ignoreCurrent: checked }).then(s => {
+      label: 'Use current in VMC calculations',
+      desc: 'When disabled, VMC uses zero-current assumptions.',
+      control: createToggle(!settings?.ignoreCurrent, checked => {
+        apiPut('/settings', { ignoreCurrent: !checked }).then(s => {
           if (s) {
             settings = s
             _tickNavigation()
@@ -1513,6 +1530,18 @@ function _tickNavigation() {
   }
   if (d?.tws != null && d?.polarState == null) warns.add('No polar loaded - configure in Polars')
   navigationPolarStateWarnings(d).forEach(msg => warns.add(msg))
+
+  const navigationState = statusData?.navigationState
+  if (navigationState?.status !== 'valid') {
+    const missing = navigationState?.structural?.missing || []
+    const stale = navigationState?.structural?.stale || []
+    if (missing.length) warns.add('Layline inputs missing: ' + missing.join(', '))
+    if (stale.length) warns.add('Layline inputs stale: ' + stale.join(', '))
+    const laylineReason = navigationState?.temporal?.layline?.reason
+    if (laylineReason) warns.add('Current layline unavailable: ' + laylineReason)
+    const oppositeReason = navigationState?.temporal?.oppositeLayline?.reason
+    if (oppositeReason && oppositeReason !== laylineReason) warns.add('Opposite layline unavailable: ' + oppositeReason)
+  }
 
   const relevantLifecycleIds = new Set(['wind.smoothed', 'ground.smoothed', 'twd.smoothed', 'bearing.smoothed'])
   if (requiresCurrent) relevantLifecycleIds.add('current.smoothed')

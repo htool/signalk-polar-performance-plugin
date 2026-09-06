@@ -23,7 +23,7 @@ const DEFAULT_VMC_STEP_RAD = Math.PI / 90
 const LAYLINE_ANGLE_ALLOWANCE_MIN_RAD = -5 * Math.PI / 180
 const LAYLINE_ANGLE_ALLOWANCE_MAX_RAD = 10 * Math.PI / 180
 const LAYLINE_CROSSING_TOLERANCE_METERS = 10
-const AWA_TACK_TRANSITION_DEADBAND_RAD = 10 * Math.PI / 180
+const TWA_TACK_TRANSITION_DEADBAND_RAD = 10 * Math.PI / 180
 const META_SPEED_DISPLAY = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
 const META_ANGLE_DISPLAY = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
 const META_RATIO_DISPLAY = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
@@ -82,7 +82,6 @@ module.exports = (app) => {
   let bearingHandler = null
   let currentSmoother = null
   let leewaySmoother = null
-  let apparentWindAngleHandler = null
   let positionHandler = null
   let waypointHandler = null
   let metaSentPaths = new Set()  // tracks paths that have had metadata emitted
@@ -90,7 +89,7 @@ module.exports = (app) => {
   let lifecycleWarnings = []
   let vmcRouteSuppressed = false
   let lastNavigationTack = null
-  let apparentWindSide = null
+  let trueWindSide = null
   const laylineCalculator = new LaylineCalculator()
   let navigationState = laylineCalculator.calculate({ enabled: false })
 
@@ -327,18 +326,17 @@ module.exports = (app) => {
     return lastNavigationTack
   }
 
-  function _classifyApparentWindSide(angle) {
-    if (!Number.isFinite(angle) || Math.abs(angle) < AWA_TACK_TRANSITION_DEADBAND_RAD) return null
+  function _classifyTrueWindSide(angle) {
+    if (!Number.isFinite(angle) || Math.abs(angle) < TWA_TACK_TRANSITION_DEADBAND_RAD) return null
     return angle < 0 ? 'port' : 'starboard'
   }
 
-  function _handleApparentWindAngle() {
-    const nextSide = _classifyApparentWindSide(apparentWindAngleHandler?.value)
-    if (apparentWindSide !== null && nextSide !== apparentWindSide && leewaySmoother?.ready) {
+  function _handleTrueWindAngle() {
+    const nextSide = _classifyTrueWindSide(windSmoother?.polar?.angleHandler?.value)
+    if (trueWindSide !== null && nextSide !== trueWindSide && leewaySmoother?.ready) {
       leewaySmoother.invalidate()
     }
-    apparentWindSide = nextSide
-    computeAndSend()
+    trueWindSide = nextSide
   }
 
   function _clearNavigationOutputs() {
@@ -441,7 +439,6 @@ module.exports = (app) => {
     if (!polarTable) missing.push('polar')
     if (!targets) missing.push('targetVectors')
     if (settings.correctForLeeway) {
-      classify(apparentWindAngleHandler, 'apparentWindAngle', Number.isFinite(apparentWindAngleHandler?.value))
       classify(leewaySmoother, 'leeway', Number.isFinite(leewaySmoother?.value))
     }
 
@@ -764,27 +761,10 @@ module.exports = (app) => {
               onDelta: () => { leewayWatchdog.onDelta(); computeAndSend() }
             })
           }
-          if (!apparentWindAngleHandler) {
-            apparentWindAngleHandler = new MessageHandler(app, plugin.id, 'apparentWindAngle')
-            apparentWindAngleHandler.configure('environment.wind.angleApparent')
-            const apparentWindWatchdog = _wireHandlerWatchdog({
-              id: 'apparentWindAngle',
-              getPath: () => apparentWindAngleHandler?.path ?? 'environment.wind.angleApparent',
-              unsubscribe: () => apparentWindAngleHandler?.unsubscribe(),
-              subscribe: () => apparentWindAngleHandler?.subscribe(),
-              onUnavailable: computeAndSend
-            })
-            apparentWindAngleHandler.onDelta = () => { apparentWindWatchdog.onDelta(); _handleApparentWindAngle() }
-            apparentWindAngleHandler.onStale = apparentWindWatchdog.onStale
-            apparentWindAngleHandler.onIdle = apparentWindWatchdog.onIdle
-            apparentWindAngleHandler.subscribe()
-          }
         } else {
           if (leewaySmoother) { leewaySmoother.terminate(); leewaySmoother = null }
-          if (apparentWindAngleHandler) { apparentWindAngleHandler.terminate(); apparentWindAngleHandler = null }
-          apparentWindSide = null
+          trueWindSide = null
           _clearLifecycleWarning('leeway.smoothed')
-          _clearLifecycleWarning('apparentWindAngle')
         }
       } else {
         if (groundSmoother) { groundSmoother.terminate(); groundSmoother = null }
@@ -794,17 +774,15 @@ module.exports = (app) => {
         if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
         if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
         if (leewaySmoother) { leewaySmoother.terminate(); leewaySmoother = null }
-        if (apparentWindAngleHandler) { apparentWindAngleHandler.terminate(); apparentWindAngleHandler = null }
         if (positionHandler) { positionHandler.terminate(); positionHandler = null }
         if (waypointHandler) { waypointHandler.terminate(); waypointHandler = null }
         _clearLifecycleWarning('current.smoothed')
         _clearLifecycleWarning('position')
         _clearLifecycleWarning('waypoint')
         _clearLifecycleWarning('leeway.smoothed')
-        _clearLifecycleWarning('apparentWindAngle')
         navigationState = laylineCalculator.calculate({ enabled: false })
         lastNavigationTack = null
-        apparentWindSide = null
+        trueWindSide = null
         if (vmcRouteSuppressed) {
           vmcRouteSuppressed = false
           _restoreBasePluginStatus()
@@ -1905,7 +1883,6 @@ module.exports = (app) => {
         const rawCurrentDrift = si(currentSmoother?.polar?.magnitudeHandler?.value ?? null)
         const rawCurrentSet = si(currentSmoother?.polar?.angleHandler?.value ?? null)
           const rawLeeway = si(leewaySmoother?.handler?.value ?? null)
-          const rawApparentWindAngle = si(apparentWindAngleHandler?.value ?? null)
         const position = _isPosition(positionHandler?.value) ? positionHandler.value : null
         const waypoint = _isPosition(waypointHandler?.value) ? waypointHandler.value : null
 
@@ -1978,7 +1955,6 @@ module.exports = (app) => {
                 currentDrift: rawCurrentDrift,
                 currentSetTrue: rawCurrentSet,
                 leewayAngle: rawLeeway,
-                apparentWindAngle: rawApparentWindAngle,
                 position,
                 waypoint
               } : {})
@@ -2020,8 +1996,7 @@ module.exports = (app) => {
                 bearingTrue: 'navigation.course.calcValues.bearingTrue',
                 currentDrift: 'environment.current.drift',
                 currentSetTrue: 'environment.current.setTrue',
-                                leewayAngle: 'navigation.leewayAngle',
-                                apparentWindAngle: 'environment.wind.angleApparent',
+                leewayAngle: 'navigation.leewayAngle',
                 position: 'navigation.position',
                 waypoint: 'navigation.courseGreatCircle.nextPoint.position'
               } : {})
@@ -2207,6 +2182,7 @@ module.exports = (app) => {
       lifecycleWarnings = []
       vmcRouteSuppressed = false
       lastNavigationTack = null
+      trueWindSide = null
 
       store = new PolarFileStore(app.getDataDirPath())
       importService = new ImportService(store)
@@ -2255,6 +2231,7 @@ module.exports = (app) => {
         }),
         onDelta: () => {
           _clearLifecycleWarning('wind.smoothed')
+          _handleTrueWindAngle()
           computeAndSend()
         }
       })
@@ -2399,19 +2376,6 @@ module.exports = (app) => {
             ...leewayWatchdog,
             onDelta: () => { leewayWatchdog.onDelta(); computeAndSend() }
           })
-          apparentWindAngleHandler = new MessageHandler(app, plugin.id, 'apparentWindAngle')
-          apparentWindAngleHandler.configure('environment.wind.angleApparent')
-          const apparentWindWatchdog = _wireHandlerWatchdog({
-            id: 'apparentWindAngle',
-            getPath: () => apparentWindAngleHandler?.path ?? 'environment.wind.angleApparent',
-            unsubscribe: () => apparentWindAngleHandler?.unsubscribe(),
-            subscribe: () => apparentWindAngleHandler?.subscribe(),
-            onUnavailable: computeAndSend
-          })
-          apparentWindAngleHandler.onDelta = () => { apparentWindWatchdog.onDelta(); _handleApparentWindAngle() }
-          apparentWindAngleHandler.onStale = apparentWindWatchdog.onStale
-          apparentWindAngleHandler.onIdle = apparentWindWatchdog.onIdle
-          apparentWindAngleHandler.subscribe()
         }
       }
 
@@ -2433,13 +2397,12 @@ module.exports = (app) => {
       if (bearingHandler) { bearingHandler.terminate(); bearingHandler = null }
       if (currentSmoother) { currentSmoother.terminate(); currentSmoother = null }
       if (leewaySmoother) { leewaySmoother.terminate(); leewaySmoother = null }
-      if (apparentWindAngleHandler) { apparentWindAngleHandler.terminate(); apparentWindAngleHandler = null }
       if (positionHandler) { positionHandler.terminate(); positionHandler = null }
       if (waypointHandler) { waypointHandler.terminate(); waypointHandler = null }
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
       vmcRouteSuppressed = false
-      apparentWindSide = null
+      trueWindSide = null
       navigationState = laylineCalculator.calculate({ enabled: false })
       app.debug('Plugin stopped')
     }

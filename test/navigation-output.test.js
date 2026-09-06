@@ -220,7 +220,6 @@ describe('navigation layline publication', () => {
     try {
       plugin.start({ activePolar: 'test', vmcNavigation: true, correctForLeeway: true, smootherType: 'None', ignoreCurrent: true })
       assert.equal(app.subscriptions.get('navigation.leewayAngle').size, 1)
-      assert.equal(app.subscriptions.get('environment.wind.angleApparent').size, 1)
 
       send(app, 'environment.wind.speedTrue', 5)
       send(app, 'environment.wind.angleTrueWater', Math.PI / 4)
@@ -232,7 +231,6 @@ describe('navigation layline publication', () => {
       send(app, 'navigation.course.calcValues.bearingTrue', 0)
       send(app, 'navigation.position', { latitude: 0, longitude: 0 })
       send(app, 'navigation.courseGreatCircle.nextPoint.position', { latitude: 0.01, longitude: 0 })
-      send(app, 'environment.wind.angleApparent', -0.7)
       send(app, 'navigation.leewayAngle', 0.08)
 
       const beforeTack = makeResponse()
@@ -240,8 +238,10 @@ describe('navigation layline publication', () => {
       assert.equal(beforeTack.body.navigationState.status, 'valid')
       assert.deepEqual(beforeTack.body.navigationState.leeway, { mode: 'used', warning: false })
       assert.equal(beforeTack.body.laylineGraph.leewayAngle, 0.08)
+      assert.deepEqual(beforeTack.body.inputs.raw.waypoint, { latitude: 0.01, longitude: 0 })
+      assert.equal(beforeTack.body.inputs.paths.waypoint, 'navigation.courseGreatCircle.nextPoint.position')
 
-      send(app, 'environment.wind.angleApparent', 0)
+      send(app, 'environment.wind.angleTrueWater', 0)
       const duringTack = makeResponse()
       router.routes.get['/status']({}, duringTack)
       assert.equal(duringTack.body.navigationState.status, 'unavailable')
@@ -251,7 +251,7 @@ describe('navigation layline publication', () => {
         assert.equal(duringTack.body.outputs[outputPath], null)
       }
 
-      send(app, 'environment.wind.angleApparent', 0.7)
+      send(app, 'environment.wind.angleTrueWater', -Math.PI / 4)
       send(app, 'navigation.leewayAngle', -0.08)
       const afterTack = makeResponse()
       router.routes.get['/status']({}, afterTack)

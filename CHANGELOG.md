@@ -7,15 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
-- Added optional leeway-corrected laylines using `navigation.leewayAngle`. Laylines wait for a fresh leeway sample after an apparent-wind tack or gybe transition, and the Overview navigation graph shows the applied leeway.
+- Added optional leeway-corrected laylines using `navigation.leewayAngle`. Laylines wait for a fresh leeway sample after a true-wind tack or gybe transition, and the Overview navigation graph shows the applied leeway.
 - Added a Navigation setting to widen or narrow laylines from the polar optimum, helping tailor target angles to real sailing conditions.
 - Added a true-heading-relative layline graph to the standard and plotter webapps, with port/starboard laylines, waypoint and crossing markers, current and boat-speed vectors, and compass labels.
 - Added VMC navigation support with a dedicated Navigation page in the webapp, new navigation-oriented outputs for actual/target/opposite-tack VMC and headings, and a plotter Graph mode toggle for switching between Performance and Navigation overlays driven by live/status VMC data.
 - Added live curve endpoints for external widgets: `/live/curve` returns the current polar curve with beat/run optima, and `/live/vmc-curve` returns the current VMC curve with port/starboard optima, both derived from the plugin's current Signal K state.
 - Added layline navigation outputs `navigation.racing.layline.distance`/`.time` and `navigation.racing.oppositeLayline.distance`/`.time`, published with the navigation output group. Values are signed: positive means the crossing is ahead, zero means tack or gybe now, negative means the layline has been overstood. Geometry uses a local north/east tangent plane between `navigation.position` and `navigation.courseGreatCircle.nextPoint.position`, with target tack/gybe vectors taken from the polar beat/run targets.
 - Added current-layline distance and time rows to the Navigation page output table.
+- Added vessel position and next waypoint position rows to the Navigation Inputs page, with staleness and missing-input warnings.
+- Added the reason a layline is unavailable to the Navigation page warning list, so missing or stale inputs are named instead of the graph silently going blank.
 
 ### Changed
+- Tack and gybe transitions are now detected from the true wind angle already used for performance, so the plugin no longer subscribes to `environment.wind.angleApparent`.
+- The Navigation setting is now phrased as "Use current in VMC calculations" instead of "Ignore current", so the toggle reads on when current is applied.
+- The Overview leeway arc is now drawn at the graph rim with a direction arrow instead of as a small arc near the centre.
 - The webapp Navigation page now reads target and opposite-tack headings from `performance.targetHeadingTrue.port` and `.starboard` plugin outputs instead of retired scalar paths, selecting the target heading based on current tack.
 - Replaced current-relative custom target-heading outputs with current-independent `performance.targetHeadingTrue.port` and `.starboard` outputs, while retaining standard `performance.tackTrue` compatibility and moving the headings to the Performance webapp view.
 
