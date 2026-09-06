@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-06
+
 ### Fixed
 - After wind (or other live inputs) have been received and then go silent, the plugin now resubscribes 60 seconds later instead of staying dead. Requires `signalkutilities` 3.1.2, which re-arms the idle timer on every delta for polars as well as message handlers.
 - Runtime enable of opposite-tack heading now passes `id: 'hdg.smoothed'` and `getPath` to the watchdog, matching `start()`. The previous `get path()` getter left `getPath` undefined, so `onStale` threw inside the library timer.
