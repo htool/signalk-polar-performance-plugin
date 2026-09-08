@@ -26,11 +26,11 @@
     "prepublishOnly": "npm test"
   },
   "dependencies": {
-    "polar-math": "^0.1.0",
+    "polar-math": "^1.0.0",
     "signalkutilities": "^3.1.3"
   },
   "peerDependencies": {
-    "signalk-polar-management": ">=0.1.0"
+    "signalk-polar-management": ">=1.0.0"
   },
   "peerDependenciesMeta": {
     "signalk-polar-management": {
