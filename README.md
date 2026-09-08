@@ -1,23 +1,29 @@
 # Polar Performance — Signal K Plugin
 
-Polar Performance reads your boat's true wind speed, true wind angle, and boat speed from Signal K, looks up the corresponding target values from the active polar diagram, and publishes performance metrics — beat angle, run angle, VMG, polar speed ratio, and others — back to the Signal K bus in real time. An integrated webapp lets you inspect the live values and configure the plugin while it is running.
+Polar Performance calculates live sailing performance metrics — target boat speeds, beat and run angles, target VMG, polar speed ratio, and optimum wind angles — in real time from your boat's instruments in Signal K. An integrated webapp and full-screen plotter let you inspect live values, target angles, and polar curves while sailing.
 
-This plugin no longer stores, imports, or manages polar files itself. It reads the active polar and a performance factor from Signal K paths (`polars.activePolar`, `polars.performanceFactor`) published by a separate 'polars' resource-provider plugin — for example [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management). Install that plugin (or another plugin providing the `polars` resource type) alongside this one to select and manage polars.
+## Architecture & Polar Providers
 
-Current runtime behaviour is also more explicit: when a polar lookup cannot be completed or a required input has no usable value, the plugin writes `null` for the affected output paths and the `/live` and `/status` endpoints expose that state clearly. Idle input recovery is enabled for all live subscriptions, so temporary silence is handled without leaving the plugin in a stale state.
+**Polar Performance works together with a polar provider plugin** (such as [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management)).
+
+Starting in version 2.0.0, polar file storage, file format conversion, ORC imports, and polar selection are decoupled from this compute plugin:
+- **Polar Provider (`signalk-polar-management`):** Stores polar files, imports ORC/CSV/text polar files, manages polar metadata, and publishes the selected active polar to Signal K (`polars.activePolar`) along with any performance factor (`polars.performanceFactor`).
+- **Performance Plugin (`signalk-polar-performance-plugin`):** Subscribes to the active polar and boat instrument data (TWS, TWA, STW/SOG), calculates real-time performance values using the [`polar-math`](https://github.com/Asw1n/polar-math) engine, and publishes the resulting performance metrics back to the Signal K delta stream.
+
+When a polar lookup cannot be completed or required instrument data is missing/stale, output paths are cleanly set to `null` and the webapp status indicates the exact cause.
 
 ---
 
 ## Installation
 
-Install from the Signal K App Store, or manually:
+Install both plugins from the Signal K App Store, or via npm:
 
 ```sh
 cd ~/.signalk
 npm install signalk-polar-performance-plugin signalk-polar-management
 ```
 
-Then restart Signal K and enable both plugins in **Server → Plugin Config**. Without a `polars` resource provider installed and enabled, this plugin has no active polar to compute against and its status will say so.
+Then restart Signal K and enable both plugins in **Server → Plugin Config**. Without a polar resource provider installed and enabled, Polar Performance will wait for an active polar to be published and indicate this in its status.
 
 ---
 
@@ -174,9 +180,21 @@ Install the [B&G Performance Plugin](https://www.npmjs.com/package/signalk-bandg
 
 For laylines on charts: **Settings → Chart → Laylines → Targets → True wind angle → Actual**.
 
+![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Laylines_Target_TWA_to_Active.png)
+
+SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK':
+
+![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Target_TWA_to_SignalK.png)
+
+Now the Target TWA is coming from SignalK and the laylines will be drawn based on its value:
+
+![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Sailsteer_with_laylines.png)
+
 ### Garmin / Raymarine / other NMEA 2000
 
 Use a Signal K → NMEA 2000 gateway plugin (such as `canboat` or `signalk-to-n2k`) to forward paths to the PGN fields your plotter expects for performance data. Consult your plotter's documentation for the relevant PGNs — most support Polar Speed, Target TWA, and VMG.
+
+If you have a Raymarine MFD and can share setup instructions, please submit a PR or open an issue!
 
 ### OpenCPN / KIP / other Signal K displays
 
@@ -234,18 +252,4 @@ If you want to consume this plugin's live performance queries, use the developer
 ## Known limitations
 
 - Heel angle is not taken into account in the polar lookup. Most ORC polars are upright polars.
-- Requires a 'polars' resource-provider plugin (e.g. signalk-polar-management) to be installed for polar storage, import, and selection.
-
-
- ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Laylines_Target_TWA_to_Active.png)
-
- - SailSteer screen -> Long press tile to add 'Performance -> Target TWA -> decollapse, choose SignalK'
-
- ![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Target_TWA_to_SignalK.png)
-
-Now the Target TWA is coming from SignalK and the laylines will be drawn based on it's value.
-
-![](https://raw.githubusercontent.com/htool/signalk-polar-performance-plugin/main/doc/BandG_Sailsteer_with_laylines.png)
-
-### Raymarine
-If you have a Raymarine MFD and can tell more about this, please add to the README or tell me.
+- Requires a 'polars' resource-provider plugin (e.g. `signalk-polar-management`) to be installed and running for polar storage, import, and active polar selection.
