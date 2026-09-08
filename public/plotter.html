@@ -126,34 +126,18 @@
 
     <div class="settings-row">
       <span class="settings-row-label">Active polar</span>
-      <button id="btn-polar-current" aria-label="Select polar">
-        <span id="polar-name-display">—</span>
-        <span class="polar-arrow">›</span>
-      </button>
+      <span id="polar-name-display">—</span>
     </div>
 
     <div class="settings-row">
       <span class="settings-row-label">Performance</span>
-      <div class="stepper">
-        <button class="btn-step" id="btn-perf-minus" aria-label="Decrease">−</button>
-        <span class="stepper-value" id="perf-display">100%</span>
-        <button class="btn-step" id="btn-perf-plus" aria-label="Increase">+</button>
-      </div>
+      <span id="perf-display">100%</span>
     </div>
 
     <div class="settings-row">
       <span class="settings-row-label">Show all TWS lines</span>
       <button class="btn-toggle is-on" id="btn-tws-toggle">ON</button>
     </div>
-  </div>
-
-  <!-- Polar picker (opens on top of settings panel) -->
-  <div id="polar-list-panel" class="overlay" style="z-index:30" role="dialog" aria-label="Select polar">
-    <div class="panel-header">
-      <button class="btn-icon" id="btn-back-from-polar" aria-label="Back">‹</button>
-      <span class="panel-header-title">Select polar</span>
-    </div>
-    <div id="polar-list-items"></div>
   </div>
 
   <script src="polar-canvas.js"></script>
@@ -189,10 +173,11 @@
       let libraryVersion = ''     // change detector
       let liveTws        = null   // last fetched live TWS (m/s)
       let liveCurve      = null   // interpolated curve for liveTws
-      let activePolarId  = null   // current active polar id
 
-      // Settings state — kept in sync with the server
-      let perfAdjust     = 1          // multiplier (1 = 100%)
+      // Active polar / performance factor are read-only here — selected in a
+      // separate polar management webapp (e.g. signalk-polar-management).
+      let activePolarName = null
+      let performanceFactor = 1
       let showAllTwsLines = true
 
       // -----------------------------------------------------------------------
@@ -220,26 +205,16 @@
       // -----------------------------------------------------------------------
 
       async function refreshLibrary() {
-        // Resolve active polar ID first
-        let polarId
-        try {
-          const active = await fetchJSON(BASE + '/polars/active')
-          polarId = active.id
-        } catch (_) {
-          return  // no active polar — try again on next cycle
-        }
-
         let newList
         try {
-          newList = await fetchJSON(BASE + '/polars/' + polarId + '/axes/tws')
+          newList = await fetchJSON(BASE + '/polar/axes/tws')
         } catch (_) {
-          return  // polar not yet loaded — try again on next cycle
+          return  // no active polar yet — try again on next cycle
         }
 
-        const version = polarId + ':' + JSON.stringify(newList)
+        const version = JSON.stringify(newList)
         if (version === libraryVersion) return  // no change
 
-        activePolarId  = polarId
         libraryVersion = version
         twsList = newList
         curves  = {}
@@ -248,7 +223,7 @@
         await Promise.all(twsList.map(async (tws) => {
           try {
             curves[tws] = await fetchJSON(
-              BASE + '/polars/' + polarId + '/queries/curve?tws=' + tws + '&step=' + STEP
+              BASE + '/polar/queries/curve?tws=' + tws + '&step=' + STEP
             )
           } catch (_) { /* skip individual failure */ }
         }))
@@ -272,10 +247,10 @@
       // -----------------------------------------------------------------------
 
       async function fetchCurveForTws(tws) {
-        if (!Number.isFinite(tws) || tws <= 0 || !activePolarId) return null
+        if (!Number.isFinite(tws) || tws <= 0) return null
         try {
           return await fetchJSON(
-            BASE + '/polars/' + activePolarId + '/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP
+            BASE + '/polar/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP
           )
         } catch (_) {
           return null
@@ -311,11 +286,15 @@
       async function loadSettings() {
         try {
           const s = await fetchJSON(BASE + '/settings')
-          perfAdjust      = Number.isFinite(s.perfAdjust) ? s.perfAdjust : 1
           showAllTwsLines = s.showAllTwsLines !== false
-          updatePerfDisplay()
           updateTwsToggle()
           polar.setShowAllTwsLines(showAllTwsLines)
+        } catch (_) { /* keep defaults */ }
+        try {
+          const m = await fetchJSON(BASE + '/meta')
+          activePolarName = m.activePolar ? (m.activePolar.name || m.activePolar.id) : null
+          performanceFactor = Number.isFinite(m.performanceFactor) ? m.performanceFactor : 1
+          updatePerfDisplay()
         } catch (_) { /* keep defaults */ }
       }
 
@@ -324,14 +303,12 @@
       // -----------------------------------------------------------------------
 
       var settingsPanel  = document.getElementById('settings-panel')
-      var polarListPanel = document.getElementById('polar-list-panel')
       var perfDisplay    = document.getElementById('perf-display')
       var twsToggle      = document.getElementById('btn-tws-toggle')
       var polarNameEl    = document.getElementById('polar-name-display')
-      var polarListEl    = document.getElementById('polar-list-items')
 
       function updatePerfDisplay() {
-        perfDisplay.textContent = Math.round(perfAdjust * 100) + '%'
+        perfDisplay.textContent = Math.round(performanceFactor * 100) + '%'
       }
 
       function updateTwsToggle() {
@@ -347,14 +324,7 @@
       // Open settings: fetch fresh state first
       document.getElementById('btn-settings').addEventListener('click', function () {
         loadSettings().then(function () {
-          // Update active polar name display
-          if (activePolarId) {
-            fetchJSON(BASE + '/polars/' + activePolarId)
-              .then(function (p) { polarNameEl.textContent = p.name || activePolarId })
-              .catch(function () { polarNameEl.textContent = activePolarId })
-          } else {
-            polarNameEl.textContent = '—'
-          }
+          polarNameEl.textContent = activePolarName || '—'
           settingsPanel.classList.add('open')
         })
       })
@@ -363,68 +333,12 @@
         settingsPanel.classList.remove('open')
       })
 
-      // Performance stepper — ±5%, clamped 50%–200%
-      function applyPerfAdjust(next) {
-        if (next === perfAdjust) return
-        perfAdjust = next
-        updatePerfDisplay()
-        putJSON(BASE + '/settings', { perfAdjust: perfAdjust }).then(function () {
-          libraryVersion = ''   // force full curve reload — perfAdjust changes speeds but not the TWS list
-          return refreshLibrary()
-        }).catch(function () {})
-      }
-
-      document.getElementById('btn-perf-minus').addEventListener('click', function () {
-        applyPerfAdjust(Math.max(0.5, Math.round((perfAdjust - 0.05) * 100) / 100))
-      })
-
-      document.getElementById('btn-perf-plus').addEventListener('click', function () {
-        applyPerfAdjust(Math.min(2.0, Math.round((perfAdjust + 0.05) * 100) / 100))
-      })
-
       // TWS toggle
       twsToggle.addEventListener('click', function () {
         showAllTwsLines = !showAllTwsLines
         updateTwsToggle()
         polar.setShowAllTwsLines(showAllTwsLines)
         putJSON(BASE + '/settings', { showAllTwsLines: showAllTwsLines }).catch(function () {})
-      })
-
-      // Polar picker
-      document.getElementById('btn-polar-current').addEventListener('click', function () {
-        polarListEl.innerHTML = ''
-        fetchJSON(BASE + '/polars').then(function (list) {
-          list.forEach(function (p) {
-            var btn = document.createElement('button')
-            btn.className = 'polar-item' + (p.id === activePolarId ? ' is-active' : '')
-            var nameSpan = document.createElement('span')
-            nameSpan.className = 'polar-item-name'
-            nameSpan.textContent = p.name || p.id
-            btn.appendChild(nameSpan)
-            if (p.id === activePolarId) {
-              var check = document.createElement('span')
-              check.className = 'polar-item-check'
-              check.textContent = '✓'
-              btn.appendChild(check)
-            }
-            btn.addEventListener('click', function () {
-              putJSON(BASE + '/polars/active', { id: p.id })
-                .then(function () {
-                  polarNameEl.textContent = p.name || p.id
-                  polarListPanel.classList.remove('open')
-                  // Force library refresh on next cycle
-                  libraryVersion = ''
-                })
-                .catch(function () {})
-            })
-            polarListEl.appendChild(btn)
-          })
-          polarListPanel.classList.add('open')
-        }).catch(function () {})
-      })
-
-      document.getElementById('btn-back-from-polar').addEventListener('click', function () {
-        polarListPanel.classList.remove('open')
       })
 
       // -----------------------------------------------------------------------
