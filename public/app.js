@@ -1,5 +1,8 @@
 // app.js — Polar Performance Plugin webapp
-// Pages: Overview | Inputs | Settings | Outputs | Polars
+// Pages: Overview | Inputs | Outputs
+// The active polar and performance factor are selected in a separate polar
+// management webapp (e.g. signalk-polar-management) and read here via SK paths
+// — this webapp only displays them, it does not manage polar storage/selection.
 // No build step. Uses window.PolarCanvas from polar-canvas.js (loaded before this module).
 // Live data is updated in-place every second — DOM is only rebuilt on page switch.
 
@@ -47,7 +50,7 @@ async function apiGet(path, opts = {}) {
   try {
     const res = await fetch(API + path, { credentials: 'same-origin' })
     if (!res.ok) {
-      if (!opts.silent503 || res.status !== 503) showMessage('API error ' + res.status + ': ' + path)
+      if (!(opts.silentStatuses || []).includes(res.status)) showMessage('API error ' + res.status + ': ' + path)
       return null
     }
     return res.json()
@@ -64,34 +67,6 @@ async function apiPut(path, body) {
     if (!res.ok) { showMessage('Save failed: ' + res.status); return null }
     return res.json()
   } catch (e) { showMessage('Save failed: ' + e.message); return null }
-}
-
-async function apiPost(path, body) {
-  try {
-    const res = await fetch(API + path, {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-    if (!res.ok) {
-      let detail = ''
-      try {
-        const payload = await res.json()
-        if (payload?.error) detail = ': ' + payload.error
-      } catch (_) {}
-      showMessage('Import failed: ' + res.status + detail)
-      return null
-    }
-    return res.json()
-  } catch (e) { showMessage('Import failed: ' + e.message); return null }
-}
-
-async function apiDelete(path) {
-  try {
-    const res = await fetch(API + path, { method: 'DELETE', credentials: 'same-origin' })
-    if (!res.ok) { showMessage('Delete failed: ' + res.status); return null }
-    return res.json()
-  } catch (e) { showMessage('Delete failed: ' + e.message); return null }
 }
 
 // Fetch a single scalar value from the SK REST API
@@ -111,55 +86,6 @@ function sectionHeading(text) {
   h.className = 'text-uppercase fw-bold text-muted border-bottom pb-1 mb-2 mt-3 small'
   h.textContent = text
   return h
-}
-
-function createCollapsibleCard(title, startOpen = false) {
-  const card = document.createElement('div')
-  card.className = 'card mb-3'
-
-  const header = document.createElement('div')
-  header.className = 'card-header p-0'
-
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.className = 'btn btn-link btn-block text-start text-decoration-none px-3 py-2'
-  button.style.textAlign = 'left'
-
-  const body = document.createElement('div')
-  body.className = 'card-body'
-  body.style.display = startOpen ? '' : 'none'
-
-  const syncLabel = () => {
-    button.textContent = (body.style.display === 'none' ? '+ ' : '- ') + title
-    button.setAttribute('aria-expanded', body.style.display === 'none' ? 'false' : 'true')
-  }
-
-  button.addEventListener('click', () => {
-    body.style.display = body.style.display === 'none' ? '' : 'none'
-    syncLabel()
-  })
-  syncLabel()
-
-  header.appendChild(button)
-  card.appendChild(header)
-  card.appendChild(body)
-  return { card, body }
-}
-
-function createPageCard(title) {
-  const card = document.createElement('div')
-  card.className = 'card mb-3'
-
-  const header = document.createElement('div')
-  header.className = 'card-header fw-bold text-uppercase'
-  header.textContent = title
-
-  const body = document.createElement('div')
-  body.className = 'card-body'
-
-  card.appendChild(header)
-  card.appendChild(body)
-  return { card, body }
 }
 
 // Set text of a span by id (fast in-place update, no DOM rebuild)
@@ -253,38 +179,6 @@ function createNumberInput(key, value, opts, showRevert, onSaved) {
   return wrap
 }
 
-function createPercentInput(key, value, opts, onSaved) {
-  const wrap = document.createElement('span')
-  const inp = document.createElement('input')
-  inp.type = 'number'
-  inp.className = 'form-control form-control-sm d-inline-block'
-  inp.style.width = '90px'
-  inp.value = Number.isFinite(value) ? (value * 100).toFixed(0) : (opts.defaultPercent ?? 100)
-  if (opts.minPercent !== undefined) inp.min = opts.minPercent
-  if (opts.maxPercent !== undefined) inp.max = opts.maxPercent
-  if (opts.stepPercent !== undefined) inp.step = opts.stepPercent
-
-  const suffix = document.createElement('span')
-  suffix.className = 'ms-1 small text-muted'
-  suffix.textContent = '%'
-
-  inp.addEventListener('change', () => {
-    const percent = Number(inp.value)
-    if (!Number.isFinite(percent)) return
-    apiPut('/settings', { [key]: percent / 100 }).then(s => {
-      if (s) {
-        settings = s
-        inp.value = Number.isFinite(s[key]) ? (s[key] * 100).toFixed(0) : inp.value
-        if (typeof onSaved === 'function') onSaved(s)
-      }
-    })
-  })
-
-  wrap.appendChild(inp)
-  wrap.appendChild(suffix)
-  return wrap
-}
-
 // Update warnings container in-place. Skips DOM write when content unchanged.
 function updateWarnings(el, items) {
   if (!el) return
@@ -306,9 +200,6 @@ let statusData   = null  // from /status — raw inputs + computed outputs
 let rawValues    = {}    // raw sensor values from /status, keyed by short name (tws/twa/bsp/hdg)
 let outputValues = {}    // computed output values from /status, keyed by SK path string
 let settings     = null
-let polarsList   = []
-let importFormats = []
-let internetOnline = false
 let lifecycleWarnings = []
 
 // Canvas state
@@ -385,48 +276,24 @@ async function refreshSettings() {
   if (s) settings = s
 }
 
-async function refreshPolars() {
-  const list = await apiGet('/polars')
-  if (list) polarsList = list
-}
-
-async function refreshImportFormats() {
-  const formats = await apiGet('/imports/formats')
-  if (formats) importFormats = formats
-}
-
-async function refreshInternetStatus() {
-  const result = await apiGet('/internet')
-  internetOnline = !!(result && result.online)
-}
-
 async function refreshLibrary() {
-  const activeId = settings?.activePolar
-  if (!activeId) {
-    if (libraryVersion !== '') {
-      libraryVersion = ''; twsList = []; curves = {}
-      if (polar) polar.setLibraryData([], {}, null)
-    }
-    return
-  }
-
-  const newList = await apiGet('/polars/' + encodeURIComponent(activeId) + '/axes/tws', { silent503: true })
+  const newList = await apiGet('/polar/axes/tws', { silentStatuses: [404] })
   if (!newList) {
-    // No polar loaded — clear any previously displayed curves
+    // No active polar — clear any previously displayed curves
     if (libraryVersion !== '') {
       libraryVersion = ''; twsList = []; curves = {}
       if (polar) polar.setLibraryData([], {}, null)
     }
     return
   }
-  const version = activeId + '|' + JSON.stringify(newList)
+  const version = JSON.stringify(newList)
   if (version === libraryVersion) return
   libraryVersion = version; twsList = newList; curves = {}
   await Promise.all(twsList.map(async tws => {
     try {
       const c = await apiGet(
-        '/polars/' + encodeURIComponent(activeId) + '/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP,
-        { silent503: true }
+        '/polar/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP,
+        { silentStatuses: [404] }
       )
       if (c) curves[tws] = c
     } catch (_) {}
@@ -462,13 +329,10 @@ async function refreshLive() {
   // 3. Update live TWS curve for canvas
   if (liveData && polar) {
     const tws = liveData.tws
-    const activeId = settings?.activePolar
     if (tws !== null && (!liveTws || Math.abs(tws - liveTws) > 0.05)) {
       liveTws = tws
       try {
-        liveCurve = activeId
-          ? await apiGet('/polars/' + encodeURIComponent(activeId) + '/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP)
-          : null
+        liveCurve = await apiGet('/polar/queries/curve?tws=' + tws.toFixed(5) + '&step=' + STEP, { silentStatuses: [404] })
       }
       catch (_) {}
     }
@@ -517,6 +381,12 @@ function _buildOverviewPage() {
   // Live numbers (right) — skeleton built once; values updated in-place via setVal()
   const right = document.createElement('div')
   right.className = 'col-md-6'
+
+  // Active polar — read-only; selected in a separate polar management webapp
+  right.appendChild(sectionHeading('Active Polar'))
+  const polarInfoDiv = document.createElement('div'); polarInfoDiv.id = 'ov-polar-info'
+  right.appendChild(polarInfoDiv)
+
   right.appendChild(sectionHeading('Live Performance'))
   right.appendChild(buildTable([
     { label: 'True Wind Speed',  id: 'ov-tws'  },
@@ -584,6 +454,36 @@ function _buildOverviewPage() {
 
 function _tickOverview() {
   const d = liveData
+
+  const infoEl = document.getElementById('ov-polar-info')
+  if (infoEl) {
+    const p = meta?.activePolar
+    if (!p) {
+      infoEl.innerHTML = ''
+      const none = document.createElement('p'); none.className = 'text-muted small mb-2'
+      none.textContent = 'No active polar — select one in the polar management webapp.'
+      infoEl.appendChild(none)
+    } else if (!document.getElementById('ov-polar-name')) {
+      infoEl.innerHTML = ''
+      infoEl.appendChild(buildTable([
+        { label: 'Name',        id: 'ov-polar-name' },
+        { label: 'Boat type',   id: 'ov-polar-boatType' },
+        { label: 'Sail number', id: 'ov-polar-sailnumber' },
+        { label: 'Year',        id: 'ov-polar-year' },
+        { label: 'Source',      id: 'ov-polar-source' },
+        { label: 'Performance factor', id: 'ov-polar-perf' },
+      ]))
+    }
+    if (p) {
+      setVal('ov-polar-name',        p.name || '—')
+      setVal('ov-polar-boatType',    p.boatType || '—')
+      setVal('ov-polar-sailnumber',  p.sailnumber || '—')
+      setVal('ov-polar-year',        p.year ? String(p.year) : '—')
+      setVal('ov-polar-source',      p.source || '—')
+      setVal('ov-polar-perf',        fmtVal(meta?.performanceFactor, 'performance', RATIO_DEFAULT))
+    }
+  }
+
   setVal('ov-tws',  fmtVal(d?.tws,         'tws',         SPEED_DEFAULT))
   setVal('ov-twa',  fmtVal(d?.twa  != null  ? Math.abs(d.twa)  : null, 'twa', ANGLE_DEFAULT))
   setVal('ov-bsp',  fmtVal(d?.bsp,         'bsp',         SPEED_DEFAULT))
@@ -612,7 +512,7 @@ function _tickOverview() {
   if (d?.tws        == null) warns.push('True wind speed — no data (environment.wind.speedTrue)')
   if (d?.twa        == null) warns.push('True wind angle — no data (environment.wind.angleTrueWater)')
   if (d?.bsp        == null) warns.push('Boat speed — no data')
-  if (d?.tws != null && d?.polarState == null) warns.push('No polar loaded — configure in Polars')
+  if (d?.tws != null && d?.polarState == null) warns.push('No active polar — select one in the polar management webapp')
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
 }
@@ -705,110 +605,6 @@ const SMOOTHER_PARAMS = {
   Kalman:        { key: 'smootherParamKalman',        label: 'Steady-state gain (0–1)',   min: 0.001, max: 1,   step: 0.001, default: 0.1  },
 }
 
-function _buildSettingsPage() {
-  if (!settings) {
-    const p = document.createElement('p'); p.className = 'text-muted small mt-2'
-    p.textContent = 'Loading settings…'; return p
-  }
-
-  const row = document.createElement('div')
-  row.className = 'row g-3'
-
-  // ── Left: polar canvas ────────────────────────────────────────────────────
-  const left = document.createElement('div')
-  left.className = 'col-md-6'
-  const canvasEl = document.createElement('canvas')
-  canvasEl.id = 'settings-polar-canvas'
-  canvasEl.className = 'polar-canvas'
-  left.appendChild(canvasEl)
-  row.appendChild(left)
-
-  // ── Right: settings controls ──────────────────────────────────────────────
-  const right = document.createElement('div')
-  right.className = 'col-md-6'
-
-  // Polar
-  right.appendChild(sectionHeading('Polar'))
-
-  // Resolve metadata for the currently active polar
-  const activeMeta = (() => {
-    const a = settings?.activePolar
-    if (!a) return {}
-    const entry = polarsList.find(p => (typeof p === 'string' ? p : p.id) === a)
-    return (entry && typeof entry === 'object') ? entry : {}
-  })()
-
-  right.appendChild(_settingsTable([
-    { label: 'Active polar',
-      control: _polarSelector() },
-    { label: 'Performance adjust', desc: '100% = polar speed unchanged',
-      control: createPercentInput('perfAdjust', settings.perfAdjust, { minPercent: 10, maxPercent: 200, stepPercent: 5, defaultPercent: 100 }, async () => {
-        libraryVersion = ''   // force full curve reload — perfAdjust changes speeds but not the TWS list
-        await refreshLibrary()
-        if (activePage === 'settings') switchPage('settings')
-      }) },
-    { label: 'Boat name',    control: _metaDisplay(activeMeta.name)   },
-    { label: 'Boat type',    control: _metaDisplay(activeMeta.boatType)   },
-    { label: 'Sail number',  control: _metaDisplay(activeMeta.sailnumber) },
-    { label: 'Year',         control: _metaDisplay(activeMeta.year ? String(activeMeta.year) : '') },
-    { label: 'Source',       control: _metaDisplay(activeMeta.source) },
-  ]))
-
-  // Smoother
-  // (moved to Inputs page)
-
-  // Speed source
-  // (moved to Inputs page)
-
-  row.appendChild(right)
-
-  // ── Canvas init + ResizeObserver ──────────────────────────────────────────
-  let settingsPolar = null
-
-  // Wrap canvas in a relative container so we can overlay a message
-  const canvasWrap = document.createElement('div')
-  canvasWrap.style.position = 'relative'
-  canvasWrap.appendChild(canvasEl)
-  left.innerHTML = ''
-  left.appendChild(canvasWrap)
-
-  const noPolarMsg = document.createElement('div')
-  noPolarMsg.textContent = 'No polar loaded — select one above'
-  noPolarMsg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:0.85rem;color:#888;pointer-events:none;'
-  noPolarMsg.style.display = twsList.length ? 'none' : 'flex'
-  canvasWrap.appendChild(noPolarMsg)
-
-  if (window.PolarCanvas) {
-    settingsPolar = new window.PolarCanvas(canvasEl, { showLibrary: true, showLiveCurve: false })
-    if (Object.keys(meta).length) settingsPolar.setMeta(meta)
-    if (twsList.length) settingsPolar.setLibraryData(twsList, curves, null)
-  }
-
-  if (window.ResizeObserver) {
-    let _rafPending = false
-    const obs = new ResizeObserver(() => {
-      if (_rafPending) return
-      _rafPending = true
-      requestAnimationFrame(() => {
-        _rafPending = false
-        if (canvasEl.offsetWidth > 0 && settingsPolar) {
-          settingsPolar.resize()
-          settingsPolar.draw()
-        }
-      })
-    })
-    obs.observe(canvasEl)
-    row._cleanup = () => { obs.disconnect(); settingsPolar = null }
-  } else {
-    requestAnimationFrame(() => {
-      if (settingsPolar) { settingsPolar.resize(); settingsPolar.draw() }
-    })
-    row._cleanup = () => { settingsPolar = null }
-  }
-
-  return row
-}
-
 function _settingsTable(rows) {
   const tbl = document.createElement('table')
   tbl.className = 'table table-sm table-borderless mb-0'
@@ -826,50 +622,6 @@ function _settingsTable(rows) {
     tbody.appendChild(tr)
   })
   tbl.appendChild(tbody); return tbl
-}
-
-/** Read-only display span for polar metadata fields. */
-function _metaDisplay(value) {
-  const span = document.createElement('span')
-  span.className = value ? 'small' : 'small text-muted'
-  span.textContent = value || '—'
-  return span
-}
-
-function readOptionalIntegerInput(input) {
-  const text = String(input?.value || '').trim()
-  if (!text) return undefined
-  const value = Number(text)
-  return Number.isInteger(value) ? value : undefined
-}
-
-function _polarSelector() {
-  const sel = document.createElement('select')
-  sel.className = 'form-select form-select-sm'; sel.style.width = '100%'
-  const none = document.createElement('option'); none.value = ''; none.textContent = '— none —'
-  sel.appendChild(none)
-  polarsList.forEach(raw => {
-    const p = typeof raw === 'string' ? { id: raw, name: raw } : raw
-    const o = document.createElement('option'); o.value = p.id
-    o.textContent = p.name && p.name !== p.id ? `${p.name} (${p.id})` : p.id
-    sel.appendChild(o)
-  })
-  sel.value = settings?.activePolar || ''
-  sel.addEventListener('change', () => {
-    const request = sel.value
-      ? apiPut('/polars/active', { id: sel.value })
-      : apiDelete('/polars/active')
-
-    request.then(async s => {
-      if (!s) return
-      settings = { ...(settings || {}), activePolar: s.id || '' }
-      libraryVersion = ''   // force full reload — new polar may share the same TWS list
-      await refreshLibrary()
-      await refreshPolars()
-      if (activePage === 'settings') switchPage('settings')
-    })
-  })
-  return sel
 }
 
 function _smootherSelector() {
@@ -937,345 +689,11 @@ function _tickOutputs() {
   updateWarnings(document.getElementById('out-warnings'), polarStateWarnings(liveData))
 }
 
-// ── PAGE: Polars ───────────────────────────────────────────────────────────────
-function _buildPolarsPage() {
-  const wrap = document.createDocumentFragment()
-
-  const storedCard = createPageCard('Stored Polars')
-  wrap.appendChild(storedCard.card)
-  const listDiv = document.createElement('div'); listDiv.id = 'polars-list'
-  _renderPolarsList(listDiv)
-  storedCard.body.appendChild(listDiv)
-
-  const textCard = createCollapsibleCard('Import Text Polar', false)
-  wrap.appendChild(textCard.card)
-  const textWrap = textCard.body
-
-  const importMetaTable = document.createElement('table')
-  importMetaTable.className = 'table table-sm table-borderless mb-2'
-  const importMetaBody = document.createElement('tbody')
-
-  const formatSel = document.createElement('select')
-  formatSel.className = 'form-select form-select-sm'
-  formatSel.style.width = '220px'
-  if (!importFormats.length) {
-    const opt = document.createElement('option')
-    opt.value = ''
-    opt.textContent = 'No formats available'
-    formatSel.appendChild(opt)
-    formatSel.disabled = true
-  } else {
-    importFormats.forEach(format => {
-      const opt = document.createElement('option')
-      opt.value = format.id
-      opt.textContent = format.name
-      formatSel.appendChild(opt)
-    })
-  }
-
-  const makeTextInput = (placeholder, width) => {
-    const input = document.createElement('input')
-    input.type = 'text'
-    input.className = 'form-control form-control-sm'
-    if (width) input.style.width = width
-    if (placeholder) input.placeholder = placeholder
-    return input
-  }
-
-  const nameInp = makeTextInput('Optional display name')
-  const sailInp = makeTextInput('Optional sail number')
-  const typeInp = makeTextInput('Optional boat type')
-  const yearInp = document.createElement('input')
-  yearInp.type = 'number'
-  yearInp.className = 'form-control form-control-sm'
-  yearInp.style.width = '120px'
-  yearInp.placeholder = 'Optional year'
-  const sourceInp = makeTextInput('Defaults to format id')
-
-  const addFormRow = (label, control, desc) => {
-    const tr = document.createElement('tr')
-    const tdL = document.createElement('td')
-    tdL.textContent = label
-    if (desc) {
-      const sm = document.createElement('small')
-      sm.className = 'text-muted d-block'
-      sm.textContent = desc
-      tdL.appendChild(sm)
-    }
-    const tdV = document.createElement('td')
-    tdV.appendChild(control)
-    tr.appendChild(tdL)
-    tr.appendChild(tdV)
-    importMetaBody.appendChild(tr)
-  }
-
-  addFormRow('Format', formatSel, 'Text formats currently supported by the plugin.')
-  addFormRow('Name', nameInp)
-  addFormRow('Sail number', sailInp)
-  addFormRow('Boat type', typeInp)
-  addFormRow('Year', yearInp)
-  addFormRow('Source label', sourceInp, 'Optional metadata override stored with the canonical polar.')
-  importMetaTable.appendChild(importMetaBody)
-  textWrap.appendChild(importMetaTable)
-
-  const importTextArea = document.createElement('textarea')
-  importTextArea.className = 'form-control form-control-sm mb-2'
-  importTextArea.rows = 12
-  importTextArea.placeholder = 'Paste Jieter or Expedition polar text here'
-  importTextArea.style.fontFamily = 'monospace'
-  importTextArea.style.fontSize = '0.8rem'
-  textWrap.appendChild(importTextArea)
-
-  const notesArea = document.createElement('textarea')
-  notesArea.className = 'form-control form-control-sm mb-2'
-  notesArea.rows = 3
-  notesArea.placeholder = 'Optional notes stored with the imported polar'
-  textWrap.appendChild(notesArea)
-
-  const importBtn = document.createElement('button')
-  importBtn.className = 'btn btn-sm btn-primary mb-3'
-  importBtn.textContent = 'Import'
-  importBtn.disabled = !importFormats.length
-  importBtn.addEventListener('click', async () => {
-    const format = formatSel.value
-    const content = importTextArea.value.trim()
-    if (!format) { showMessage('Select an import format'); return }
-    if (!content) { showMessage('Paste polar text first'); return }
-
-    const body = {
-      content,
-      ...(nameInp.value.trim() ? { name: nameInp.value.trim() } : {}),
-      ...(sailInp.value.trim() ? { sailnumber: sailInp.value.trim() } : {}),
-      ...(typeInp.value.trim() ? { boatType: typeInp.value.trim() } : {}),
-      ...(readOptionalIntegerInput(yearInp) !== undefined ? { year: readOptionalIntegerInput(yearInp) } : {}),
-      ...(sourceInp.value.trim() ? { source: sourceInp.value.trim() } : {}),
-      ...(notesArea.value.trim() ? { notes: notesArea.value.trim() } : {})
-    }
-
-    const result = await apiPost('/imports/text/' + encodeURIComponent(format), body)
-    if (result) {
-      showMessage('Imported "' + result.id + '"')
-      nameInp.value = ''
-      sailInp.value = ''
-      typeInp.value = ''
-      yearInp.value = ''
-      sourceInp.value = ''
-      importTextArea.value = ''
-      notesArea.value = ''
-      await refreshPolars()
-      _renderPolarsList(document.getElementById('polars-list'))
-    }
-  })
-  textWrap.appendChild(importBtn)
-
-  const orcCard = createCollapsibleCard('Import ORC Certificate', false)
-  wrap.appendChild(orcCard.card)
-  const orcWrap = orcCard.body
-
-  if (!internetOnline) {
-    const unavailable = document.createElement('div')
-    unavailable.className = 'text-muted small mb-3'
-    unavailable.textContent = 'No internet connection — ORC import is unavailable.'
-    orcWrap.appendChild(unavailable)
-  } else {
-    const sourceBlurb = document.createElement('p')
-    sourceBlurb.className = 'text-muted small mb-2'
-    sourceBlurb.textContent = 'Search the official ORC active certificate index by RefNo, boat name, sail number, or class.'
-    orcWrap.appendChild(sourceBlurb)
-
-    const searchRow = document.createElement('div')
-    searchRow.className = 'd-flex flex-wrap gap-2 align-items-center mb-2'
-
-    const orcSearchInp = makeTextInput('RefNo, boat name, sail number, or class', '320px')
-    const orcSearchBtn = document.createElement('button')
-    orcSearchBtn.className = 'btn btn-sm btn-secondary'
-    orcSearchBtn.textContent = 'Search'
-    searchRow.appendChild(orcSearchInp)
-    searchRow.appendChild(orcSearchBtn)
-    orcWrap.appendChild(searchRow)
-
-    const orcResults = document.createElement('div')
-    orcResults.id = 'orc-results'
-    orcResults.className = 'mb-3'
-    orcWrap.appendChild(orcResults)
-
-    const renderOrcResults = (items) => {
-      orcResults.innerHTML = ''
-
-      if (!items.length) {
-        const empty = document.createElement('div')
-        empty.className = 'text-muted small'
-        empty.textContent = 'No ORC certificates matched the current search.'
-        orcResults.appendChild(empty)
-        return
-      }
-
-      const table = document.createElement('table')
-      table.className = 'table table-sm table-hover mb-0'
-      const tbody = document.createElement('tbody')
-
-      items.forEach(item => {
-        const tr = document.createElement('tr')
-
-        const tdInfo = document.createElement('td')
-        const title = document.createElement('div')
-        title.className = 'fw-semibold'
-        title.textContent = item.name || item.externalId
-        tdInfo.appendChild(title)
-
-        const meta = document.createElement('small')
-        meta.className = 'text-muted d-block'
-        const metaParts = [
-          item.externalId,
-          item.sailnumber,
-          item.boatType,
-          item.certificateName,
-          item.familyName,
-          item.countryId,
-          Number.isInteger(item.year) ? String(item.year) : ''
-        ].filter(Boolean)
-        meta.textContent = metaParts.join(' | ')
-        tdInfo.appendChild(meta)
-
-        const tdAction = document.createElement('td')
-        tdAction.className = 'polar-actions'
-        const btn = document.createElement('button')
-        btn.className = 'btn btn-sm btn-primary'
-        btn.textContent = 'Import'
-        btn.addEventListener('click', async () => {
-          const result = await apiPost(
-            '/imports/sources/orc/items/' + encodeURIComponent(item.externalId)
-          )
-          if (result) {
-            showMessage('Imported "' + result.id + '" from ORC')
-            await refreshPolars()
-            _renderPolarsList(document.getElementById('polars-list'))
-          }
-        })
-        tdAction.appendChild(btn)
-
-        tr.appendChild(tdInfo)
-        tr.appendChild(tdAction)
-        tbody.appendChild(tr)
-      })
-
-      table.appendChild(tbody)
-      orcResults.appendChild(table)
-    }
-
-    const runOrcSearch = async () => {
-      const q = orcSearchInp.value.trim()
-      if (!q) {
-        showMessage('Enter an ORC search term first')
-        return
-      }
-
-      const query = new URLSearchParams({ q })
-      const results = await apiGet('/imports/sources/orc/search?' + query.toString())
-      if (results) renderOrcResults(results)
-    }
-
-    orcSearchBtn.addEventListener('click', runOrcSearch)
-    orcSearchInp.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        runOrcSearch()
-      }
-    })
-  }
-
-  return wrap
-}
-
-function _renderPolarsList(el) {
-  el.innerHTML = ''
-  if (!polarsList.length) {
-    const p = document.createElement('p'); p.className = 'text-muted small mb-3'
-    p.textContent = 'No canonical polars stored yet.'
-    el.appendChild(p)
-    return
-  }
-
-  const tbl = document.createElement('table')
-  tbl.className = 'table table-sm table-borderless mb-2'
-  const tbody = document.createElement('tbody')
-
-  polarsList.forEach(raw => {
-    const entry = typeof raw === 'string' ? { id: raw, name: raw } : raw
-    const id = entry.id
-    const isActive = id === settings?.activePolar
-    const tr = document.createElement('tr')
-    const tdN = document.createElement('td')
-    const labelSpan = document.createElement('span')
-    labelSpan.textContent = entry.name || id
-    tdN.appendChild(labelSpan)
-    if (isActive) {
-      const badge = document.createElement('span')
-      badge.className = 'badge bg-success ms-2'
-      badge.textContent = 'active'
-      tdN.appendChild(badge)
-    }
-
-    const sub = []
-    if (entry.boatType) sub.push(entry.boatType)
-    if (entry.sailnumber) sub.push(entry.sailnumber)
-    if (sub.length) {
-      const sm = document.createElement('small')
-      sm.className = 'text-muted d-block'
-      sm.textContent = sub.join(' \u00b7 ')
-      tdN.appendChild(sm)
-    }
-
-    const tdA = document.createElement('td')
-    tdA.className = 'polar-actions'
-    if (!isActive) {
-      const actBtn = document.createElement('button')
-      actBtn.className = 'btn btn-sm btn-outline-primary me-1'
-      actBtn.textContent = 'Activate'
-      actBtn.addEventListener('click', async () => {
-        const result = await apiPut('/polars/active', { id })
-        if (result) {
-          settings = { ...(settings || {}), activePolar: result.id }
-          libraryVersion = ''
-          await refreshLibrary()
-          await refreshPolars()
-          _renderPolarsList(el)
-          if (activePage === 'settings') switchPage('settings')
-        }
-      })
-      tdA.appendChild(actBtn)
-    }
-
-    const delBtn = document.createElement('button')
-    delBtn.className = 'btn btn-sm btn-outline-danger'
-    delBtn.textContent = 'Delete'
-    delBtn.addEventListener('click', async () => {
-      if (!confirm('Delete polar "' + id + '"?')) return
-      await apiDelete('/polars/' + encodeURIComponent(id))
-      await refreshSettings()
-      await refreshPolars()
-      libraryVersion = ''
-      await refreshLibrary()
-      _renderPolarsList(el)
-    })
-    tdA.appendChild(delBtn)
-
-    tr.appendChild(tdN)
-    tr.appendChild(tdA)
-    tbody.appendChild(tr)
-  })
-
-  tbl.appendChild(tbody)
-  el.appendChild(tbl)
-}
-
 // ── Navigation ────────────────────────────────────────────────────────────────
 const PAGES = {
-  overview: { title: 'Overview',          build: _buildOverviewPage  },
-  inputs:   { title: 'Inputs',             build: _buildInputsPage   },
-  settings: { title: 'Polar',              build: _buildSettingsPage },
-  outputs:  { title: 'Outputs',            build: _buildOutputsPage  },
-  polars:   { title: 'Polar management',   build: _buildPolarsPage   },
+  overview: { title: 'Overview', build: _buildOverviewPage },
+  inputs:   { title: 'Inputs',   build: _buildInputsPage  },
+  outputs:  { title: 'Outputs',  build: _buildOutputsPage },
 }
 
 let _currentPageEl = null
@@ -1288,14 +706,11 @@ function switchPage(page) {
   document.querySelectorAll('#main-nav .nav-link').forEach(l =>
     l.classList.toggle('active', l.dataset.page === page)
   )
-  const shell = document.getElementById('page-shell')
   const title = document.getElementById('card-title')
   const body = document.getElementById('card-body')
   title.textContent = PAGES[page].title
   body.innerHTML = ''
-  shell.classList.toggle('page-shellless', page === 'polars')
-  body.classList.toggle('page-shellless-body', page === 'polars')
-  body.classList.toggle('polar-layout', page === 'overview' || page === 'settings')
+  body.classList.toggle('polar-layout', page === 'overview')
 
   _currentPageEl = PAGES[page].build()
   body.appendChild(_currentPageEl)
@@ -1332,7 +747,7 @@ async function init() {
     }
   })
 
-  await Promise.all([refreshSettings(), refreshPolars(), refreshImportFormats(), refreshInternetStatus()])
+  await refreshSettings()
   await loadMeta()
   switchPage('overview')
   await refreshLibrary()

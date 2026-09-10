@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-09
+
+### Added
+- External polar provider integration: subscribes to `polars.activePolar` and `polars.performanceFactor` from Signal K (published by a polar provider plugin such as `signalk-polar-management`), decoupling polar storage and file import from live compute.
+- Integration with standalone `polar-math` package for core polar calculations, interpolation models, and target evaluations.
+- Optional peer dependency declaration for `signalk-polar-management`.
+
+### Changed
+- Major architectural split: removed built-in polar file storage, file parsers/converters, and ORC database importing. All polar management is now handled by a dedicated polar provider plugin.
+- Simplified webapp UI: removed polar management and import tabs; Overview tab and Plotter now display the active polar and its metadata from Signal K.
+- Output path safety: output paths are cleanly nullified when no active polar is present or when required instrument inputs are unavailable.
+
 ## [1.4.0] - 2026-09-01
 
 ### Changed

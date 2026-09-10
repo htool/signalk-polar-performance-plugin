@@ -30,6 +30,11 @@
 - [x] `excludeSelf: true` default via signalkutilities — no feedback loops
 - [x] `stop()` uses `.terminate()` on each handler
 
+## Investigation: activePolar / performanceFactor not always received — RESOLVED
+
+- Root cause: `signalk-polar-performance-plugin` had a stale `signalkutilities@3.1.0` link, missing the `getSelfPath` boot-read bootstrap fix in 3.1.3. Relinked to 3.1.3 and confirmed fixed.
+- [ ] Input page (webapp) does not show `activePolar` / `performanceFactor` among the live inputs — add them so their delivery status is visible without checking logs
+
 ## Feature: runtime configuration — DONE
 
 - [x] `GET /settings` — returns live settings merged with pending staged changes
