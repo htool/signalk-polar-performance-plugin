@@ -116,4 +116,27 @@ describe('Plugin lifecycle — start() → stop() → start()', () => {
     plugin.stop()
     assert.doesNotThrow(() => plugin.start({}))
   })
+
+  it('signalKApiRoutes exposes GET under plugin id and omits writes', () => {
+    const admin = { get: {}, put: {}, post: {}, delete: {} }
+    const api = { get: {}, put: {}, post: {}, delete: {} }
+    function make(store) {
+      return {
+        use: () => {},
+        get: (p, h) => { store.get[p] = h },
+        put: (p, h) => { store.put[p] = h },
+        post: (p, h) => { store.post[p] = h },
+        delete: (p, h) => { store.delete[p] = h }
+      }
+    }
+    plugin.registerWithRouter(make(admin))
+    const returned = plugin.signalKApiRoutes(make(api))
+    assert.equal(typeof returned.get, 'function')
+    const prefix = '/signalk-polar-performance-plugin'
+    assert.equal(typeof api.get[prefix + '/live'], 'function')
+    assert.equal(typeof api.get[prefix + '/settings'], 'function')
+    assert.equal(typeof api.get[prefix + '/polar/axes/tws'], 'function')
+    assert.equal(api.put[prefix + '/settings'], undefined)
+    assert.equal(typeof admin.put['/settings'], 'function')
+  })
 })
