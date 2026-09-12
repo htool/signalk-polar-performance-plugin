@@ -243,7 +243,7 @@ Performance calculations are only as good as the inputs. A few things are worth 
 
 If you want to consume this plugin's live performance queries, use the developer reference:
 
-- [Developer reference](docs/developer-reference.md) for the plugin REST API.
+- [Developer reference](docs/developer-reference.md) for the plugin REST API. On Signal K 2.x, GETs are also on `/signalk/v1/api/signalk-polar-performance-plugin/` so MFD tiles work with `allow_readonly`. `PUT /settings` stays on `/plugins/`.
 - [openApi.json](openApi.json) for the authoritative machine-readable contract.
 - For the canonical `polarTable` structure, polar storage, and import, see [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management) and the [polar-format](https://github.com/Asw1n/polar-format) / [polar-math](https://github.com/Asw1n/polar-math) packages it depends on.
 

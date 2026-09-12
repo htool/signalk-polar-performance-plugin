@@ -145,7 +145,8 @@
     (function () {
       'use strict'
 
-      const BASE = '/plugins/signalk-polar-performance-plugin'
+      const BASE = '/signalk/v1/api/signalk-polar-performance-plugin'
+      const ADMIN = '/plugins/signalk-polar-performance-plugin'
       const STEP = (2 * Math.PI / 180).toFixed(6)   // ~2° in radians
 
       const canvas = document.getElementById('polar')
@@ -338,7 +339,7 @@
         showAllTwsLines = !showAllTwsLines
         updateTwsToggle()
         polar.setShowAllTwsLines(showAllTwsLines)
-        putJSON(BASE + '/settings', { showAllTwsLines: showAllTwsLines }).catch(function () {})
+        putJSON(ADMIN + '/settings', { showAllTwsLines: showAllTwsLines }).catch(function () {})
       })
 
       // -----------------------------------------------------------------------

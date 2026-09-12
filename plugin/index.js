@@ -64,6 +64,10 @@ module.exports = (app) => {
   // Keys match the settings keys; values are SI numbers or null.
   const lastOutputs = {}
 
+  // GET handlers mirrored onto /signalk/v1/api/<plugin.id>/ (SK 2.x readonly).
+  // Writes stay on /plugins/ (admin). registerWithRouter fills this list.
+  const publicGetRoutes = []
+
   // Maps each settings toggle key to the SK paths it controls.
   // Used both to nullify paths when a toggle is turned off and to build /status outputs.
   const OUTPUT_PATHS = {
@@ -534,6 +538,11 @@ module.exports = (app) => {
     // registerWithRouter is defined outside start() — runs once at plugin load
     registerWithRouter(router) {
       app.debug('registerWithRouter')
+      publicGetRoutes.length = 0
+      function publicGet(path, handler) {
+        router.get(path, handler)
+        publicGetRoutes.push([path, handler])
+      }
 
       function errorStatus(error) {
         return /No active polar/i.test(error.message) ? 404 : 500
@@ -585,12 +594,12 @@ module.exports = (app) => {
 
       // ---- Active polar curve queries (read-only — for the webapp's polar canvas) --
 
-      router.get('/polar/axes/tws', (req, res) => {
+      publicGet('/polar/axes/tws', (req, res) => {
         if (!polar) return res.status(404).json({ error: 'No active polar selected' })
         res.json(getPolarTwsValues())
       })
 
-      router.get('/polar/queries/curve', (req, res) => {
+      publicGet('/polar/queries/curve', (req, res) => {
         if (!polar) return res.status(404).json({ error: 'No active polar selected' })
         try {
           const tws = parseFloat(req.query.tws)
@@ -611,7 +620,7 @@ module.exports = (app) => {
       // tws/bsp/polarSpeed in m/s; twa in rad (positive = starboard, negative = port).
       // Returns null for any field not yet available (plugin not running,
       // no BSP source, polar not loaded, or boat in irons).
-      router.get('/live', (req, res) => {
+      publicGet('/live', (req, res) => {
         const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle : null
@@ -646,7 +655,7 @@ module.exports = (app) => {
       // inputs.smoothed.* — value the plugin actually used for computation
       // outputs.*     — only present for enabled settings; null if polar not ready
       // polarState    — same as /live
-      router.get('/status', (req, res) => {
+      publicGet('/status', (req, res) => {
         const si = v => (Number.isFinite(v) ? parseFloat(v.toFixed(5)) : null)
 
         // Raw inputs: read directly from the smoother handlers
@@ -709,7 +718,7 @@ module.exports = (app) => {
       // returned by /live and the canonical curve query endpoints, plus a
       // read-only summary of the active polar and performance factor
       // (both sourced from the `polars.*` SK paths — not editable here).
-      router.get('/meta', (req, res) => {
+      publicGet('/meta', (req, res) => {
         const speed = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
         const angle = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
         const ratio = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
@@ -738,7 +747,7 @@ module.exports = (app) => {
 
       // ---- Runtime settings ------------------------------------------------
 
-      router.get('/settings', (req, res) => {
+      publicGet('/settings', (req, res) => {
         // Merge pending staged changes so the client always sees the latest
         // intended state even before the next wind update drains them.
         res.json({ ...settings, ...changedOptions, _defaults: DEFAULT_SETTINGS })
@@ -757,6 +766,15 @@ module.exports = (app) => {
         if (isRunning) applyOptionChanges()
         res.json({ ...settings, ...changedOptions, _defaults: DEFAULT_SETTINGS })
       })
+    },
+
+    // SK 2.x mounts this at /signalk/v1/api (readonly). Writes stay on /plugins/.
+    signalKApiRoutes(router) {
+      const prefix = '/signalk-polar-performance-plugin'
+      publicGetRoutes.forEach(([path, handler]) => {
+        router.get(prefix + path, handler)
+      })
+      return router
     },
 
     start(options) {

@@ -23,8 +23,10 @@ unavailable, the last successfully loaded polar is kept until a valid update arr
 
 ## REST API
 
-The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`. Authentication
-follows Signal K server rules; the same session cookie used by the webapp works for direct API calls.
+The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`. On Signal K 2.x
+that path is admin-only. GET endpoints are also mounted on readonly
+`/signalk/v1/api/signalk-polar-performance-plugin/` (`plugin.signalKApiRoutes`) so MFD tiles with
+`allow_readonly` can load live data. `PUT /settings` stays on `/plugins/` and still needs an admin session.
 
 | Method | Path | Description |
 |--------|------|-------------|

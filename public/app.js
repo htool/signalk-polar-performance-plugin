@@ -8,7 +8,8 @@
 
 'use strict'
 
-const API = '/plugins/signalk-polar-performance-plugin'
+const API = '/signalk/v1/api/signalk-polar-performance-plugin'
+const ADMIN_API = '/plugins/signalk-polar-performance-plugin'
 
 // ── Unit conversion ───────────────────────────────────────────────────────────
 let meta = {}
@@ -59,7 +60,7 @@ async function apiGet(path, opts = {}) {
 
 async function apiPut(path, body) {
   try {
-    const res = await fetch(API + path, {
+    const res = await fetch(ADMIN_API + path, {
       method: 'PUT', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
