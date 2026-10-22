@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Changed
+- Clearer `meta` descriptions for `performance.optimumWindAngle` (where the optimal angle comes from, what zero means) and `performance.polarVelocityMadeGood` (the polar's prediction, not the actual VMG).
+
 ## [2.0.0] - 2026-09-09
 
 ### Added
