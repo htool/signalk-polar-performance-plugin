@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 - Requires signalk-server >=2.35.0 for the upstream metadata-first subscription fix ([SignalK/signalk-server#3216](https://github.com/SignalK/signalk-server/pull/3216)).
+- Requires signalkutilities >=3.2.0 (subscriptions without cached-value replay, smoothers cleared by `null`) and polar-math >=1.1.1 (in-irons cutoff relative to the 25° curve endpoint).
 - Read-only Signal K users can now access live values, status, active-polar display metadata, and polar curve queries used by the plotter. Curve resolution is bounded to at most 181 samples per request; settings remain administrator-only.
 - Clearer `meta` descriptions for `performance.optimumWindAngle` (where the optimal angle comes from, what zero means) and `performance.polarVelocityMadeGood` (the polar's prediction, not the actual VMG).
 
