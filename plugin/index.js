@@ -556,12 +556,12 @@ module.exports = (app) => {
 
       // ---- Active polar curve queries (read-only — for the webapp's polar canvas) --
 
-      router.get('/polar/axes/tws', (req, res) => {
+      router.access('readonly').get('/polar/axes/tws', (req, res) => {
         if (!polar) return res.status(404).json({ error: 'No active polar selected' })
         res.json(getPolarTwsValues())
       })
 
-      router.get('/polar/queries/curve', (req, res) => {
+      router.access('readonly').get('/polar/queries/curve', (req, res) => {
         if (!polar) return res.status(404).json({ error: 'No active polar selected' })
         try {
           const tws = parseFloat(req.query.tws)
@@ -569,8 +569,8 @@ module.exports = (app) => {
             return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
           }
           const stepRad = parseFloat(req.query.step) || (2 * Math.PI / 180)
-          if (!Number.isFinite(stepRad) || stepRad <= 0 || stepRad > Math.PI / 2) {
-            return res.status(400).json({ error: "'step' must be between 0 and π/2 radians" })
+          if (!Number.isFinite(stepRad) || stepRad < Math.PI / 180 || stepRad > Math.PI / 2) {
+            return res.status(400).json({ error: "'step' must be between 1° and π/2 radians" })
           }
           res.json(buildCurveResult(tws, stepRad))
         } catch (e) {
@@ -582,7 +582,7 @@ module.exports = (app) => {
       // tws/bsp/polarSpeed in m/s; twa in rad (positive = starboard, negative = port).
       // Returns null for any field not yet available (plugin not running,
       // no BSP source, polar not loaded, or boat in irons).
-      router.get('/live', (req, res) => {
+      router.access('readonly').get('/live', (req, res) => {
         const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle : null
@@ -617,7 +617,7 @@ module.exports = (app) => {
       // inputs.smoothed.* — value the plugin actually used for computation
       // outputs.*     — only present for enabled settings; null if polar not ready
       // polarState    — same as /live
-      router.get('/status', (req, res) => {
+      router.access('readonly').get('/status', (req, res) => {
         const si = v => (Number.isFinite(v) ? parseFloat(v.toFixed(5)) : null)
 
         // Raw inputs: read directly from the smoother handlers
@@ -680,7 +680,7 @@ module.exports = (app) => {
       // returned by /live and the canonical curve query endpoints, plus a
       // read-only summary of the active polar and performance factor
       // (both sourced from the `polars.*` SK paths — not editable here).
-      router.get('/meta', (req, res) => {
+      router.access('readonly').get('/meta', (req, res) => {
         const speed = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
         const angle = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
         const ratio = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }

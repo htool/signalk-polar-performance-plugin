@@ -3,6 +3,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { Polar } = require('polar-math')
+const { wrapPluginRoutes } = require('./routePolicyShim')
 
 const KNOTS = 1 / 1.94384
 const rad = degrees => degrees * Math.PI / 180
@@ -85,7 +86,7 @@ function harness(table = TABLE) {
     }
   }
   delete require.cache[require.resolve('../plugin/index.js')]
-  const plugin = require('../plugin/index.js')(app)
+  const plugin = wrapPluginRoutes(require('../plugin/index.js')(app))
   const routes = {}
   plugin.registerWithRouter({
     use: () => {}, get: (p, cb) => { routes[p] = cb },

@@ -29,6 +29,12 @@ Then restart Signal K and enable both plugins in **Server → Plugin Config**. W
 
 ---
 
+## HTTP endpoint access
+
+Signal K read-only users can view live values, status, active-polar display metadata, and polar curves used by the plotter. Plugin settings, including settings reads, require administrator access. Anonymous access remains controlled by the server's security configuration and is not enabled by this plugin. See the [developer reference](./docs/developer-reference.md#rest-api) for the endpoint list and access policies.
+
+---
+
 ## Quick start
 
 1. Open the **Polar Management** webapp and import or select an active polar (and optionally set a performance factor).

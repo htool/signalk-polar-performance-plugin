@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
+const { withRoutePolicies, wrapPluginRoutes } = require('./routePolicyShim')
 
 // ---------------------------------------------------------------------------
 // Minimal app shim
@@ -39,7 +40,7 @@ function makeApp(dataDir) {
 
 function freshPlugin(app) {
   delete require.cache[require.resolve('../plugin/index.js')]
-  return require('../plugin/index.js')(app)
+  return wrapPluginRoutes(require('../plugin/index.js')(app))
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +105,25 @@ describe('Plugin lifecycle — start() → stop() → start()', () => {
     }
     assert.doesNotThrow(() => plugin.registerWithRouter(router))
     assert.ok(routes.some(r => r.startsWith('GET')), 'no GET routes registered')
+  })
+
+  it('applies readonly access only to safe live and polar metadata routes', () => {
+    const router = {
+      use: () => {},
+      get: () => {},
+      put: () => {},
+    }
+    plugin.registerWithRouter(withRoutePolicies(router))
+
+    assert.deepEqual(Object.fromEntries(router.routePolicies), {
+      'GET /polar/axes/tws': 'readonly',
+      'GET /polar/queries/curve': 'readonly',
+      'GET /live': 'readonly',
+      'GET /status': 'readonly',
+      'GET /meta': 'readonly',
+      'GET /settings': 'admin',
+      'PUT /settings': 'admin',
+    })
   })
 
   it('registerWithRouter + start() + stop() + start() does not throw', () => {
