@@ -2,7 +2,17 @@
 
 **Filed against:** [signalk-polar-performance-plugin #22](https://github.com/htool/signalk-polar-performance-plugin/issues/22)  
 **Possibly affects:** any Signal K plugin that subscribes to a path published by another plugin  
-**Status:** hypothesis, unconfirmed — root cause not yet proven by runtime observation or test
+**Status:** resolved upstream in signalk-server 2.35.0; the investigation below is historical and its BaconJS hypothesis was not the cause.
+
+## Confirmed cause and resolution
+
+[SignalK/signalk-server#3159](https://github.com/SignalK/signalk-server/issues/3159) confirmed a metadata-first path discovery bug: metadata created only the preferred bus, while `excludeSelf` subscribers scanned the unfiltered buses. The first value created the unfiltered bus without announcing the path again, leaving those subscribers unattached.
+
+[SignalK/signalk-server#3216](https://github.com/SignalK/signalk-server/pull/3216) creates both bus families before announcing a path once. It shipped in 2.35.0 with regression tests for metadata-first delivery, the reverse bus-family case, and once-only delivery.
+
+Consumers now require signalk-server >=2.35.0. Idle-triggered resubscriptions and the signalKutilities direct `getSelfPath` value fallback are removed. Idle/stale reporting remains. Callback wiring and subscribe-after-assignment protections must remain because the server can replay its cached snapshot synchronously during subscription. Snapshot delivery alone does not guarantee fresh data.
+
+## Historical investigation
 
 ---
 

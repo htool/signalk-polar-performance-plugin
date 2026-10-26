@@ -19,7 +19,7 @@
   ],
   "engines": {
     "node": ">=20",
-    "signalk-server": ">=2.28.0"
+    "signalk-server": ">=2.35.0"
   },
   "scripts": {
     "test": "node --test test/**/*.test.js",

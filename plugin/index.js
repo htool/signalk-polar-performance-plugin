@@ -14,8 +14,6 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 2
 
-const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idle period before live input subscriptions are re-established
-
 const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
   showAllTwsLines: true,
@@ -85,7 +83,7 @@ module.exports = (app) => {
   function _setLifecycleWarning(id, status, path) {
     const safePath = path || 'unknown path'
     const message = status === 'idle'
-      ? `Input ${id} is idle on ${safePath}; resubscribing`
+      ? `Input ${id} is idle on ${safePath}`
       : `Input ${id} is stale on ${safePath}`
     lifecycleWarningMap.set(id, {
       id,
@@ -105,9 +103,8 @@ module.exports = (app) => {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  function _wireHandlerWatchdog({ id, getPath, unsubscribe, subscribe }) {
+  function _wireHandlerWatchdog({ id, getPath }) {
     return {
-      idlePeriod: STALE_RESUBSCRIBE_PERIOD,
       onDelta: () => {
         _clearLifecycleWarning(id)
       },
@@ -120,10 +117,8 @@ module.exports = (app) => {
       onIdle: () => {
         if (!isRunning) return
         const path = getPath()
-        app.debug(`[${plugin.id}] idle input ${id} on ${path}; resubscribing`)
+        app.debug(`[${plugin.id}] idle input ${id} on ${path}`)
         _setLifecycleWarning(id, 'idle', path)
-        unsubscribe()
-        subscribe()
       }
     }
   }
@@ -290,9 +285,8 @@ module.exports = (app) => {
           SmootherClass: SC,
           smootherOptions: so,
           ..._wireHandlerWatchdog({
-            get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
-            unsubscribe: () => hdgSmoother?.unsubscribe(),
-            subscribe: () => hdgSmoother?.subscribe(false, true),
+            id: 'hdg.smoothed',
+            getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
           })
         })
       } else if (!settings.tackTrue && hdgSmoother) {
@@ -779,10 +773,8 @@ module.exports = (app) => {
       })
 
       // Active polar / performance factor — read-only, published by a 'polars' resource provider.
-      // These are event-driven (change only on user action), so the idle-watchdog
-      // unsubscribe/resubscribe used for sensor handlers below does not apply here: absence
-      // of deltas is the normal state, not a sign of a broken subscription, and periodically
-      // forcing a resubscribe would just be churn (and possible side effects) for no reason.
+      // These are event-driven (change only on user action), so sensor idle warnings
+      // do not apply here: absence of deltas is the normal state.
       activePolarHandler = new MessageHandler(app, plugin.id, 'activePolar')
       activePolarHandler.path = 'polars.activePolar'
       activePolarHandler.onDelta = () => handleActivePolarDelta()
@@ -813,8 +805,6 @@ module.exports = (app) => {
         ..._wireHandlerWatchdog({
           id: 'wind.smoothed',
           getPath: () => `${windSmoother?.polar?.pathMagnitude ?? 'environment.wind.speedTrue'}, ${windSmoother?.polar?.pathAngle ?? 'environment.wind.angleTrueWater'}`,
-          unsubscribe: () => windSmoother?.unsubscribe(),
-          subscribe: () => windSmoother?.subscribe(true, true),
         }),
         onDelta: () => {
           _clearLifecycleWarning('wind.smoothed')
@@ -836,8 +826,6 @@ module.exports = (app) => {
         ..._wireHandlerWatchdog({
           id: 'bsp.smoothed',
           getPath: () => bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'),
-          unsubscribe: () => bspSmoother?.unsubscribe(),
-          subscribe: () => bspSmoother?.subscribe(),
         })
       })
 
@@ -852,8 +840,6 @@ module.exports = (app) => {
           ..._wireHandlerWatchdog({
             id: 'hdg.smoothed',
             getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
-            unsubscribe: () => hdgSmoother?.unsubscribe(),
-            subscribe: () => hdgSmoother?.subscribe(false, true),
           })
         })
       }

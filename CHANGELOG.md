@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Changed
+- Requires signalk-server >=2.35.0 for the upstream metadata-first subscription fix ([SignalK/signalk-server#3216](https://github.com/SignalK/signalk-server/pull/3216)).
+
+### Fixed
+- Removed idle-triggered input resubscriptions to avoid replaying cached values during sensor outages. Idle/stale warnings remain, and existing subscriptions receive data when the source resumes. Source changes and heading toggles still update subscriptions normally.
+- Heading inputs enabled at runtime now use the same lifecycle-warning callbacks as heading inputs enabled at startup.
+
 ## [2.0.0] - 2026-09-09
 
 ### Added

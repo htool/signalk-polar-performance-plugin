@@ -116,4 +116,73 @@ describe('Plugin lifecycle — start() → stop() → start()', () => {
     plugin.stop()
     assert.doesNotThrow(() => plugin.start({}))
   })
+
+  it('keeps subscriptions through silence and receives resumed wind without replay', t => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    const subscribers = new Map()
+    let subscriptions = 0
+    let unsubscriptions = 0
+    let messages = 0
+    app.handleMessage = () => { messages++ }
+    app.subscriptionmanager.subscribe = (msg, unsubscribes, _err, callback) => {
+      subscriptions++
+      for (const { path } of msg.subscribe) {
+        if (!subscribers.has(path)) subscribers.set(path, new Set())
+        subscribers.get(path).add(callback)
+      }
+      unsubscribes.push(() => {
+        unsubscriptions++
+        for (const { path } of msg.subscribe) subscribers.get(path).delete(callback)
+      })
+    }
+    const routes = {}
+    plugin.registerWithRouter({
+      use: () => {}, get: (p, cb) => { routes[p] = cb },
+      put: (p, cb) => { routes[`PUT ${p}`] = cb }, post: () => {}, delete: () => {}
+    })
+    plugin.start({ tackTrue: true })
+    const deliver = (path, value) => {
+      for (const callback of subscribers.get(path)) {
+        callback({ updates: [{ values: [{ path, value }] }] })
+      }
+    }
+    deliver('environment.wind.speedTrue', 5)
+    deliver('environment.wind.angleTrueWater', 0.4)
+    const initialSubscriptions = subscriptions
+    const initialMessages = messages
+    t.mock.timers.tick(120000)
+    assert.equal(subscriptions, initialSubscriptions)
+    assert.equal(unsubscriptions, 0)
+    assert.equal(messages, initialMessages, 'silence must not publish cached inputs')
+    let status
+    routes['/status']({}, { json: value => { status = value } })
+    for (const id of ['wind.smoothed', 'bsp.smoothed', 'hdg.smoothed']) {
+      const warning = status.lifecycleWarnings.find(w => w.id === id)
+      assert.equal(warning?.status, 'idle', id)
+      assert.doesNotMatch(warning.message, /resubscrib/i)
+    }
+    assert.equal(status.inputs.smoothed.tws, null)
+    deliver('environment.wind.speedTrue', 6)
+    deliver('environment.wind.angleTrueWater', 0.5)
+    routes['/status']({}, { json: value => { status = value } })
+    assert.equal(status.lifecycleWarnings.some(w => w.id === 'wind.smoothed'), false)
+    assert.equal(status.inputs.smoothed.tws, 6)
+    assert.equal(subscriptions, initialSubscriptions)
+
+    routes['PUT /settings']({ body: { useSOG: true } }, { json: () => {} })
+    assert.equal(subscriptions, initialSubscriptions + 1, 'a source change must still resubscribe')
+    assert.equal(unsubscriptions, 1)
+    assert.equal(subscribers.get('navigation.speedThroughWater').size, 0)
+    assert.equal(subscribers.get('navigation.speedOverGround').size, 1)
+
+    routes['PUT /settings']({ body: { tackTrue: false } }, { json: () => {} })
+    routes['PUT /settings']({ body: { tackTrue: true } }, { json: () => {} })
+    const configuredSubscriptions = subscriptions
+    const configuredUnsubscriptions = unsubscriptions
+    t.mock.timers.tick(120000)
+    routes['/status']({}, { json: value => { status = value } })
+    assert.equal(status.lifecycleWarnings.find(w => w.id === 'hdg.smoothed')?.status, 'idle')
+    assert.equal(subscriptions, configuredSubscriptions)
+    assert.equal(unsubscriptions, configuredUnsubscriptions)
+  })
 })

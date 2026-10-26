@@ -16,6 +16,8 @@ When a polar lookup cannot be completed or required instrument data is missing/s
 
 ## Installation
 
+Requires signalk-server >=2.35.0 for reliable metadata-first input subscriptions. Idle/stale warnings do not trigger resubscriptions; existing subscriptions receive data when the source resumes.
+
 Install both plugins from the Signal K App Store, or via npm:
 
 ```sh
