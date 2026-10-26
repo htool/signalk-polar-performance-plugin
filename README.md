@@ -158,6 +158,23 @@ Requires `navigation.headingTrue` to be available.
 
 Useful when you want downstream instruments to use the same smoothed values that drive the performance calculation.
 
+### Output handling when pinching and in irons
+
+The polar defines two zones above the beat angle:
+
+- **Pinching** — TWA is between the in-irons cutoff and the beat angle. The boat is still sailing, and the polar curve is extended smoothly towards zero speed. **All outputs are published.**
+- **In irons** — TWA is below the cutoff, which lies 80 % of the way from 25° to the beat angle (for example ~38.6° for a 42° beat angle). The polar has no sailing state here, so the outputs are handled per kind:
+
+| Kind | Outputs | In irons |
+|------|---------|----------|
+| Measured | `velocityMadeGood`, `angleTrueWaterDamped`, `boatSpeedDamped` | Published |
+| Steering advice | `targetAngle`, `optimumWindAngle`, `tackTrue` | Published, so you can see how far to bear away |
+| Polar values and ratios based on them | `polarSpeed`, `polarSpeedRatio`, `targetSpeed`, `targetVelocityMadeGood`, `polarVelocityMadeGood`, `polarVelocityMadeGoodRatio`, `beatAngle`, `gybeAngle`, `beatAngleVelocityMadeGood`, `gybeAngleVelocityMadeGood`, `maxSpeed`, `maxSpeedAngle` | Set to `null` |
+
+Clearing the polar values in irons also prevents spikes in the performance ratios while tacking. Through a tack the boat carries its speed head-to-wind while the polar speed falls towards zero, which would briefly drive the ratios to meaningless values. As soon as you bear away out of irons, all values return on the next wind update.
+
+A value is set to `null` once when it becomes unavailable and is not repeated until it returns.
+
 ---
 
 ## Managing polars
@@ -224,8 +241,8 @@ The webapp shows warnings whenever something prevents accurate calculation:
 | *True wind angle — no data* | `environment.wind.angleTrueWater` is not arriving.  |
 | *Boat speed — no data* | `navigation.speedThroughWater` (or SOG) is not arriving.  |
 | *No active polar* | No `polars.activePolar` is published. Select an active polar in the polar management webapp. |
-| *Sailing in irons* | TWA is below the minimum angle in the polar. No output is produced. |
-| *Pinching* | TWA is between the minimum polar angle and the beat angle. Values come from the extrapolated beat zone. |
+| *Sailing in irons* | TWA is below the in-irons cutoff. Polar values and the ratios based on them are set to `null`; measured values and steering advice keep updating. See [Output handling when pinching and in irons](#output-handling-when-pinching-and-in-irons). |
+| *Pinching* | TWA is between the in-irons cutoff and the beat angle. All outputs are published; values come from the extrapolated beat zone. |
 | *Extrapolated beyond run angle* | TWA is deeper than the run angle. Values come from the cosine-VMG extrapolation model. |
 | *Wind speed below/above polar range* | TWS is outside the range covered by the polar. Values are extrapolated from the nearest TWS entry. |
 
