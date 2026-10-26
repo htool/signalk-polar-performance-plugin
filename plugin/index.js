@@ -446,8 +446,8 @@ module.exports = (app) => {
 
     output('optimumWindAngle', 'performance.optimumWindAngle', optimumWindAngle, 'rad',
       isUpwind
-        ? 'Difference between TWA and beat angle, negative to port.'
-        : 'Difference between TWA and run angle, negative to port.')
+        ? 'Difference between TWA and beat angle, negative to port. The optimal angle comes from the polar for the current true wind speed; zero means sailing at the optimal angle.'
+        : 'Difference between TWA and run angle, negative to port. The optimal angle comes from the polar for the current true wind speed; zero means sailing at the optimal angle.')
 
     output('polarSpeed', 'performance.polarSpeed', polarSpeed, 'm/s',
       'Polar chart boat speed for current TWS and TWA.')
@@ -459,7 +459,7 @@ module.exports = (app) => {
     output('VMG', 'performance.velocityMadeGood', vmg, 'm/s',
       'Actual VMG based on current boat speed and TWA.')
     output('VMG', 'performance.polarVelocityMadeGood', targetVMG, 'm/s',
-      'Polar VMG for current TWS.')
+      "Polar VMG for current TWS. The VMG predicted by the polar, not the vessel's actual VMG.")
     output('VMG', 'performance.polarVelocityMadeGoodRatio', vmgRatio, 'ratio',
       'Actual VMG divided by polar VMG.')
 
