@@ -14,8 +14,6 @@ const {
 
 const CURRENT_SETTINGS_VERSION = 2
 
-const STALE_RESUBSCRIBE_PERIOD = 60000 // ms — idle period before live input subscriptions are re-established
-
 const DEFAULT_SETTINGS = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
   showAllTwsLines: true,
@@ -85,7 +83,7 @@ module.exports = (app) => {
   function _setLifecycleWarning(id, status, path) {
     const safePath = path || 'unknown path'
     const message = status === 'idle'
-      ? `Input ${id} is idle on ${safePath}; resubscribing`
+      ? `Input ${id} is idle on ${safePath}`
       : `Input ${id} is stale on ${safePath}`
     lifecycleWarningMap.set(id, {
       id,
@@ -105,9 +103,8 @@ module.exports = (app) => {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  function _wireHandlerWatchdog({ id, getPath, unsubscribe, subscribe }) {
+  function _wireHandlerWatchdog({ id, getPath }) {
     return {
-      idlePeriod: STALE_RESUBSCRIBE_PERIOD,
       onDelta: () => {
         _clearLifecycleWarning(id)
       },
@@ -120,12 +117,34 @@ module.exports = (app) => {
       onIdle: () => {
         if (!isRunning) return
         const path = getPath()
-        app.debug(`[${plugin.id}] idle input ${id} on ${path}; resubscribing`)
+        app.debug(`[${plugin.id}] idle input ${id} on ${path}`)
         _setLifecycleWarning(id, 'idle', path)
-        unsubscribe()
-        subscribe()
       }
     }
+  }
+
+  // Ratios below this denominator (m/s) are numerically meaningless (near-zero wind).
+  const MIN_RATIO_DENOMINATOR = 0.01
+
+  function finiteOrNull(value) {
+    return Number.isFinite(value) ? value : null
+  }
+
+  function signed(angle, port) {
+    return angle === null ? null : angle * port
+  }
+
+  function ratio(numerator, denominator) {
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator)) return null
+    return denominator > MIN_RATIO_DENOMINATOR ? numerator / denominator : null
+  }
+
+  function publishNulls(paths) {
+    if (paths.length === 0) return
+    paths.forEach(path => { lastOutputs[path] = null })
+    app.handleMessage(plugin.id, {
+      updates: [{ values: paths.map(path => ({ path, value: null })) }]
+    })
   }
 
   function getSmootherClass(type) {
@@ -290,9 +309,8 @@ module.exports = (app) => {
           SmootherClass: SC,
           smootherOptions: so,
           ..._wireHandlerWatchdog({
-            get path() { return hdgSmoother?.handler?.path ?? 'navigation.headingTrue' },
-            unsubscribe: () => hdgSmoother?.unsubscribe(),
-            subscribe: () => hdgSmoother?.subscribe(false, true),
+            id: 'hdg.smoothed',
+            getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
           })
         })
       } else if (!settings.tackTrue && hdgSmoother) {
@@ -309,11 +327,7 @@ module.exports = (app) => {
     const disabledPaths = keys
       .filter(k => OUTPUT_PATHS[k] && !settings[k])
       .flatMap(k => OUTPUT_PATHS[k])
-    if (disabledPaths.length) {
-      app.handleMessage(plugin.id, {
-        updates: [{ values: disabledPaths.map(path => ({ path, value: null })) }]
-      })
-    }
+    publishNulls(disabledPaths)
   }
 
   // ---------------------------------------------------------------------------
@@ -322,10 +336,7 @@ module.exports = (app) => {
   // ---------------------------------------------------------------------------
 
   function nullifyOutputs() {
-    const allPaths = Object.values(OUTPUT_PATHS).flat()
-    app.handleMessage(plugin.id, {
-      updates: [{ values: allPaths.map(path => ({ path, value: null })) }]
-    })
+    publishNulls(Object.values(OUTPUT_PATHS).flat())
   }
 
   // ---------------------------------------------------------------------------
@@ -339,163 +350,126 @@ module.exports = (app) => {
     const wind = windSmoother.polarValue
     const TWS = wind.magnitude
     const TWAsigned = wind.angle
-    if (!Number.isFinite(TWS) || !Number.isFinite(TWAsigned)) return
+    const windValid = Number.isFinite(TWS) && Number.isFinite(TWAsigned)
 
     // TWA is always positive for polar lookups; sign is tracked via `port`
-    const TWA = Math.abs(TWAsigned)
+    const TWA = windValid ? Math.abs(TWAsigned) : null
     const port = TWAsigned < 0 ? -1 : 1
-    const BSP = bspSmoother ? bspSmoother.value : null
-    const HDG = hdgSmoother ? hdgSmoother.value : null
+    const BSP = finiteOrNull(bspSmoother ? bspSmoother.value : null)
+    const HDG = finiteOrNull(hdgSmoother ? hdgSmoother.value : null)
 
     const values = []
     const metas = []
 
-    function add(skPath, value, unit, description) {
-      if (!Number.isFinite(value)) return
-      values.push({ path: skPath, value })
-      if (!metaSentPaths.has(skPath)) {
-        metas.push({ path: skPath, value: { units: unit, description } })
-        metaSentPaths.add(skPath)
+    // Each enabled output is either published or explicitly cleared, so
+    // consumers never keep seeing a frozen value once its inputs disappear.
+    // Nulls are only sent on the transition to unavailable to limit bus traffic.
+    function output(settingKey, skPath, value, unit, description) {
+      if (!settings[settingKey]) return
+      if (Number.isFinite(value)) {
+        values.push({ path: skPath, value })
+        if (!metaSentPaths.has(skPath)) {
+          metas.push({ path: skPath, value: { units: unit, description } })
+          metaSentPaths.add(skPath)
+        }
+      } else if (lastOutputs[skPath] !== null) {
+        values.push({ path: skPath, value: null })
       }
     }
 
-    // Always emit smoothed inputs
-    if (settings.smoothedInputs) {
-      add('environment.wind.angleTrueWaterDamped', TWAsigned, 'rad',
-        'True Wind Angle after smoothing, negative to port.')
-      if (Number.isFinite(BSP)) {
-        add('performance.boatSpeedDamped', BSP, 'm/s', 'Boat speed after smoothing.')
-      }
-    }
+    // Output classes:
+    // - measured values (actual VMG, damped inputs) are published whenever their inputs are valid;
+    // - steering advice (target angle, optimum wind angle, tack heading) is always published,
+    //   including in irons, where it says how far to bear away;
+    // - all other polar values and polar ratios are cleared in irons, where the polar says nothing
+    //   about the boat's current state.
+    const isUpwind = windValid && TWA < Math.PI / 2
+    const speedResult = windValid ? polar.speedAt({ tws: TWS, twa: TWA, performanceFactor }) : null
+    const inIrons = speedResult?.state?.twa === 'in_irons'
+    const fromPolar = value => (inIrons ? null : finiteOrNull(value))
 
-    // Polar lookups
-    const isUpwind = TWA < Math.PI / 2
-    const { value: targets } = polar.targetsAt({ tws: TWS, performanceFactor })
-    const beatAngle = targets?.beat?.twa ?? null
-    const runAngle  = targets?.run?.twa ?? null
-    const beatVMG   = targets?.beat?.vmg ?? null
-    const runVMG    = targets?.run?.vmg ?? null
+    const targets = windValid ? polar.targetsAt({ tws: TWS, performanceFactor }).value : null
+    const adviceBeatAngle = finiteOrNull(targets?.beat?.twa)
+    const adviceRunAngle  = finiteOrNull(targets?.run?.twa)
+    const adviceAngle     = isUpwind ? adviceBeatAngle : adviceRunAngle
+
+    const beatAngle = fromPolar(adviceBeatAngle)
+    const runAngle  = fromPolar(adviceRunAngle)
+    const beatVMG   = fromPolar(targets?.beat?.vmg)
+    const runVMG    = fromPolar(targets?.run?.vmg)
     const targetAngle = isUpwind ? beatAngle : runAngle
     const targetVMG   = isUpwind ? beatVMG   : runVMG
+    const maxSpeed = fromPolar(targets?.maxSpeed?.speed)
+    const maxSpeedAngle = maxSpeed === null ? null : finiteOrNull(targets?.maxSpeed?.twa)
 
-    if (Number.isFinite(beatAngle)) {
-      if (settings.beatAngle) {
-        add('performance.beatAngle', beatAngle * port, 'rad',
-          'Optimal beat angle for current TWS, negative to port.')
-      }
-      if (settings.targetTWA && isUpwind) {
-        add('performance.targetAngle', beatAngle * port, 'rad',
-          'Target TWA — auto-switches between beat and run, negative to port.')
-      }
-    }
+    // Polar speed at the current TWA is also unavailable outside the polar's angle range
+    const speedAtTwa = speedResult?.value
+    const polarSpeed = Number.isFinite(speedAtTwa) && speedAtTwa > 0 ? speedAtTwa : null
 
-    if (Number.isFinite(runAngle)) {
-      if (settings.beatAngle) {
-        add('performance.gybeAngle', runAngle * port, 'rad',
-          'Optimal run/gybe angle for current TWS, negative to port.')
-      }
-      if (settings.targetTWA && !isUpwind) {
-        add('performance.targetAngle', runAngle * port, 'rad',
-          'Target TWA — auto-switches between beat and run, negative to port.')
-      }
-    }
+    const targetCos = targetAngle === null ? 0 : Math.abs(Math.cos(targetAngle))
+    const targetSpeed = targetVMG !== null && targetVMG >= 0 && targetCos > 0.01
+      ? targetVMG / targetCos
+      : null
 
-    if (Number.isFinite(beatVMG)) {
-      if (settings.beatVMG) {
-        add('performance.beatAngleVelocityMadeGood', beatVMG, 'm/s',
-          'Optimal beat VMG for current TWS.')
-      }
-      if (settings.targetTWA && isUpwind) {
-        add('performance.targetVelocityMadeGood', beatVMG, 'm/s',
-          'Target VMG — auto-switches between beat and run.')
-      }
-    }
+    const vmg = windValid && BSP !== null ? BSP * Math.cos(TWA) : null
+    const vmgRatio = ratio(vmg === null ? null : Math.abs(vmg), targetVMG)
 
-    if (Number.isFinite(runVMG)) {
-      if (settings.beatVMG) {
-        add('performance.gybeAngleVelocityMadeGood', runVMG, 'm/s',
-          'Optimal run VMG for current TWS.')
-      }
-      if (settings.targetTWA && !isUpwind) {
-        add('performance.targetVelocityMadeGood', runVMG, 'm/s',
-          'Target VMG — auto-switches between beat and run.')
-      }
-    }
+    let optimumWindAngle = null
+    if (isUpwind && adviceBeatAngle !== null) optimumWindAngle = (TWA - adviceBeatAngle) * port
+    else if (windValid && !isUpwind && adviceRunAngle !== null) optimumWindAngle = (adviceRunAngle - TWA) * port * -1
 
-    // Optimum wind angle: angular difference between current TWA and optimal angle
-    if (settings.optimumWindAngle) {
-      if (isUpwind && Number.isFinite(beatAngle)) {
-        add('performance.optimumWindAngle', (TWA - beatAngle) * port, 'rad',
-          'Difference between TWA and beat angle, negative to port. The optimal angle comes from the polar for the current true wind speed; zero means sailing at the optimal angle.')
-      } else if (!isUpwind && Number.isFinite(runAngle)) {
-        add('performance.optimumWindAngle', (runAngle - TWA) * port * -1, 'rad',
-          'Difference between TWA and run angle, negative to port. The optimal angle comes from the polar for the current true wind speed; zero means sailing at the optimal angle.')
-      }
-    }
-
-    // Polar speed and performance ratios
-    const { value: polarSpeed } = polar.speedAt({ tws: TWS, twa: TWA, performanceFactor })
-    if (Number.isFinite(polarSpeed) && polarSpeed > 0) {
-      if (settings.polarSpeed) {
-        add('performance.polarSpeed', polarSpeed, 'm/s',
-          'Polar chart boat speed for current TWS and TWA.')
-
-        // Target speed: only meaningful when sailing within the polar range
-        if (Number.isFinite(targetAngle) && Number.isFinite(targetVMG)) {
-          const cosTarget = Math.abs(Math.cos(targetAngle))
-          if (cosTarget > 0.01) {
-            add('performance.targetSpeed', targetVMG / cosTarget, 'm/s',
-              'Boat speed needed to achieve target VMG at the optimal angle.')
-          }
-        }
-
-        if (Number.isFinite(BSP)) {
-          add('performance.polarSpeedRatio', BSP / polarSpeed, 'ratio',
-            'Actual boat speed divided by polar speed.')
-        }
-      }
-
-      if (Number.isFinite(BSP)) {
-        if (settings.VMG && Number.isFinite(targetVMG) && targetVMG > 0) {
-          const vmg = BSP * Math.cos(TWA)
-          add('performance.velocityMadeGood', vmg, 'm/s',
-            'Actual VMG based on current boat speed and TWA.')
-          add('performance.polarVelocityMadeGood', targetVMG, 'm/s',
-            "Polar VMG for current TWS. The VMG predicted by the polar, not the vessel's actual VMG.")
-          if (Number.isFinite(vmg)) {
-            add('performance.polarVelocityMadeGoodRatio', Math.abs(vmg) / targetVMG, 'ratio',
-              'Actual VMG divided by polar VMG.')
-          }
-        }
-      }
-    } else {
-      // Clear these paths so no stale non-zero value remains on the SK bus
-      if (settings.polarSpeed) {
-        values.push({ path: 'performance.polarSpeed', value: null })
-        values.push({ path: 'performance.polarSpeedRatio', value: null })
-        values.push({ path: 'performance.targetSpeed', value: null })
-      }
-    }
-
-    // Max speed for current TWS
-    if (settings.maxSpeed) {
-      const maxSpeed = targets?.maxSpeed?.speed ?? null
-      const maxSpeedAngle = targets?.maxSpeed?.twa ?? null
-      if (Number.isFinite(maxSpeed)) {
-        add('performance.maxSpeed', maxSpeed, 'm/s',
-          'Maximum polar boat speed for current TWS.')
-        add('performance.maxSpeedAngle', maxSpeedAngle * port, 'rad',
-          'TWA at which maximum speed is achieved, negative to port.')
-      }
-    }
-
-    // Opposite tack heading
-    if (settings.tackTrue && Number.isFinite(HDG) && Number.isFinite(targetAngle)) {
-      let tack = port < 0 ? HDG - targetAngle : HDG + targetAngle
+    let tack = null
+    if (HDG !== null && adviceAngle !== null) {
+      tack = port < 0 ? HDG - adviceAngle : HDG + adviceAngle
       tack = ((tack % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
-      add('performance.tackTrue', tack, 'rad',
-        'Opposite tack heading relative to true north.')
     }
+
+    output('smoothedInputs', 'environment.wind.angleTrueWaterDamped', windValid ? TWAsigned : null, 'rad',
+      'True Wind Angle after smoothing, negative to port.')
+    output('smoothedInputs', 'performance.boatSpeedDamped', BSP, 'm/s',
+      'Boat speed after smoothing.')
+
+    output('beatAngle', 'performance.beatAngle', signed(beatAngle, port), 'rad',
+      'Optimal beat angle for current TWS, negative to port.')
+    output('beatAngle', 'performance.gybeAngle', signed(runAngle, port), 'rad',
+      'Optimal run/gybe angle for current TWS, negative to port.')
+
+    output('beatVMG', 'performance.beatAngleVelocityMadeGood', beatVMG, 'm/s',
+      'Optimal beat VMG for current TWS.')
+    output('beatVMG', 'performance.gybeAngleVelocityMadeGood', runVMG, 'm/s',
+      'Optimal run VMG for current TWS.')
+
+    output('targetTWA', 'performance.targetAngle', signed(adviceAngle, port), 'rad',
+      'Target TWA — auto-switches between beat and run, negative to port.')
+    output('targetTWA', 'performance.targetVelocityMadeGood', targetVMG, 'm/s',
+      'Target VMG — auto-switches between beat and run.')
+
+    output('optimumWindAngle', 'performance.optimumWindAngle', optimumWindAngle, 'rad',
+      isUpwind
+        ? 'Difference between TWA and beat angle, negative to port. The optimal angle comes from the polar for the current true wind speed; zero means sailing at the optimal angle.'
+        : 'Difference between TWA and run angle, negative to port. The optimal angle comes from the polar for the current true wind speed; zero means sailing at the optimal angle.')
+
+    output('polarSpeed', 'performance.polarSpeed', polarSpeed, 'm/s',
+      'Polar chart boat speed for current TWS and TWA.')
+    output('polarSpeed', 'performance.targetSpeed', targetSpeed, 'm/s',
+      'Boat speed needed to achieve target VMG at the optimal angle.')
+    output('polarSpeed', 'performance.polarSpeedRatio', ratio(BSP, polarSpeed), 'ratio',
+      'Actual boat speed divided by polar speed.')
+
+    output('VMG', 'performance.velocityMadeGood', vmg, 'm/s',
+      'Actual VMG based on current boat speed and TWA.')
+    output('VMG', 'performance.polarVelocityMadeGood', targetVMG, 'm/s',
+      "Polar VMG for current TWS. The VMG predicted by the polar, not the vessel's actual VMG.")
+    output('VMG', 'performance.polarVelocityMadeGoodRatio', vmgRatio, 'ratio',
+      'Actual VMG divided by polar VMG.')
+
+    output('maxSpeed', 'performance.maxSpeed', maxSpeed, 'm/s',
+      'Maximum polar boat speed for current TWS.')
+    output('maxSpeed', 'performance.maxSpeedAngle', signed(maxSpeedAngle, port), 'rad',
+      'TWA at which maximum speed is achieved, negative to port.')
+
+    output('tackTrue', 'performance.tackTrue', tack, 'rad',
+      'Opposite tack heading relative to true north.')
 
     if (values.length === 0) return
 
@@ -505,11 +479,8 @@ module.exports = (app) => {
 
     app.handleMessage(plugin.id, { updates: [{ values }] })
 
-    // Snapshot enabled outputs for /status endpoint
-    // Each output key maps to an array of { path, value } computed this cycle
-    const outputSnapshot = {}
-    values.forEach(({ path, value }) => { outputSnapshot[path] = value })
-    Object.assign(lastOutputs, outputSnapshot)
+    // Snapshot outputs for the /status endpoint and null-transition tracking
+    values.forEach(({ path, value }) => { lastOutputs[path] = value })
   }
 
   // ---------------------------------------------------------------------------
@@ -585,12 +556,12 @@ module.exports = (app) => {
 
       // ---- Active polar curve queries (read-only — for the webapp's polar canvas) --
 
-      router.get('/polar/axes/tws', (req, res) => {
+      router.access('readonly').get('/polar/axes/tws', (req, res) => {
         if (!polar) return res.status(404).json({ error: 'No active polar selected' })
         res.json(getPolarTwsValues())
       })
 
-      router.get('/polar/queries/curve', (req, res) => {
+      router.access('readonly').get('/polar/queries/curve', (req, res) => {
         if (!polar) return res.status(404).json({ error: 'No active polar selected' })
         try {
           const tws = parseFloat(req.query.tws)
@@ -598,8 +569,8 @@ module.exports = (app) => {
             return res.status(400).json({ error: "'tws' query parameter required (m/s)" })
           }
           const stepRad = parseFloat(req.query.step) || (2 * Math.PI / 180)
-          if (!Number.isFinite(stepRad) || stepRad <= 0 || stepRad > Math.PI / 2) {
-            return res.status(400).json({ error: "'step' must be between 0 and π/2 radians" })
+          if (!Number.isFinite(stepRad) || stepRad < Math.PI / 180 || stepRad > Math.PI / 2) {
+            return res.status(400).json({ error: "'step' must be between 1° and π/2 radians" })
           }
           res.json(buildCurveResult(tws, stepRad))
         } catch (e) {
@@ -611,7 +582,7 @@ module.exports = (app) => {
       // tws/bsp/polarSpeed in m/s; twa in rad (positive = starboard, negative = port).
       // Returns null for any field not yet available (plugin not running,
       // no BSP source, polar not loaded, or boat in irons).
-      router.get('/live', (req, res) => {
+      router.access('readonly').get('/live', (req, res) => {
         const wind = windSmoother?.ready ? windSmoother.polarValue : null
         const TWS       = wind ? wind.magnitude : null
         const TWAsigned = wind ? wind.angle : null
@@ -646,7 +617,7 @@ module.exports = (app) => {
       // inputs.smoothed.* — value the plugin actually used for computation
       // outputs.*     — only present for enabled settings; null if polar not ready
       // polarState    — same as /live
-      router.get('/status', (req, res) => {
+      router.access('readonly').get('/status', (req, res) => {
         const si = v => (Number.isFinite(v) ? parseFloat(v.toFixed(5)) : null)
 
         // Raw inputs: read directly from the smoother handlers
@@ -709,7 +680,7 @@ module.exports = (app) => {
       // returned by /live and the canonical curve query endpoints, plus a
       // read-only summary of the active polar and performance factor
       // (both sourced from the `polars.*` SK paths — not editable here).
-      router.get('/meta', (req, res) => {
+      router.access('readonly').get('/meta', (req, res) => {
         const speed = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
         const angle = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
         const ratio = { formula: 'value * 100', symbol: '%', displayFormat: '0.1' }
@@ -779,10 +750,8 @@ module.exports = (app) => {
       })
 
       // Active polar / performance factor — read-only, published by a 'polars' resource provider.
-      // These are event-driven (change only on user action), so the idle-watchdog
-      // unsubscribe/resubscribe used for sensor handlers below does not apply here: absence
-      // of deltas is the normal state, not a sign of a broken subscription, and periodically
-      // forcing a resubscribe would just be churn (and possible side effects) for no reason.
+      // These are event-driven (change only on user action), so sensor idle warnings
+      // do not apply here: absence of deltas is the normal state.
       activePolarHandler = new MessageHandler(app, plugin.id, 'activePolar')
       activePolarHandler.path = 'polars.activePolar'
       activePolarHandler.onDelta = () => handleActivePolarDelta()
@@ -813,8 +782,6 @@ module.exports = (app) => {
         ..._wireHandlerWatchdog({
           id: 'wind.smoothed',
           getPath: () => `${windSmoother?.polar?.pathMagnitude ?? 'environment.wind.speedTrue'}, ${windSmoother?.polar?.pathAngle ?? 'environment.wind.angleTrueWater'}`,
-          unsubscribe: () => windSmoother?.unsubscribe(),
-          subscribe: () => windSmoother?.subscribe(true, true),
         }),
         onDelta: () => {
           _clearLifecycleWarning('wind.smoothed')
@@ -836,8 +803,6 @@ module.exports = (app) => {
         ..._wireHandlerWatchdog({
           id: 'bsp.smoothed',
           getPath: () => bspSmoother?.handler?.path ?? (settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'),
-          unsubscribe: () => bspSmoother?.unsubscribe(),
-          subscribe: () => bspSmoother?.subscribe(),
         })
       })
 
@@ -852,8 +817,6 @@ module.exports = (app) => {
           ..._wireHandlerWatchdog({
             id: 'hdg.smoothed',
             getPath: () => hdgSmoother?.handler?.path ?? 'navigation.headingTrue',
-            unsubscribe: () => hdgSmoother?.unsubscribe(),
-            subscribe: () => hdgSmoother?.subscribe(false, true),
           })
         })
       }

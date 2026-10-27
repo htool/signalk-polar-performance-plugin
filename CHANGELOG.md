@@ -7,7 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Changed
+- Requires signalk-server >=2.35.0 for the upstream metadata-first subscription fix ([SignalK/signalk-server#3216](https://github.com/SignalK/signalk-server/pull/3216)).
+- Requires signalkutilities >=3.2.0 (subscriptions without cached-value replay, smoothers cleared by `null`) and polar-math >=1.1.1 (in-irons cutoff relative to the 25° curve endpoint).
+- Read-only Signal K users can now access live values, status, active-polar display metadata, and polar curve queries used by the plotter. Curve resolution is bounded to at most 181 samples per request; settings remain administrator-only.
 - Clearer `meta` descriptions for `performance.optimumWindAngle` (where the optimal angle comes from, what zero means) and `performance.polarVelocityMadeGood` (the polar's prediction, not the actual VMG).
+
+### Fixed
+- Removed idle-triggered input resubscriptions to avoid replaying cached values during sensor outages. Idle/stale warnings remain, and existing subscriptions receive data when the source resumes. Source changes and heading toggles still update subscriptions normally.
+- Heading inputs enabled at runtime now use the same lifecycle-warning callbacks as heading inputs enabled at startup.
+- When sailing in irons, all values taken from the polar (polar speed, target speed, target and polar VMG, beat/gybe angles and VMGs, max speed) and the percentages based on them are now cleared consistently. Previously some were cleared, some kept showing and VMG % froze on its last value. This also prevents spikes in the performance percentages while tacking. Steering advice (target angle, optimum wind angle, opposite tack heading) stays available so you can see how far to bear away. Everything returns as soon as you leave irons ([#38](https://github.com/htool/signalk-polar-performance-plugin/issues/38)).
+- When pinching (between the in-irons cutoff and the beat angle), all outputs keep being published.
+- Actual VMG keeps updating in irons instead of freezing on its last value.
+- Performance outputs whose inputs become unavailable (for example missing boat speed, heading or polar targets) are now cleared instead of showing a stale value.
 
 ## [2.0.0] - 2026-09-09
 

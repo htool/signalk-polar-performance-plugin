@@ -25,16 +25,21 @@ unavailable, the last successfully loaded polar is kept until a valid update arr
 
 The plugin exposes a REST API under `/plugins/signalk-polar-performance-plugin/`. Authentication
 follows Signal K server rules; the same session cookie used by the webapp works for direct API calls.
+The endpoints marked **Read-only** are available to users with Signal K read-only permission.
+Anonymous access is controlled only by the server's `allow_readonly` setting and is not enabled by
+the plugin. Curve queries are capped at 181 sample angles per request (minimum step 1°).
+`/meta` includes the active polar's boat type, sail number, source, and free-text notes, so those
+fields are also available to read-only users.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/live` | Current smoothed TWS, TWA, BSP, polar speed, and polar state. |
-| `GET` | `/status` | Full snapshot: raw inputs, smoothed inputs, and all enabled output values. |
-| `GET` | `/meta` | Display unit metadata for all fields, plus a read-only summary of the active polar (name, boatType, sailnumber, year, source) and performance factor. |
-| `GET` | `/settings` | Current plugin settings (smoother, output toggles, speed source — no polar selection). |
-| `PUT` | `/settings` | Update settings. Body: JSON object with changed keys only. |
-| `GET` | `/polar/axes/tws` | TWS axis of the currently active polar. 404 if none is active. |
-| `GET` | `/polar/queries/curve?tws=&step=` | Interpolated curve for the active polar at the given TWS, with beat/run markers, performance factor already applied. |
+| Method | Path | Description | Access |
+|--------|------|-------------|--------|
+| `GET` | `/live` | Current smoothed TWS, TWA, BSP, polar speed, and polar state. | Read-only |
+| `GET` | `/status` | Full snapshot: raw inputs, smoothed inputs, and all enabled output values. | Read-only |
+| `GET` | `/meta` | Display unit metadata for all fields, plus a read-only summary of the active polar (name, boatType, sailnumber, year, source) and performance factor. | Read-only |
+| `GET` | `/settings` | Current plugin settings (smoother, output toggles, speed source — no polar selection). | Administrator |
+| `PUT` | `/settings` | Update settings. Body: JSON object with changed keys only. | Administrator |
+| `GET` | `/polar/axes/tws` | TWS axis of the currently active polar. 404 if none is active. | Read-only |
+| `GET` | `/polar/queries/curve?tws=&step=` | Interpolated curve for the active polar at the given TWS, with beat/run markers, performance factor already applied. `step` must be at least 1° and at most π/2 radians. | Read-only |
 
 The authoritative machine-readable schema for the two `/polar/*` endpoints is in
 [../openApi.json](../openApi.json).
