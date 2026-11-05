@@ -1,8 +1,6 @@
 'use strict'
 
-const { Polar } = require('polar-math')
 const {
-  MessageHandler,
   createSmoothedPolar,
   createSmoothedHandler,
   SmoothedAngle,
@@ -41,15 +39,16 @@ module.exports = (app) => {
   let hasPendingChanges = false
   let isRunning = false
 
-  // Active polar — sourced from the `polars.activePolar` / `polars.performanceFactor`
-  // SK paths (published by a 'polars' resource-provider plugin, e.g. signalk-polar-management).
-  // This plugin no longer stores or manages polar files itself.
-  let polar = null                 // polar-math Polar instance, or null when unavailable
-  let activePolarId = null
-  let activePolarDoc = null        // raw canonical resource, for descriptive metadata
-  let performanceFactor = 1
-  let activePolarHandler = null
-  let performanceFactorHandler = null
+  // Active polar — provided entirely by signalk-polar-management's in-process
+  // service, discovered through the `polarManagement` PropertyValue. The active
+  // handle mirrors the shared active polar, sailplan, performance factor and
+  // wave-correction toggle on every calculation, so this plugin applies none of
+  // them itself. Descriptive metadata and the plotter's TWS axis come from the
+  // handle's describe() snapshot — no resource lookups or `polars.*` paths.
+  let polarHandle = null           // live activePolar() calculation handle, or null
+  let polarDescription = null      // latest handle.describe() result, or null
+  let unsubscribeDiscovery = null  // PropertyValues discovery subscription
+  let unsubscribeChanges = null    // polarHandle.onChange subscription
 
   let windSmoother = null
   let bspSmoother = null
@@ -186,9 +185,8 @@ module.exports = (app) => {
     }
 
     if (s.settingsVersion < 2) {
-      // v1 → v2: polar selection and performance adjustment moved to the
-      // `polars.activePolar` / `polars.performanceFactor` SK paths, published
-      // by a 'polars' resource-provider plugin (e.g. signalk-polar-management).
+      // v1 → v2: polar selection and performance adjustment moved to
+      // signalk-polar-management, which owns the shared selection and factor.
       delete s.activePolar
       delete s.perfAdjust
       s.settingsVersion = 2
@@ -211,59 +209,59 @@ module.exports = (app) => {
   }
 
   // ---------------------------------------------------------------------------
-  // Active polar — sourced from SK paths published by a 'polars' resource provider
+  // Active polar — calculations and descriptive metadata via the polar
+  // management in-process service
   // ---------------------------------------------------------------------------
 
-  // Extracts the resource id from an `href` of the shape `/resources/polars/<id>`.
-  function hrefToId(href) {
-    if (typeof href !== 'string') return null
-    const match = href.match(/\/resources\/polars\/([^/]+)$/)
-    return match ? match[1] : null
-  }
-
-  async function checkPolarProvider() {
-    if (!app.resourcesApi || typeof app.resourcesApi.listResources !== 'function') return false
-    try {
-      await app.resourcesApi.listResources('polars', {})
-      return true
-    } catch (_e) {
-      return false
+  // Refreshes the cached describe() snapshot that feeds /meta and the plotter's
+  // TWS axis, clears outputs when the polar becomes unavailable, and keeps the
+  // plugin status in sync with the current selection.
+  function refreshDescription() {
+    if (!polarHandle) return
+    const hadPolar = polarDescription?.available === true
+    polarDescription = polarHandle.describe()
+    if (polarDescription.available) {
+      app.setPluginStatus(`Polar '${polarDescription.name || polarDescription.id}' active`)
+    } else {
+      if (hadPolar) nullifyOutputs()
+      app.setPluginStatus(polarDescription.reason === 'no_active_polar'
+        ? 'No active polar selected — select one in the polar management webapp'
+        : `Polar calculations unavailable (${String(polarDescription.reason).replace(/_/g, ' ')})`)
     }
   }
 
-  function handleActivePolarDelta() {
-    const value = activePolarHandler.value
-    const href = value?.href
-    if (!href) {
-      polar = null
-      activePolarId = null
-      activePolarDoc = null
-      nullifyOutputs()
-      app.setPluginStatus('No active polar selected — select one in the polar management webapp')
+  // Discovery of the polar calculation service announced by
+  // signalk-polar-management through the `polarManagement` PropertyValue.
+  // Only the latest record counts: an `available: false` record means the
+  // provider stopped and old handles are permanently unusable.
+  function handleServiceDiscovery(history) {
+    const record = history.findLast(entry => entry?.setter === 'signalk-polar-management')
+    const service = record?.value
+    unsubscribeChanges?.()
+    unsubscribeChanges = null
+    const hadPolar = polarDescription?.available === true
+    polarHandle = null
+    polarDescription = null
+    if (service?.apiVersion !== 1 || service.available !== true ||
+        typeof service.activePolar !== 'function' || typeof service.polar !== 'function') {
+      if (hadPolar) nullifyOutputs()
+      app.setPluginStatus('Polar calculation service not available — install or enable signalk-polar-management')
       return
     }
-
-    const id = hrefToId(href)
-    if (!id) {
-      app.setPluginError(`Cannot parse active polar href: ${href}`)
+    const handle = service.activePolar()
+    if (typeof handle.describe !== 'function') {
+      if (hadPolar) nullifyOutputs()
+      app.setPluginError('signalk-polar-management is too old — update it to a version whose polar handles provide describe()')
       return
     }
-
-    app.resourcesApi.getResource('polars', id).then((doc) => {
-      try {
-        polar = Polar.fromTable(doc)
-        activePolarId = id
-        activePolarDoc = doc
-        app.setPluginStatus(`Polar '${doc.name || id}' loaded`)
-      } catch (e) {
-        // Keep the last valid polar (if any) rather than dropping outputs on a bad update.
-        app.setPluginError(`Invalid active polar '${id}': ${e.message}`)
-        if (!polar) nullifyOutputs()
-      }
-    }).catch((e) => {
-      app.setPluginError(`Cannot load active polar '${id}': ${e.message}`)
-      if (!polar) nullifyOutputs()
+    polarHandle = handle
+    // Every change kind can affect the description (selection, edits, factor).
+    // Callbacks must stay short, so the snapshot refresh is deferred.
+    unsubscribeChanges = polarHandle.onChange((change) => {
+      app.debug('Polar configuration changed: %o', change)
+      setImmediate(() => { if (polarHandle === handle) refreshDescription() })
     })
+    refreshDescription()
   }
 
   // ---------------------------------------------------------------------------
@@ -345,7 +343,7 @@ module.exports = (app) => {
 
   function computeAndSend() {
     if (hasPendingChanges) applyOptionChanges()
-    if (!polar) return
+    if (!polarHandle) return
 
     const wind = windSmoother.polarValue
     const TWS = wind.magnitude
@@ -384,11 +382,11 @@ module.exports = (app) => {
     // - all other polar values and polar ratios are cleared in irons, where the polar says nothing
     //   about the boat's current state.
     const isUpwind = windValid && TWA < Math.PI / 2
-    const speedResult = windValid ? polar.speedAt({ tws: TWS, twa: TWA, performanceFactor }) : null
+    const speedResult = windValid ? polarHandle.speedAt({ tws: TWS, twa: TWA }) : null
     const inIrons = speedResult?.state?.twa === 'in_irons'
     const fromPolar = value => (inIrons ? null : finiteOrNull(value))
 
-    const targets = windValid ? polar.targetsAt({ tws: TWS, performanceFactor }).value : null
+    const targets = windValid ? polarHandle.targetsAt({ tws: TWS }).value : null
     const adviceBeatAngle = finiteOrNull(targets?.beat?.twa)
     const adviceRunAngle  = finiteOrNull(targets?.run?.twa)
     const adviceAngle     = isUpwind ? adviceBeatAngle : adviceRunAngle
@@ -514,16 +512,18 @@ module.exports = (app) => {
         return Number.isFinite(value) ? parseFloat(value.toFixed(digits)) : null
       }
 
+      // TWS axis for the webapp plotter — from the handle's description, which
+      // already reflects the active selection (v1 table, or v2 best/sailplan).
       function getPolarTwsValues() {
-        return polar.entries
-          .filter(entry => entry.tws > 0.001)
-          .map(entry => parseFloat(entry.tws.toFixed(4)))
+        return polarDescription.twsAxis
+          .filter(tws => Number.isFinite(tws) && tws > 0.001)
+          .map(tws => parseFloat(tws.toFixed(4)))
       }
 
       function buildCurveResult(tws, stepRad) {
         const points = []
         for (let twa = 0; twa <= Math.PI + 1e-9; twa += stepRad) {
-          const { value: tbs } = polar.speedAt({ tws, twa, performanceFactor })
+          const { value: tbs } = polarHandle.speedAt({ tws, twa })
           if (Number.isFinite(tbs) && tbs > 0) {
             points.push({
               twa: toFixedNumber(twa, 5),
@@ -532,7 +532,7 @@ module.exports = (app) => {
           }
         }
 
-        const { value: targets } = polar.targetsAt({ tws, performanceFactor })
+        const { value: targets } = polarHandle.targetsAt({ tws })
         return {
           tws,
           points,
@@ -557,12 +557,12 @@ module.exports = (app) => {
       // ---- Active polar curve queries (read-only — for the webapp's polar canvas) --
 
       router.access('readonly').get('/polar/axes/tws', (req, res) => {
-        if (!polar) return res.status(404).json({ error: 'No active polar selected' })
+        if (!polarDescription?.available) return res.status(404).json({ error: 'No active polar selected' })
         res.json(getPolarTwsValues())
       })
 
       router.access('readonly').get('/polar/queries/curve', (req, res) => {
-        if (!polar) return res.status(404).json({ error: 'No active polar selected' })
+        if (!polarHandle || !polarDescription?.available) return res.status(404).json({ error: 'No active polar selected' })
         try {
           const tws = parseFloat(req.query.tws)
           if (!Number.isFinite(tws) || tws < 0) {
@@ -589,8 +589,8 @@ module.exports = (app) => {
         const TWA       = Number.isFinite(TWAsigned) ? Math.abs(TWAsigned) : null
         const BSP       = bspSmoother ? bspSmoother.value : null
 
-        const polarResult = (polar && Number.isFinite(TWS) && Number.isFinite(TWA))
-          ? polar.speedAt({ tws: TWS, twa: TWA, performanceFactor })
+        const polarResult = (polarHandle && Number.isFinite(TWS) && Number.isFinite(TWA))
+          ? polarHandle.speedAt({ tws: TWS, twa: TWA })
           : null
         const polarSpeed = polarResult ? polarResult.value : null
 
@@ -634,8 +634,8 @@ module.exports = (app) => {
 
         const bspPath = settings.useSOG ? 'navigation.speedOverGround' : 'navigation.speedThroughWater'
 
-        const polarState = (polar && Number.isFinite(TWS) && Number.isFinite(TWAsigned))
-          ? polar.speedAt({ tws: TWS, twa: Math.abs(TWAsigned), performanceFactor }).state
+        const polarState = (polarHandle && Number.isFinite(TWS) && Number.isFinite(TWAsigned))
+          ? polarHandle.speedAt({ tws: TWS, twa: Math.abs(TWAsigned) }).state
           : null
 
         // Build outputs object: only include paths that are enabled and were
@@ -678,8 +678,10 @@ module.exports = (app) => {
 
       // Metadata describing the units and display preferences for each field
       // returned by /live and the canonical curve query endpoints, plus a
-      // read-only summary of the active polar and performance factor
-      // (both sourced from the `polars.*` SK paths — not editable here).
+      // read-only summary of the active polar and performance factor, taken
+      // from the management handle's describe() snapshot. The factor is
+      // informational: the handle applies it in every calculation, so this
+      // plugin never multiplies by it.
       router.access('readonly').get('/meta', (req, res) => {
         const speed = { formula: 'value * 1.943844', symbol: 'kn', displayFormat: '0.0' }
         const angle = { formula: 'value * 57.29577951308231', symbol: '\u00b0', displayFormat: '0.0' }
@@ -694,16 +696,17 @@ module.exports = (app) => {
           'curve.tbs': { units: 'm/s', displayUnits: speed },
           'curve.vmg': { units: 'm/s', displayUnits: speed },
           'curve.twa': { units: 'rad', displayUnits: angle },
-          activePolar: activePolarDoc ? {
-            id: activePolarId,
-            name: activePolarDoc.name || activePolarId,
-            boatType: activePolarDoc.boatType ?? null,
-            sailnumber: activePolarDoc.sailnumber ?? null,
-            year: activePolarDoc.year ?? null,
-            source: activePolarDoc.source ?? null,
-            notes: activePolarDoc.notes ?? null
+          activePolar: polarDescription?.available ? {
+            id: polarDescription.id,
+            name: polarDescription.name || polarDescription.id,
+            boatType: polarDescription.boatType,
+            sailnumber: polarDescription.sailnumber,
+            year: polarDescription.year,
+            source: polarDescription.source,
+            notes: polarDescription.notes,
+            sailplanId: polarDescription.sailplanId
           } : null,
-          performanceFactor
+          performanceFactor: polarDescription?.available ? polarDescription.performanceFactor : null
         })
       })
 
@@ -735,35 +738,21 @@ module.exports = (app) => {
       metaSentPaths = new Set()  // reset so metadata is re-emitted after restart
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
-      polar = null
-      activePolarId = null
-      activePolarDoc = null
-      performanceFactor = 1
+      polarHandle = null
+      polarDescription = null
 
       settings = migrateSettings({ ...DEFAULT_SETTINGS, ...options, settingsVersion: options.settingsVersion ?? 0 })
 
-      checkPolarProvider().then((available) => {
-        app.debug(`checkPolarProvider: ${available ? 'polars resource provider found' : 'no polars resource provider'}`)
-        if (!available) {
-          app.setPluginStatus("No 'polars' resource provider registered — install signalk-polar-management (or another plugin providing the 'polars' resource type) to select an active polar.")
-        }
-      })
-
-      // Active polar / performance factor — read-only, published by a 'polars' resource provider.
-      // These are event-driven (change only on user action), so sensor idle warnings
-      // do not apply here: absence of deltas is the normal state.
-      activePolarHandler = new MessageHandler(app, plugin.id, 'activePolar')
-      activePolarHandler.path = 'polars.activePolar'
-      activePolarHandler.onDelta = () => handleActivePolarDelta()
-      activePolarHandler.subscribe()
-
-      performanceFactorHandler = new MessageHandler(app, plugin.id, 'performanceFactor')
-      performanceFactorHandler.path = 'polars.performanceFactor'
-      performanceFactorHandler.onDelta = () => {
-        const value = performanceFactorHandler.value
-        performanceFactor = Number.isFinite(value) ? value : 1
+      // Discover the in-process polar calculation service. The callback fires
+      // immediately with the retained PropertyValues history, so startup order
+      // relative to signalk-polar-management does not matter. The handle also
+      // provides the active selection's metadata through describe(), so no
+      // `polars.*` subscriptions or resource lookups are needed.
+      if (typeof app.onPropertyValues === 'function') {
+        unsubscribeDiscovery = app.onPropertyValues('polarManagement', handleServiceDiscovery)
+      } else {
+        app.setPluginError('Signal K server does not support PropertyValues — polar calculations unavailable')
       }
-      performanceFactorHandler.subscribe()
 
       const SmootherClass = getSmootherClass(settings.smootherType)
       const smootherOptions = getSmootherOptions(settings.smootherType, settings)
@@ -832,11 +821,10 @@ module.exports = (app) => {
       if (windSmoother) { windSmoother.terminate(); windSmoother = null }
       if (bspSmoother)  { bspSmoother.terminate();  bspSmoother = null  }
       if (hdgSmoother)  { hdgSmoother.terminate();  hdgSmoother = null  }
-      if (activePolarHandler) { activePolarHandler.unsubscribe(); activePolarHandler = null }
-      if (performanceFactorHandler) { performanceFactorHandler.unsubscribe(); performanceFactorHandler = null }
-      polar = null
-      activePolarId = null
-      activePolarDoc = null
+      if (unsubscribeDiscovery) { unsubscribeDiscovery(); unsubscribeDiscovery = null }
+      if (unsubscribeChanges) { unsubscribeChanges(); unsubscribeChanges = null }
+      polarHandle = null
+      polarDescription = null
       lifecycleWarningMap = new Map()
       lifecycleWarnings = []
       app.debug('Plugin stopped')

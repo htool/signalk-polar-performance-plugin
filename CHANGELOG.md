@@ -4,7 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.0] - 2026-11-02
+
+### Changed
+- Polar calculations now come directly from signalk-polar-management's live calculation service: the plugin always follows the active polar, the sailplan selection and the performance factor chosen in the Polar Management webapp — including v2 polar sets, which could not be calculated before. The active polar's details shown in the webapp come from the same service. signalk-polar-management (with the calculation service, >=1.5.0) is now required for all polar outputs; the `polar-math` library is no longer bundled.
+- The overview now shows the selected sailplan for v2 polar sets, and the active polar's details refresh automatically after selection changes or edits in the management webapp, without reloading the page.
+- Smoothed-input outputs (damped TWA and boat speed) are now published even while no polar is active; polar-derived outputs are still cleared.
+- The webapp now distinguishes between a missing calculation service (management plugin not installed or disabled) and no active polar being selected.
+
+### Fixed
+- The polar selected in Polar Management is picked up automatically after a Signal K server restart, without reselecting it ([#41](https://github.com/htool/signalk-polar-performance-plugin/issues/41)).
+
+### Known limitations
+- Sea state (wave) correction is not applied: the Signal K specification defines no paths for the required wave height, period and direction inputs. It can be added once such paths exist.
+
+## [2.1.0] - 2026-10-27
 
 ### Changed
 - Requires signalk-server >=2.35.0 for the upstream metadata-first subscription fix ([SignalK/signalk-server#3216](https://github.com/SignalK/signalk-server/pull/3216)).

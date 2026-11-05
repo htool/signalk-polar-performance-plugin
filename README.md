@@ -7,8 +7,8 @@ Polar Performance calculates live sailing performance metrics — target boat sp
 **Polar Performance works together with a polar provider plugin** (such as [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management)).
 
 Starting in version 2.0.0, polar file storage, file format conversion, ORC imports, and polar selection are decoupled from this compute plugin:
-- **Polar Provider (`signalk-polar-management`):** Stores polar files, imports ORC/CSV/text polar files, manages polar metadata, and publishes the selected active polar to Signal K (`polars.activePolar`) along with any performance factor (`polars.performanceFactor`).
-- **Performance Plugin (`signalk-polar-performance-plugin`):** Subscribes to the active polar and boat instrument data (TWS, TWA, STW/SOG), calculates real-time performance values using the [`polar-math`](https://github.com/Asw1n/polar-math) engine, and publishes the resulting performance metrics back to the Signal K delta stream.
+- **Polar Provider (`signalk-polar-management`):** Stores polar files, imports ORC/CSV/text polar files, manages polar metadata, publishes the selected active polar to Signal K (`polars.activePolar`) along with the shared performance factor (`polars.performanceFactor`), and provides an in-process polar calculation service to other plugins.
+- **Performance Plugin (`signalk-polar-performance-plugin`):** Subscribes to boat instrument data (TWS, TWA, STW/SOG), calculates real-time performance values through the management plugin's live *active polar* calculation handle, and publishes the resulting performance metrics back to the Signal K delta stream. The handle automatically follows the active polar, the sailplan selection, and the performance factor chosen in the Polar Management webapp — including v2 polar sets.
 
 When a polar lookup cannot be completed or required instrument data is missing/stale, output paths are cleanly set to `null` and the webapp status indicates the exact cause.
 
@@ -16,7 +16,7 @@ When a polar lookup cannot be completed or required instrument data is missing/s
 
 ## Installation
 
-Requires signalk-server >=2.35.0 for reliable metadata-first input subscriptions. Idle/stale warnings do not trigger resubscriptions; existing subscriptions receive data when the source resumes.
+Requires signalk-server >=2.35.0 for reliable metadata-first input subscriptions. Idle/stale warnings do not trigger resubscriptions; existing subscriptions receive data when the source resumes. Requires signalk-polar-management >=1.5.0, which provides the in-process polar calculation service.
 
 Install both plugins from the Signal K App Store, or via npm:
 
@@ -25,7 +25,7 @@ cd ~/.signalk
 npm install signalk-polar-performance-plugin signalk-polar-management
 ```
 
-Then restart Signal K and enable both plugins in **Server → Plugin Config**. Without a polar resource provider installed and enabled, Polar Performance will wait for an active polar to be published and indicate this in its status.
+Then restart Signal K and enable both plugins in **Server → Plugin Config**. This plugin requires signalk-polar-management for all polar calculations: without it (or with it disabled), Polar Performance runs but publishes nothing and reports the missing calculation service in its status.
 
 ---
 
@@ -68,7 +68,7 @@ Most configuration is done through the webapp.
 
 ### Active polar and performance factor
 
-These are **not** configured here. Select the active polar and set the performance factor in the polar management webapp (e.g. signalk-polar-management); this plugin reads them from the `polars.activePolar` and `polars.performanceFactor` Signal K paths. If no polar is active, the plugin runs but publishes nothing; any previously published values are nullified immediately.
+These are **not** configured here. Select the active polar (and, for v2 polar sets, a sailplan) and set the performance factor in the polar management webapp (signalk-polar-management); this plugin's calculation handle follows those selections automatically on every calculation. If no polar is active, the plugin runs but publishes nothing; any previously published values are nullified immediately.
 
 ### Smoother
 
@@ -185,7 +185,7 @@ A value is set to `null` once when it becomes unavailable and is not repeated un
 
 ## Managing polars
 
-Polar storage, import (ORC, text formats), and active-polar/performance-factor selection are handled by a separate 'polars' resource-provider plugin, such as [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management). See that plugin's documentation for import formats, the ORC certificate search, and extrapolation behaviour of the underlying `polar-math` library.
+Polar storage, import (ORC, text formats), and active-polar/sailplan/performance-factor selection are handled by [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management), which also performs all polar calculations for this plugin through its in-process calculation service. See that plugin's documentation for import formats, the ORC certificate search, and extrapolation behaviour of the underlying `polar-math` library.
 
 ---
 
@@ -246,7 +246,8 @@ The webapp shows warnings whenever something prevents accurate calculation:
 | *True wind speed — no data* | `environment.wind.speedTrue` is not arriving from Signal K.  |
 | *True wind angle — no data* | `environment.wind.angleTrueWater` is not arriving.  |
 | *Boat speed — no data* | `navigation.speedThroughWater` (or SOG) is not arriving.  |
-| *No active polar* | No `polars.activePolar` is published. Select an active polar in the polar management webapp. |
+| *No active polar* | No active polar is selected. Select one in the polar management webapp. |
+| *Polar calculation service not available* | signalk-polar-management is not installed, not enabled, or too old to provide the in-process calculation service. |
 | *Sailing in irons* | TWA is below the in-irons cutoff. Polar values and the ratios based on them are set to `null`; measured values and steering advice keep updating. See [Output handling when pinching and in irons](#output-handling-when-pinching-and-in-irons). |
 | *Pinching* | TWA is between the in-irons cutoff and the beat angle. All outputs are published; values come from the extrapolated beat zone. |
 | *Extrapolated beyond run angle* | TWA is deeper than the run angle. Values come from the cosine-VMG extrapolation model. |
@@ -270,11 +271,12 @@ If you want to consume this plugin's live performance queries, use the developer
 
 - [Developer reference](docs/developer-reference.md) for the plugin REST API.
 - [openApi.json](openApi.json) for the authoritative machine-readable contract.
-- For the canonical `polarTable` structure, polar storage, and import, see [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management) and the [polar-format](https://github.com/Asw1n/polar-format) / [polar-math](https://github.com/Asw1n/polar-math) packages it depends on.
+- For the canonical `polarTable` / `polarSet` structures, polar storage, import, and the in-process calculation service, see [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management) and the [polar-format](https://github.com/Asw1n/polar-format) / [polar-math](https://github.com/Asw1n/polar-math) packages it depends on.
 
 ---
 
 ## Known limitations
 
 - Heel angle is not taken into account in the polar lookup. Most ORC polars are upright polars.
-- Requires a 'polars' resource-provider plugin (e.g. `signalk-polar-management`) to be installed and running for polar storage, import, and active polar selection.
+- Requires `signalk-polar-management` to be installed and running: it stores and imports polars, owns the active selection, and performs all polar calculations for this plugin.
+- Sea state (wave) correction is not applied, even when the active v2 polar set carries a wave-correction table. The Signal K specification currently defines no paths for the required inputs (significant wave height, wave period, wave direction), so this plugin has nothing to feed the correction with. Support can be added once such paths exist in the specification.
