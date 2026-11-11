@@ -395,8 +395,8 @@ module.exports = (app) => {
     const runAngle  = fromPolar(adviceRunAngle)
     const beatVMG   = fromPolar(targets?.beat?.vmg)
     const runVMG    = fromPolar(targets?.run?.vmg)
-    const targetAngle = isUpwind ? beatAngle : runAngle
-    const targetVMG   = isUpwind ? beatVMG   : runVMG
+    const targetVMG = finiteOrNull(isUpwind ? targets?.beat?.vmg : targets?.run?.vmg)
+    const polarTargetVMG = fromPolar(targetVMG)
     const maxSpeed = fromPolar(targets?.maxSpeed?.speed)
     const maxSpeedAngle = maxSpeed === null ? null : finiteOrNull(targets?.maxSpeed?.twa)
 
@@ -404,13 +404,13 @@ module.exports = (app) => {
     const speedAtTwa = speedResult?.value
     const polarSpeed = Number.isFinite(speedAtTwa) && speedAtTwa > 0 ? speedAtTwa : null
 
-    const targetCos = targetAngle === null ? 0 : Math.abs(Math.cos(targetAngle))
+    const targetCos = adviceAngle === null ? 0 : Math.abs(Math.cos(adviceAngle))
     const targetSpeed = targetVMG !== null && targetVMG >= 0 && targetCos > 0.01
       ? targetVMG / targetCos
       : null
 
     const vmg = windValid && BSP !== null ? BSP * Math.cos(TWA) : null
-    const vmgRatio = ratio(vmg === null ? null : Math.abs(vmg), targetVMG)
+    const vmgRatio = ratio(vmg === null ? null : Math.abs(vmg), polarTargetVMG)
 
     let optimumWindAngle = null
     if (isUpwind && adviceBeatAngle !== null) optimumWindAngle = (TWA - adviceBeatAngle) * port
@@ -456,7 +456,7 @@ module.exports = (app) => {
 
     output('VMG', 'performance.velocityMadeGood', vmg, 'm/s',
       'Actual VMG based on current boat speed and TWA.')
-    output('VMG', 'performance.polarVelocityMadeGood', targetVMG, 'm/s',
+    output('VMG', 'performance.polarVelocityMadeGood', polarTargetVMG, 'm/s',
       "Polar VMG for current TWS. The VMG predicted by the polar, not the vessel's actual VMG.")
     output('VMG', 'performance.polarVelocityMadeGoodRatio', vmgRatio, 'ratio',
       'Actual VMG divided by polar VMG.')

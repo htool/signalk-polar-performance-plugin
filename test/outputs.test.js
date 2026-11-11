@@ -207,13 +207,14 @@ describe('computeAndSend output validity', () => {
     const ironsTwa = rad(20)
     assert.equal(reference.speedAt({ tws: TWS, twa: ironsTwa }).state.twa, 'in_irons')
     h.sail({ twa: ironsTwa, bsp, hdg: 1 })
-    for (const path of ['performance.polarSpeed', 'performance.polarSpeedRatio', 'performance.targetSpeed',
-      'performance.targetVelocityMadeGood', 'performance.polarVelocityMadeGood',
+    for (const path of ['performance.polarSpeed', 'performance.polarSpeedRatio', 'performance.polarVelocityMadeGood',
       'performance.polarVelocityMadeGoodRatio', 'performance.beatAngle', 'performance.gybeAngle',
       'performance.beatAngleVelocityMadeGood', 'performance.gybeAngleVelocityMadeGood',
       'performance.maxSpeed', 'performance.maxSpeedAngle']) {
       assert.equal(h.bus.get(path), null, path)
     }
+    close(h.bus.get('performance.targetSpeed'), targets.beat.vmg / Math.cos(targets.beat.twa), 'targetSpeed in irons')
+    close(h.bus.get('performance.targetVelocityMadeGood'), targets.beat.vmg, 'targetVMG in irons')
     close(h.bus.get('performance.targetAngle'), targets.beat.twa, 'targetAngle in irons')
     close(h.bus.get('performance.optimumWindAngle'), ironsTwa - targets.beat.twa, 'optimumWindAngle in irons')
     close(h.bus.get('performance.tackTrue'), 1 + targets.beat.twa, 'tackTrue in irons')
@@ -225,7 +226,8 @@ describe('computeAndSend output validity', () => {
 
     const status = h.status()
     assert.equal(status.outputs['performance.polarSpeed'], null)
-    assert.equal(status.outputs['performance.targetSpeed'], null)
+    assert.ok(Math.abs(status.outputs['performance.targetSpeed'] - targets.beat.vmg / Math.cos(targets.beat.twa)) < 0.001)
+    assert.ok(Math.abs(status.outputs['performance.targetVelocityMadeGood'] - targets.beat.vmg) < 0.001)
 
     // Pinching is not in irons, so nothing is cleared
     const pinchTwa = rad(38)
@@ -268,8 +270,8 @@ describe('computeAndSend output validity', () => {
 
     h.sail({ twa: rad(-20), bsp })
     assert.equal(h.bus.get('performance.polarSpeed'), null)
-    assert.equal(h.bus.get('performance.targetSpeed'), null)
-    assert.equal(h.bus.get('performance.targetVelocityMadeGood'), null)
+    close(h.bus.get('performance.targetSpeed'), targets.beat.vmg / Math.cos(targets.beat.twa), 'targetSpeed port irons')
+    close(h.bus.get('performance.targetVelocityMadeGood'), targets.beat.vmg, 'targetVMG port irons')
     assert.equal(h.bus.get('performance.beatAngle'), null)
     close(h.bus.get('performance.targetAngle'), -targets.beat.twa, 'targetAngle port irons')
     close(h.bus.get('performance.optimumWindAngle'), -(rad(20) - targets.beat.twa), 'optimumWindAngle port irons')

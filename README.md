@@ -175,9 +175,10 @@ The polar defines two zones above the beat angle:
 |------|---------|----------|
 | Measured | `velocityMadeGood`, `angleTrueWaterDamped`, `boatSpeedDamped` | Published |
 | Steering advice | `targetAngle`, `optimumWindAngle`, `tackTrue` | Published, so you can see how far to bear away |
-| Polar values and ratios based on them | `polarSpeed`, `polarSpeedRatio`, `targetSpeed`, `targetVelocityMadeGood`, `polarVelocityMadeGood`, `polarVelocityMadeGoodRatio`, `beatAngle`, `gybeAngle`, `beatAngleVelocityMadeGood`, `gybeAngleVelocityMadeGood`, `maxSpeed`, `maxSpeedAngle` | Set to `null` |
+| Selected target performance | `targetSpeed`, `targetVelocityMadeGood` | Published from the selected beat or run target |
+| Polar values and ratios based on them | `polarSpeed`, `polarSpeedRatio`, `polarVelocityMadeGood`, `polarVelocityMadeGoodRatio`, `beatAngle`, `gybeAngle`, `beatAngleVelocityMadeGood`, `gybeAngleVelocityMadeGood`, `maxSpeed`, `maxSpeedAngle` | Set to `null` |
 
-Clearing the polar values in irons also prevents spikes in the performance ratios while tacking. Through a tack the boat carries its speed head-to-wind while the polar speed falls towards zero, which would briefly drive the ratios to meaningless values. As soon as you bear away out of irons, all values return on the next wind update.
+The selected target speed and VMG remain available in irons because they describe the optimal beat or run target for the current TWS, rather than the boat's current angle. Clearing values based on the boat's current polar state prevents spikes in performance ratios while tacking. Through a tack the boat carries its speed head-to-wind while the polar speed falls towards zero, which would briefly drive the ratios to meaningless values. As soon as you bear away out of irons, all other polar values return on the next wind update.
 
 A value is set to `null` once when it becomes unavailable and is not repeated until it returns.
 
