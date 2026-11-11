@@ -52,10 +52,56 @@ const targets = reference.targetsAt({ tws: TWS }).value
 const close = (actual, expected, msg) =>
   assert.ok(Number.isFinite(actual) && Math.abs(actual - expected) < 1e-9, `${msg}: ${actual} != ${expected}`)
 
-function harness(table = TABLE) {
+function harness(table = TABLE, { withService = true, description = {} } = {}) {
   const subscribers = new Map()
   const bus = new Map()      // latest value per path written by the plugin
   const writes = []          // every { path, value } written, in order
+  const calls = []           // every calculation call made on the service handle
+  const changeListeners = new Set()
+
+  // Fake in-process calculation service, as announced by signalk-polar-management
+  // through the `polarManagement` PropertyValue. Wraps a real polar-math Polar
+  // so numeric expectations stay exact. The handle owns the performance factor;
+  // recorded calls let tests assert the plugin never supplies one. `state`
+  // drives describe(), mirroring how real active handles follow shared settings.
+  const polar = Polar.fromTable(table)
+  const state = {
+    active: true,
+    id: 'ref',
+    sailplanId: null,
+    performanceFactor: 1,
+    name: table.name ?? null,
+    twsAxis: table.axes?.tws ?? [],
+    ...description
+  }
+  const handle = {
+    speedAt:   options => { calls.push({ method: 'speedAt', options }); return polar.speedAt(options) },
+    vmgAt:     options => { calls.push({ method: 'vmgAt', options }); return polar.vmgAt(options) },
+    targetsAt: options => { calls.push({ method: 'targetsAt', options }); return polar.targetsAt(options) },
+    rangeAt:   options => { calls.push({ method: 'rangeAt', options }); return polar.rangeAt(options) },
+    describe:  () => state.active
+      ? {
+          available: true,
+          id: state.id,
+          sailplanId: state.sailplanId,
+          performanceFactor: state.performanceFactor,
+          name: state.name,
+          boatType: null, sailnumber: null, year: null, source: null, notes: null,
+          twsAxis: state.twsAxis
+        }
+      : { available: false, reason: 'no_active_polar' },
+    onChange:  callback => { changeListeners.add(callback); return () => changeListeners.delete(callback) }
+  }
+  const service = {
+    apiVersion: 1,
+    available: true,
+    activePolar: () => handle,
+    polar: () => handle
+  }
+  const notifyChange = (change = { type: 'selection', ids: [] }) => {
+    for (const callback of [...changeListeners]) callback(change)
+  }
+
   const app = {
     debug: () => {}, error: () => {},
     setPluginStatus: () => {}, setPluginError: () => {},
@@ -69,9 +115,11 @@ function harness(table = TABLE) {
         }
       }
     },
-    resourcesApi: {
-      listResources: async () => ({}),
-      getResource: async () => table
+    onPropertyValues: (name, callback) => {
+      if (name === 'polarManagement' && withService) {
+        callback([{ setter: 'signalk-polar-management', value: service }])
+      }
+      return () => {}
     },
     subscriptionmanager: {
       subscribe: (msg, unsubscribes, _err, callback) => {
@@ -99,10 +147,9 @@ function harness(table = TABLE) {
     }
   }
   return {
-    app, plugin, bus, writes, routes, deliver,
+    app, plugin, bus, writes, calls, routes, deliver, state, notifyChange,
     async start(options = ALL_OUTPUTS) {
       plugin.start(options)
-      deliver('polars.activePolar', { href: '/resources/polars/ref' })
       await new Promise(resolve => setImmediate(resolve))
     },
     sail({ tws = TWS, twa, bsp, hdg }) {
@@ -160,13 +207,14 @@ describe('computeAndSend output validity', () => {
     const ironsTwa = rad(20)
     assert.equal(reference.speedAt({ tws: TWS, twa: ironsTwa }).state.twa, 'in_irons')
     h.sail({ twa: ironsTwa, bsp, hdg: 1 })
-    for (const path of ['performance.polarSpeed', 'performance.polarSpeedRatio', 'performance.targetSpeed',
-      'performance.targetVelocityMadeGood', 'performance.polarVelocityMadeGood',
+    for (const path of ['performance.polarSpeed', 'performance.polarSpeedRatio', 'performance.polarVelocityMadeGood',
       'performance.polarVelocityMadeGoodRatio', 'performance.beatAngle', 'performance.gybeAngle',
       'performance.beatAngleVelocityMadeGood', 'performance.gybeAngleVelocityMadeGood',
       'performance.maxSpeed', 'performance.maxSpeedAngle']) {
       assert.equal(h.bus.get(path), null, path)
     }
+    close(h.bus.get('performance.targetSpeed'), targets.beat.vmg / Math.cos(targets.beat.twa), 'targetSpeed in irons')
+    close(h.bus.get('performance.targetVelocityMadeGood'), targets.beat.vmg, 'targetVMG in irons')
     close(h.bus.get('performance.targetAngle'), targets.beat.twa, 'targetAngle in irons')
     close(h.bus.get('performance.optimumWindAngle'), ironsTwa - targets.beat.twa, 'optimumWindAngle in irons')
     close(h.bus.get('performance.tackTrue'), 1 + targets.beat.twa, 'tackTrue in irons')
@@ -178,7 +226,8 @@ describe('computeAndSend output validity', () => {
 
     const status = h.status()
     assert.equal(status.outputs['performance.polarSpeed'], null)
-    assert.equal(status.outputs['performance.targetSpeed'], null)
+    assert.ok(Math.abs(status.outputs['performance.targetSpeed'] - targets.beat.vmg / Math.cos(targets.beat.twa)) < 0.001)
+    assert.ok(Math.abs(status.outputs['performance.targetVelocityMadeGood'] - targets.beat.vmg) < 0.001)
 
     // Pinching is not in irons, so nothing is cleared
     const pinchTwa = rad(38)
@@ -221,8 +270,8 @@ describe('computeAndSend output validity', () => {
 
     h.sail({ twa: rad(-20), bsp })
     assert.equal(h.bus.get('performance.polarSpeed'), null)
-    assert.equal(h.bus.get('performance.targetSpeed'), null)
-    assert.equal(h.bus.get('performance.targetVelocityMadeGood'), null)
+    close(h.bus.get('performance.targetSpeed'), targets.beat.vmg / Math.cos(targets.beat.twa), 'targetSpeed port irons')
+    close(h.bus.get('performance.targetVelocityMadeGood'), targets.beat.vmg, 'targetVMG port irons')
     assert.equal(h.bus.get('performance.beatAngle'), null)
     close(h.bus.get('performance.targetAngle'), -targets.beat.twa, 'targetAngle port irons')
     close(h.bus.get('performance.optimumWindAngle'), -(rad(20) - targets.beat.twa), 'optimumWindAngle port irons')
@@ -300,5 +349,71 @@ describe('computeAndSend output validity', () => {
     for (const path of ['performance.polarSpeed', 'performance.targetSpeed', 'performance.polarSpeedRatio']) {
       assert.equal(h.bus.get(path), null, path)
     }
+  })
+
+  it('leaves the performance factor and sea state to the management handle', async () => {
+    await h.start()
+    h.sail({ twa: rad(50), bsp: 6 * KNOTS, hdg: 1 })
+    assert.ok(h.calls.length > 0, 'calculations must go through the service handle')
+    for (const { method, options } of h.calls) {
+      assert.ok(!('performanceFactor' in options), `${method} must not supply performanceFactor`)
+      assert.ok(!('seaState' in options), `${method} must not supply seaState`)
+    }
+  })
+
+  it('publishes nothing when the calculation service is not available', async () => {
+    h = harness(TABLE, { withService: false })
+    await h.start()
+    h.sail({ twa: rad(50), bsp: 6 * KNOTS, hdg: 1 })
+    assert.equal(h.writes.length, 0)
+    assert.equal(h.calls.length, 0)
+  })
+
+  it('serves the TWS axis and metadata from the handle description, following selection changes', async () => {
+    await h.start()
+    let result
+    const res = { json: v => { result = v }, status: () => res }
+
+    h.routes['/polar/axes/tws']({}, res)
+    assert.deepEqual(result, TABLE.axes.tws.map(tws => parseFloat(tws.toFixed(4))))
+
+    h.routes['/meta']({}, res)
+    assert.equal(result.activePolar.id, 'ref')
+    assert.equal(result.activePolar.name, 'Reference Polar')
+    assert.equal(result.activePolar.sailplanId, null)
+    assert.equal(result.performanceFactor, 1)
+
+    // A selection change (e.g. picking a v2 sailplan) is reflected after the
+    // onChange notification, with no resource lookups or polars.* deltas.
+    h.state.sailplanId = 'jib'
+    h.state.twsAxis = [6, 12, 18]
+    h.state.performanceFactor = 0.9
+    h.notifyChange({ type: 'selection', ids: [] })
+    await new Promise(resolve => setImmediate(resolve))
+
+    h.routes['/polar/axes/tws']({}, res)
+    assert.deepEqual(result, [6, 12, 18])
+    h.routes['/meta']({}, res)
+    assert.equal(result.activePolar.sailplanId, 'jib')
+    assert.equal(result.performanceFactor, 0.9)
+  })
+
+  it('clears outputs and polar endpoints when the active polar is deselected', async () => {
+    await h.start()
+    h.sail({ twa: rad(50), bsp: 6 * KNOTS })
+    assert.ok(h.bus.get('performance.polarSpeed') > 0)
+
+    h.state.active = false
+    h.notifyChange({ type: 'selection', ids: [] })
+    await new Promise(resolve => setImmediate(resolve))
+
+    assert.equal(h.bus.get('performance.polarSpeed'), null)
+    let result
+    const res = { json: v => { result = v }, status: code => ({ json: v => { result = { code, ...v } } }) }
+    h.routes['/polar/axes/tws']({}, res)
+    assert.equal(result.code, 404)
+    h.routes['/meta']({}, res)
+    assert.equal(result.activePolar, null)
+    assert.equal(result.performanceFactor, null)
   })
 })

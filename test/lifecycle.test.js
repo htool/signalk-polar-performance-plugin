@@ -25,6 +25,7 @@ function makeApp(dataDir) {
     },
     getDataDirPath: () => dataDir,
     handleMessage: () => {},
+    onPropertyValues: () => () => {},
     config: { port: 3000 },
     subscriptionmanager: {
       subscribe: (_sub, unsubscribes, _onErr, _onDelta) => {

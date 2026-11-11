@@ -349,6 +349,13 @@ function polarStateWarnings(d) {
   const s = d?.polarState
   if (!s) return []
   const msgs = []
+  // Unavailable results from the management calculation service carry a reason
+  // instead of interpolation details.
+  if (s.available === false) {
+    if (s.reason === 'no_active_polar') msgs.push('No active polar — select one in the polar management webapp')
+    else if (s.reason) msgs.push('Polar calculations unavailable (' + s.reason.replace(/_/g, ' ') + ')')
+    return msgs
+  }
   if (s.tws === 'below_range') msgs.push('Wind speed is below the polar table range — values are extrapolated')
   if (s.tws === 'above_range') msgs.push('Wind speed is above the polar table range — values are extrapolated')
   if (s.twa === 'in_irons')    msgs.push('Sailing in irons — too close to the wind for polar data')
@@ -471,6 +478,7 @@ function _tickOverview() {
         { label: 'Sail number', id: 'ov-polar-sailnumber' },
         { label: 'Year',        id: 'ov-polar-year' },
         { label: 'Source',      id: 'ov-polar-source' },
+        { label: 'Sailplan',    id: 'ov-polar-sailplan' },
         { label: 'Performance factor', id: 'ov-polar-perf' },
       ]))
     }
@@ -480,6 +488,7 @@ function _tickOverview() {
       setVal('ov-polar-sailnumber',  p.sailnumber || '—')
       setVal('ov-polar-year',        p.year ? String(p.year) : '—')
       setVal('ov-polar-source',      p.source || '—')
+      setVal('ov-polar-sailplan',    p.sailplanId || '—')
       setVal('ov-polar-perf',        fmtVal(meta?.performanceFactor, 'performance', RATIO_DEFAULT))
     }
   }
@@ -512,7 +521,7 @@ function _tickOverview() {
   if (d?.tws        == null) warns.push('True wind speed — no data (environment.wind.speedTrue)')
   if (d?.twa        == null) warns.push('True wind angle — no data (environment.wind.angleTrueWater)')
   if (d?.bsp        == null) warns.push('Boat speed — no data')
-  if (d?.tws != null && d?.polarState == null) warns.push('No active polar — select one in the polar management webapp')
+  if (d?.tws != null && d?.polarState == null) warns.push('Polar calculation service not available — install or enable signalk-polar-management')
   warns.push(...polarStateWarnings(d))
   updateWarnings(document.getElementById('ov-warnings'), warns)
 }
@@ -720,6 +729,7 @@ function switchPage(page) {
 function startPolling() {
   setInterval(refreshLive, 1000)
   setInterval(async () => {
+    await loadMeta()
     await refreshLibrary()
     if (activePage === 'overview' && polar) polar.setLibraryData(twsList, curves, liveCurve)
   }, 5000)

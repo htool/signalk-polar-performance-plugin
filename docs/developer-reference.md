@@ -1,25 +1,44 @@
 # Polar Performance Developer Reference
 
 This document covers the REST API this plugin still exposes. It no longer stores, imports,
-or manages polar files — that is handled by a separate 'polars' resource-provider plugin
-(e.g. [signalk-polar-management](https://github.com/Asw1n/signalk-polar-management)). For the
-canonical `polarTable` format and its management API, see that plugin's documentation and the
-[polar-format](https://github.com/Asw1n/polar-format) / [polar-math](https://github.com/Asw1n/polar-math)
-packages it depends on.
+or manages polar files — that is handled by
+[signalk-polar-management](https://github.com/Asw1n/signalk-polar-management), which also
+provides the in-process polar calculation service this plugin uses. For the canonical
+`polarTable` / `polarSet` formats and the management API, see that plugin's documentation
+and the [polar-format](https://github.com/Asw1n/polar-format) package; the underlying
+calculation engine, [polar-math](https://github.com/Asw1n/polar-math), is a dependency of
+the management plugin, not of this one.
 
 For installation, day-to-day use, and webapp workflow, start with [../README.md](../README.md).
 
 ## How the active polar is resolved
 
-This plugin subscribes to two Signal K paths published by the 'polars' resource provider:
+All polar calculations and all active-polar metadata go through the in-process
+calculation service announced by signalk-polar-management via the `polarManagement`
+PropertyValue. At startup this plugin subscribes with
+`app.onPropertyValues('polarManagement', …)` and acquires an **active-polar handle**
+(`service.activePolar()`). Every calculation call on that handle automatically follows
+the shared active polar, the shared sailplan selection (for v2 polar sets), the shared
+performance factor, and the shared wave-correction toggle — this plugin applies none of
+them itself. When the management plugin is missing or stopped, calculations are
+unavailable and the plugin reports this in its status; results then carry
+`state.available: false` with a reason such as `no_active_polar`.
 
-- `polars.activePolar` — `{ href: '/resources/polars/<id>' }`, or absent if no polar is active.
-- `polars.performanceFactor` — a number applied as a multiplier to all polar speeds.
+Descriptive metadata comes from the same handle: `handle.describe()` returns the active
+document's name, boat details, selected sailplan, the applied performance factor, and the
+selected table's TWS axis. The plugin refreshes this snapshot on `handle.onChange`
+notifications and serves it through `/meta` and `/polar/axes/tws`. It does not subscribe
+to the `polars.*` Signal K paths and performs no resource lookups; those paths remain
+published by signalk-polar-management for other consumers.
 
-On a change to `polars.activePolar`, the plugin resolves `<id>` via the in-process
-`app.resourcesApi.getResource('polars', id)` call and builds a `polar-math` `Polar` instance
-from the returned canonical document. If the resource provider or the active polar becomes
-unavailable, the last successfully loaded polar is kept until a valid update arrives.
+### Sea state / wave correction
+
+v2 polar sets can carry a wave-correction table, and active handles accept per-call
+`seaState` input. This plugin does not supply `seaState`, because the Signal K
+specification currently defines no paths for the required inputs (significant wave height,
+wave period, wave direction). Wave correction therefore has no effect on this plugin's
+outputs. If the specification gains such paths, sea state can be wired into the existing
+handle calls without restructuring.
 
 ## REST API
 
@@ -35,7 +54,7 @@ fields are also available to read-only users.
 |--------|------|-------------|--------|
 | `GET` | `/live` | Current smoothed TWS, TWA, BSP, polar speed, and polar state. | Read-only |
 | `GET` | `/status` | Full snapshot: raw inputs, smoothed inputs, and all enabled output values. | Read-only |
-| `GET` | `/meta` | Display unit metadata for all fields, plus a read-only summary of the active polar (name, boatType, sailnumber, year, source) and performance factor. | Read-only |
+| `GET` | `/meta` | Display unit metadata for all fields, plus a read-only summary of the active polar (name, boatType, sailnumber, year, source, notes, selected sailplan) and the applied performance factor. | Read-only |
 | `GET` | `/settings` | Current plugin settings (smoother, output toggles, speed source — no polar selection). | Administrator |
 | `PUT` | `/settings` | Update settings. Body: JSON object with changed keys only. | Administrator |
 | `GET` | `/polar/axes/tws` | TWS axis of the currently active polar. 404 if none is active. | Read-only |

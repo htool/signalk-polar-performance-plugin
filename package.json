@@ -1,6 +1,6 @@
 {
   "name": "signalk-polar-performance-plugin",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Calculates live sailing performance from the active polar selected in a polar management plugin (e.g. signalk-polar-management).",
   "main": "plugin/index.js",
   "exports": {
@@ -26,16 +26,10 @@
     "prepublishOnly": "npm test"
   },
   "dependencies": {
-    "polar-math": "^1.1.1",
     "signalkutilities": "^3.2.0"
   },
-  "peerDependencies": {
-    "signalk-polar-management": ">=1.0.0"
-  },
-  "peerDependenciesMeta": {
-    "signalk-polar-management": {
-      "optional": true
-    }
+  "devDependencies": {
+    "polar-math": "^1.1.1"
   },
   "repository": {
     "type": "git",
@@ -51,6 +45,9 @@
   "signalk": {
     "appIcon": "./icon.png",
     "displayName": "Polar Performance",
+    "requires": [
+      "signalk-polar-management"
+    ],
     "screenshots": [
       "./docs/plotter.png",
       "./docs/overview.png",
