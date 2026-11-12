@@ -53,6 +53,10 @@
       "./docs/overview.png",
       "./docs/inputs.png",
       "./docs/outputs.png"
+    ],
+    "recommends": [
+      "signalk-bandg-performance-plugin",
+      "signalk-to-nmea2000"
     ]
   },
   "keywords": [
